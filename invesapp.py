@@ -352,20 +352,43 @@ def num(v: Any) -> float | None:
 
 
 def money(v: Any) -> str:
+    """All money values: rounded integer with 3-digit comma separators."""
     n = num(v)
     if n is None:
         return "—"
-    abs_n = abs(n)
-    if abs_n >= 1e8:
-        return f"{n / 1e8:,.2f} 億"
-    if abs_n >= 1e4:
-        return f"{n / 1e4:,.1f} 萬"
-    return f"{n:,.0f}"
+    return f"{int(round(n)):,}"
 
 
 def pct(v: Any) -> str:
     n = num(v)
     return "—" if n is None else f"{n:.2%}"
+
+
+def fmt_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Display formatter:
+    - Numeric cells → rounded integer with 3-digit comma separators
+    - Empty / None / NaN / NaT → empty string (空格保持空格)
+    - Strings that *look* like 'nan' / 'none' → empty string
+    """
+    def cell(v: Any) -> Any:
+        if isinstance(v, bool):
+            return v
+        # Anything pandas considers missing → blank
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        if isinstance(v, (int, float)):
+            return f"{int(round(v)):,}"
+        s = str(v).strip()
+        if s.lower() in ("nan", "none", "nat", "<na>", "null"):
+            return ""
+        return s
+    try:
+        return df.map(cell)  # pandas ≥ 2.1
+    except AttributeError:
+        return df.applymap(cell)
 
 
 def cleaned(df: pd.DataFrame, rows: int = 120, cols: int = 40) -> pd.DataFrame:
@@ -544,7 +567,7 @@ with tabs[0]:
                 with st.expander("⚠️ KPI 全部顯示 — 點開看診斷"):
                     st.write("找到的工作表 A 欄前 20 列：")
                     st.dataframe(
-                        ov.iloc[:20, :2].rename(columns={0: "A欄標籤", 1: "B欄值"}),
+                        fmt_df(ov.iloc[:20, :2].rename(columns={0: "A欄標籤", 1: "B欄值"})),
                         hide_index=True,
                         use_container_width=True,
                     )
@@ -563,7 +586,7 @@ with tabs[0]:
                 )
                 summary = ov.iloc[:18, :5].copy()
                 summary.columns = ["項目", "現值", "損益", "收入/配息", "合計"]
-                st.dataframe(summary, use_container_width=True, hide_index=True, height=320)
+                st.dataframe(fmt_df(summary), use_container_width=True, hide_index=True, height=320)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with right:
@@ -582,7 +605,7 @@ with tabs[0]:
                     if c in inv.columns
                 ]
                 st.dataframe(
-                    inv[show] if show else inv,
+                    fmt_df(inv[show] if show else inv),
                     use_container_width=True,
                     hide_index=True,
                     height=320,
@@ -632,7 +655,7 @@ with tabs[1]:
             )
             tbl = monthly.iloc[:22, :46].dropna(axis=1, how="all")
             tbl.columns = [str(c) for c in tbl.columns]
-            st.dataframe(tbl, use_container_width=True, hide_index=True, height=340)
+            st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=340)
             st.markdown("</div>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -686,13 +709,13 @@ with tabs[2]:
                     f'<span class="hint">{len(view)} 筆</span></div>',
                     unsafe_allow_html=True,
                 )
-                st.dataframe(view, use_container_width=True, hide_index=True, height=320)
+                st.dataframe(fmt_df(view), use_container_width=True, hide_index=True, height=320)
                 st.markdown("</div>", unsafe_allow_html=True)
 
                 with st.expander("查看原始寬表（前 140 列）"):
                     raw = ledger.iloc[:140, :16].copy()
                     raw.columns = [str(c) for c in raw.columns]
-                    st.dataframe(raw, use_container_width=True, hide_index=True, height=340)
+                    st.dataframe(fmt_df(raw), use_container_width=True, hide_index=True, height=340)
             else:
                 st.info("這份工作表的格子全是空的或全為 0，沒有可顯示的明細。")
 
@@ -735,7 +758,7 @@ with tabs[3]:
                 unsafe_allow_html=True,
             )
             tbl = cleaned(sheet_df)
-            st.dataframe(tbl, use_container_width=True, hide_index=True, height=480)
+            st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=480)
             st.markdown("</div>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -795,16 +818,16 @@ with tabs[4]:
         err_total = int(all_health["error_cells"].clip(lower=0).sum())
         sh_total = len(all_health)
         h1, h2, h3 = st.columns(3)
-        h1.metric("工作表總數", f"{sh_total}")
+        h1.metric("工作表總數", f"{sh_total:,}")
         h2.metric("非空儲存格", f"{int(all_health['nonempty_cells'].sum()):,}")
-        h3.metric("錯誤儲存格", f"{err_total}")
+        h3.metric("錯誤儲存格", f"{err_total:,}")
 
         st.markdown(
             '<div class="j-card"><div class="j-card-title">工作表健康總覽</div>',
             unsafe_allow_html=True,
         )
         st.dataframe(
-            all_health.sort_values(["workbook", "error_cells"], ascending=[True, False]),
+            fmt_df(all_health.sort_values(["workbook", "error_cells"], ascending=[True, False])),
             use_container_width=True,
             hide_index=True,
             height=420,
@@ -835,13 +858,13 @@ with tabs[4]:
                         ]
                         .head(12)
                     )
-                    st.dataframe(heavy, use_container_width=True, hide_index=True)
+                    st.dataframe(fmt_df(heavy), use_container_width=True, hide_index=True)
 
                 if book.get("workbook_functions"):
                     funcs = pd.DataFrame(
                         [{"公式": k, "次數": v} for k, v in book["workbook_functions"].items()]
                     )
-                    st.dataframe(funcs, use_container_width=True, hide_index=True)
+                    st.dataframe(fmt_df(funcs), use_container_width=True, hide_index=True)
                 st.markdown("</div>", unsafe_allow_html=True)
         except Exception as e:
             st.error(f"讀取 workbook_structure_summary.json 失敗：{e}")
