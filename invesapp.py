@@ -821,6 +821,153 @@ def fetch_us_holdings_quotes() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# ─── Editable Holdings Helpers ────────────────────────────────────────────
+# 為「即時行情」分頁的可編輯持倉介面：初始 DataFrame、平台選項、
+# 任意代碼批次抓價、FX 工具、市值與損益計算
+
+PLATFORM_OPTIONS: list[str] = ["基富通-台幣", "基富通-外幣", "渣打", "台新"]
+
+
+def _platform_default_for_fund(ccy: str) -> str:
+    """基金平台預設值：TWD → 基富通-台幣，其他 → 基富通-外幣。
+    這只是初始猜測，user 可在表格內改成「渣打」或「台新」。
+    """
+    return "基富通-台幣" if (ccy or "").upper() == "TWD" else "基富通-外幣"
+
+
+def initial_tw_editable() -> pd.DataFrame:
+    rows = []
+    for name in TW_HOLDINGS:
+        rows.append({
+            "名稱": name,
+            "代號": TW_NAME_TO_CODE.get(name, ""),
+            "單位數": 0,
+            "購買成本(TWD)": 0,
+        })
+    return pd.DataFrame(rows)
+
+
+def initial_us_editable() -> pd.DataFrame:
+    rows = []
+    for code, name in US_HOLDINGS:
+        rows.append({
+            "名稱": name,
+            "代號": code,
+            "單位數": 0,
+            "購買成本(USD)": 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
+def initial_fund_editable() -> pd.DataFrame:
+    rows = []
+    for code, url_pattern, ccy, name in FUND_HOLDINGS:
+        rows.append({
+            "基金名稱": name,
+            "代號": code,
+            "URL Pattern": url_pattern,
+            "計價幣別": ccy,
+            "平台": _platform_default_for_fund(ccy),
+            "單位數": 0.0,
+            "購買成本(原幣)": 0.0,
+        })
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_tw_prices_by_codes(codes_tuple: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """根據任意 TW 代碼批次抓最新收盤價。回傳 {code: {price, date}}。
+    tuple 入參是為了讓 st.cache_data 可以 hash。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    codes = [c for c in codes_tuple if c]
+    if not codes or not _YF_OK:
+        return out
+    try:
+        data = yf.download(
+            " ".join(f"{c}.TW" for c in codes),
+            period="5d", interval="1d", group_by="ticker",
+            progress=False, threads=True,
+        )
+    except Exception:
+        return out
+    for code in codes:
+        sym = f"{code}.TW"
+        try:
+            if len(codes) == 1:
+                col = data["Close"] if "Close" in data.columns else None
+            else:
+                col = data[(sym, "Close")] if (sym, "Close") in data.columns else None
+            if col is not None and not col.dropna().empty:
+                last = col.dropna()
+                out[code] = {"price": float(last.iloc[-1]), "date": str(last.index[-1].date())}
+        except Exception:
+            pass
+    return out
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_us_prices_by_codes(codes_tuple: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """根據任意美股代碼批次抓最新收盤價。"""
+    out: dict[str, dict[str, Any]] = {}
+    codes = [c for c in codes_tuple if c]
+    if not codes or not _YF_OK:
+        return out
+    try:
+        data = yf.download(
+            " ".join(codes),
+            period="5d", interval="1d", group_by="ticker",
+            progress=False, threads=True,
+        )
+    except Exception:
+        return out
+    for code in codes:
+        try:
+            if len(codes) == 1:
+                col = data["Close"] if "Close" in data.columns else None
+            else:
+                col = data[(code, "Close")] if (code, "Close") in data.columns else None
+            if col is not None and not col.dropna().empty:
+                last = col.dropna()
+                out[code] = {"price": float(last.iloc[-1]), "date": str(last.index[-1].date())}
+        except Exception:
+            pass
+    return out
+
+
+def fx_df_to_dict(fx_df: pd.DataFrame) -> dict[str, float]:
+    """把 fetch_fx_rates 回傳的 DataFrame 轉成 {'USD': 30.5, ...}。TWD 自己 1.0。"""
+    out: dict[str, float] = {"TWD": 1.0}
+    if fx_df is None or fx_df.empty:
+        return out
+    for _, r in fx_df.iterrows():
+        ccy_label = str(r.get("幣別", ""))
+        rate = r.get("匯率")
+        if "/" in ccy_label and pd.notna(rate):
+            base = ccy_label.split("/")[0].strip()
+            try:
+                out[base] = float(rate)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def to_twd(amount: float | None, ccy: str, fx: dict[str, float]) -> float | None:
+    """把原幣金額換算成 TWD。找不到匯率回傳 None。"""
+    if amount is None or pd.isna(amount):
+        return None
+    ccy = (ccy or "").upper().strip()
+    if not ccy:
+        return None
+    rate = fx.get(ccy)
+    if rate is None:
+        return None
+    try:
+        return float(amount) * float(rate)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_sheet_safely(xlsx: bytes, target: str) -> tuple[pd.DataFrame | None, str | None, str | None]:
     """Return (df, actual_sheet_name, error_message). One of df / error will be set."""
     try:
@@ -1162,108 +1309,347 @@ with tabs[3]:
 # TAB 5 — 即時行情（股票 + 基金 + 匯率）
 # ══════════════════════════════════════════════════════════════════════════
 with tabs[4]:
-    st.markdown('<div class="j-page-title">📡 即時行情</div>', unsafe_allow_html=True)
+    st.markdown('<div class="j-page-title">📡 即時行情・市值計算機</div>', unsafe_allow_html=True)
     badge_yf = "" if _YF_OK else '<span class="pill pill-warn">缺 yfinance 套件</span>'
     badge_bs = "" if _BS4_OK else '<span class="pill pill-warn">缺 beautifulsoup4 套件</span>'
     st.markdown(
         '<div class="j-page-sub">'
-        '進入分頁即自動載入 — 台股 / 美股走 yfinance、基金走 MoneyDJ、'
-        '匯率走 yfinance。資料由系統快取，必要時按上方「🔄 重新整理」即可重抓。 '
+        '填入「單位數」與「購買成本」，下方表格也可以新增列數加碼。'
+        '系統會自動抓即時價＋匯率，把全部部位換算成台幣，並按 6 大平台彙總損益。 '
         f'{badge_yf} {badge_bs}'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # KPI 列
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("台股部位", f"{len(TW_HOLDINGS):,} 筆")
-    k2.metric("美股部位", f"{len(US_HOLDINGS):,} 筆")
-    k3.metric("基金部位", f"{len(FUND_HOLDINGS):,} 筆")
-    k4.metric("最後更新", now_str)
+    # ── Session state 初始化（首次進入分頁） ─────────────────────────
+    if "tw_editable" not in st.session_state:
+        st.session_state.tw_editable = initial_tw_editable()
+    if "us_editable" not in st.session_state:
+        st.session_state.us_editable = initial_us_editable()
+    if "fund_editable" not in st.session_state:
+        st.session_state.fund_editable = initial_fund_editable()
 
-    # ── 台股總表 ────────────────────────────────────────────────────────
+    # ── 預留頂部摘要與匯率位置（最後再填） ────────────────────────────
+    summary_placeholder = st.empty()
+    fx_placeholder = st.empty()
+
+    # ── 重置按鈕 ────────────────────────────────────────────────────────
+    rc1, rc2, _ = st.columns([1, 1, 8])
+    with rc1:
+        if st.button("↺ 重設台股表", help="清掉所有 單位數 / 成本 編輯，回到 92 檔預設清單"):
+            st.session_state.tw_editable = initial_tw_editable()
+            st.rerun()
+    with rc2:
+        if st.button("↺ 重設基金表", help="清掉基金平台 / 單位數 / 成本 編輯"):
+            st.session_state.fund_editable = initial_fund_editable()
+            st.rerun()
+
+    # ══════════════════════════════════════════════════════════════════
+    # 台股表
+    # ══════════════════════════════════════════════════════════════════
     st.markdown(
-        '<div class="j-card"><div class="j-card-title">📈 台股即時表 '
-        '<span class="hint">依 TW_HOLDINGS 順序展開，重複部位保留</span></div>',
+        '<div class="j-card"><div class="j-card-title">📈 台股持倉 '
+        '<span class="hint">可直接編輯「單位數」「購買成本(TWD)」；表格下緣有 + 新增列</span></div>',
         unsafe_allow_html=True,
     )
-    with st.spinner("抓取台股報價中…"):
-        try:
-            tw_df = fetch_tw_holdings_quotes()
-        except Exception as e:
-            tw_df = pd.DataFrame()
-            st.warning(f"台股抓取失敗：{type(e).__name__}: {e}")
-    if not tw_df.empty:
-        ok_count = int((tw_df["狀態"] == "ok").sum()) if "狀態" in tw_df.columns else 0
-        st.caption(f"成功 {ok_count} / 共 {len(tw_df)} 筆 — 列表保留重複部位（不去重）")
-        st.dataframe(fmt_df(tw_df), use_container_width=True, hide_index=True, height=420)
-    else:
-        st.info("目前沒有資料，請稍後再試。")
+    tw_edited = st.data_editor(
+        st.session_state.tw_editable,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="tw_data_editor",
+        column_config={
+            "名稱": st.column_config.TextColumn("名稱", width="medium"),
+            "代號": st.column_config.TextColumn("代號", width="small", help="證交所 4 碼，例 2330"),
+            "單位數": st.column_config.NumberColumn("單位數（股）", min_value=0, step=1000, format="%d"),
+            "購買成本(TWD)": st.column_config.NumberColumn("購買成本(TWD)", min_value=0, step=1000, format="%d"),
+        },
+        height=360,
+    )
+    st.session_state.tw_editable = tw_edited
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 美股總表 ────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+    # 美股表
+    # ══════════════════════════════════════════════════════════════════
     st.markdown(
-        '<div class="j-card"><div class="j-card-title">🇺🇸 美股即時表</div>',
+        '<div class="j-card"><div class="j-card-title">🇺🇸 美股持倉 '
+        '<span class="hint">購買成本以 USD 計，下方會自動換算成 TWD</span></div>',
         unsafe_allow_html=True,
     )
-    with st.spinner("抓取美股報價中…"):
-        try:
-            us_df = fetch_us_holdings_quotes()
-        except Exception as e:
-            us_df = pd.DataFrame()
-            st.warning(f"美股抓取失敗：{type(e).__name__}: {e}")
-    if not us_df.empty:
-        st.dataframe(fmt_df(us_df), use_container_width=True, hide_index=True)
-    else:
-        st.info("目前沒有美股資料。")
+    us_edited = st.data_editor(
+        st.session_state.us_editable,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="us_data_editor",
+        column_config={
+            "名稱": st.column_config.TextColumn("名稱", width="medium"),
+            "代號": st.column_config.TextColumn("代號（Ticker）", width="small"),
+            "單位數": st.column_config.NumberColumn("單位數（股）", min_value=0, step=1, format="%d"),
+            "購買成本(USD)": st.column_config.NumberColumn("購買成本(USD)", min_value=0, step=100.0, format="%.2f"),
+        },
+    )
+    st.session_state.us_editable = us_edited
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 基金總表 ────────────────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════
+    # 基金表（含平台選擇）
+    # ══════════════════════════════════════════════════════════════════
     st.markdown(
-        '<div class="j-card"><div class="j-card-title">💰 基金最新淨值 '
-        '<span class="hint">資料來源：MoneyDJ — 與 Sheet 的 importXML 同一來源</span></div>',
+        '<div class="j-card"><div class="j-card-title">💰 基金持倉 '
+        '<span class="hint">「平台」可下拉選擇（基富通-台幣 / 基富通-外幣 / 渣打 / 台新）'
+        '；成本以基金計價幣別為單位</span></div>',
         unsafe_allow_html=True,
     )
-    with st.spinner("抓取基金淨值中…"):
-        try:
-            fund_df = fetch_fund_navs_master()
-        except Exception as e:
-            fund_df = pd.DataFrame()
-            st.warning(f"基金抓取失敗：{type(e).__name__}: {e}")
-    if not fund_df.empty:
-        ok_count = int(fund_df["最新淨值"].notna().sum()) if "最新淨值" in fund_df.columns else 0
-        st.caption(f"成功 {ok_count} / 共 {len(fund_df)} 筆")
-        # 把 MoneyDJ URL 收到 expander 內，主表保持乾淨
-        display_cols = [c for c in ["基金名稱", "代號", "幣別", "最新淨值", "資料日期", "狀態"] if c in fund_df.columns]
-        st.dataframe(fmt_df(fund_df[display_cols]), use_container_width=True, hide_index=True)
-        with st.expander("📎 MoneyDJ 原始連結"):
-            for _, r in fund_df.iterrows():
-                st.markdown(f"- **{r['基金名稱']}**（{r['代號']}）→ [{r['MoneyDJ URL']}]({r['MoneyDJ URL']})")
-    else:
-        st.info("目前沒有基金資料。")
+    fund_edited = st.data_editor(
+        st.session_state.fund_editable,
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        key="fund_data_editor",
+        column_config={
+            "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
+            "代號": st.column_config.TextColumn("MoneyDJ 代號", width="small"),
+            "URL Pattern": st.column_config.SelectboxColumn(
+                "URL", help="yp010000=國內基金 / yp010001=境外基金",
+                options=["yp010000", "yp010001"], width="small",
+            ),
+            "計價幣別": st.column_config.SelectboxColumn(
+                "幣別", options=["TWD", "USD", "CNY", "JPY", "ZAR", "EUR", "HKD"], width="small",
+            ),
+            "平台": st.column_config.SelectboxColumn(
+                "平台", options=PLATFORM_OPTIONS, required=True, width="small",
+            ),
+            "單位數": st.column_config.NumberColumn("單位數", min_value=0, step=100.0, format="%.4f"),
+            "購買成本(原幣)": st.column_config.NumberColumn("購買成本(原幣)", min_value=0, step=100.0, format="%.2f"),
+        },
+        height=420,
+    )
+    st.session_state.fund_editable = fund_edited
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── 匯率 ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="j-card"><div class="j-card-title">💱 匯率（→ TWD）</div>',
-        unsafe_allow_html=True,
-    )
-    fx_default = ["USD", "CNY", "JPY", "ZAR"]
-    with st.spinner("抓取匯率中…"):
+    # ══════════════════════════════════════════════════════════════════
+    # 抓資料：價格 + FX
+    # ══════════════════════════════════════════════════════════════════
+    # 從 session_state 收集所有需要的代碼
+    tw_codes = tuple(sorted({
+        str(c).strip() for c in tw_edited["代號"].dropna().tolist() if str(c).strip()
+    }))
+    us_codes = tuple(sorted({
+        str(c).strip().upper() for c in us_edited["代號"].dropna().tolist() if str(c).strip()
+    }))
+
+    with st.spinner("抓取即時報價與匯率中…"):
         try:
-            fx_df = fetch_fx_rates(fx_default)
+            tw_price_map = fetch_tw_prices_by_codes(tw_codes)
+        except Exception as e:
+            tw_price_map = {}
+            st.warning(f"台股報價抓取失敗：{type(e).__name__}: {e}")
+        try:
+            us_price_map = fetch_us_prices_by_codes(us_codes)
+        except Exception as e:
+            us_price_map = {}
+            st.warning(f"美股報價抓取失敗：{type(e).__name__}: {e}")
+        try:
+            fund_master_df = fetch_fund_navs_master()
+            fund_nav_map = {row["代號"]: {"nav": row["最新淨值"], "date": row["資料日期"]}
+                            for _, row in fund_master_df.iterrows()}
+        except Exception as e:
+            fund_nav_map = {}
+            st.warning(f"基金淨值抓取失敗：{type(e).__name__}: {e}")
+        # 收集所有出現過的幣別
+        ccy_set = {"USD", "CNY", "JPY", "ZAR"}
+        for c in fund_edited.get("計價幣別", []):
+            cs = str(c).strip().upper()
+            if cs and cs != "TWD":
+                ccy_set.add(cs)
+        try:
+            fx_df = fetch_fx_rates(sorted(ccy_set))
         except Exception as e:
             fx_df = pd.DataFrame()
             st.warning(f"匯率抓取失敗：{type(e).__name__}: {e}")
-    if not fx_df.empty:
-        disp = fx_df.copy()
-        if "匯率" in disp.columns:
-            disp["匯率"] = disp["匯率"].apply(lambda v: f"{v:,.4f}" if pd.notna(v) else "")
+    fx_dict = fx_df_to_dict(fx_df)
+
+    # ══════════════════════════════════════════════════════════════════
+    # 加上即時價與市值欄位（呈現用）
+    # ══════════════════════════════════════════════════════════════════
+
+    def _enrich_tw(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        out["即時價"] = out["代號"].map(lambda c: tw_price_map.get(str(c).strip(), {}).get("price"))
+        out["資料日期"] = out["代號"].map(lambda c: tw_price_map.get(str(c).strip(), {}).get("date", "") or "")
+        out["市值(TWD)"] = out.apply(
+            lambda r: (r["單位數"] * r["即時價"]) if pd.notna(r["即時價"]) and pd.notna(r["單位數"]) else None,
+            axis=1,
+        )
+        out["損益(TWD)"] = out.apply(
+            lambda r: (r["市值(TWD)"] - r["購買成本(TWD)"])
+            if pd.notna(r["市值(TWD)"]) and pd.notna(r["購買成本(TWD)"]) and r["購買成本(TWD)"] else None,
+            axis=1,
+        )
+        return out
+
+    def _enrich_us(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        usd_rate = fx_dict.get("USD")
+        out["即時價(USD)"] = out["代號"].map(lambda c: us_price_map.get(str(c).strip().upper(), {}).get("price"))
+        out["資料日期"] = out["代號"].map(lambda c: us_price_map.get(str(c).strip().upper(), {}).get("date", "") or "")
+        out["市值(USD)"] = out.apply(
+            lambda r: (r["單位數"] * r["即時價(USD)"]) if pd.notna(r["即時價(USD)"]) and pd.notna(r["單位數"]) else None,
+            axis=1,
+        )
+        out["市值(TWD)"] = out["市值(USD)"].apply(lambda v: v * usd_rate if (v is not None and usd_rate) else None)
+        cost_twd = out["購買成本(USD)"].apply(lambda v: v * usd_rate if (v and usd_rate) else None)
+        out["損益(TWD)"] = [
+            (mv - c) if (mv is not None and c is not None) else None
+            for mv, c in zip(out["市值(TWD)"], cost_twd)
+        ]
+        return out
+
+    def _enrich_fund(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        out["最新淨值"] = out["代號"].map(lambda c: fund_nav_map.get(str(c).strip(), {}).get("nav"))
+        out["資料日期"] = out["代號"].map(lambda c: fund_nav_map.get(str(c).strip(), {}).get("date", "") or "")
+        out["市值(原幣)"] = out.apply(
+            lambda r: (r["單位數"] * r["最新淨值"]) if pd.notna(r["最新淨值"]) and pd.notna(r["單位數"]) else None,
+            axis=1,
+        )
+        out["市值(TWD)"] = out.apply(
+            lambda r: to_twd(r["市值(原幣)"], r["計價幣別"], fx_dict),
+            axis=1,
+        )
+        cost_twd = out.apply(lambda r: to_twd(r["購買成本(原幣)"], r["計價幣別"], fx_dict), axis=1)
+        out["損益(TWD)"] = [
+            (mv - c) if (mv is not None and c is not None and c) else None
+            for mv, c in zip(out["市值(TWD)"], cost_twd)
+        ]
+        # 攜帶換算後成本以供彙總
+        out["__cost_twd"] = cost_twd
+        return out
+
+    tw_full = _enrich_tw(tw_edited)
+    us_full = _enrich_us(us_edited)
+    fund_full = _enrich_fund(fund_edited)
+
+    # ══════════════════════════════════════════════════════════════════
+    # 平台彙總
+    # ══════════════════════════════════════════════════════════════════
+    def _sum(s):
+        return float(pd.to_numeric(s, errors="coerce").sum(skipna=True))
+
+    usd_rate = fx_dict.get("USD")
+
+    bucket_rows = []
+
+    # 台股
+    bucket_rows.append({
+        "平台": "台股",
+        "市值(TWD)": _sum(tw_full["市值(TWD)"]),
+        "成本(TWD)": _sum(tw_full["購買成本(TWD)"]),
+    })
+    # 美股
+    us_cost_twd = (
+        pd.to_numeric(us_full["購買成本(USD)"], errors="coerce").fillna(0) * (usd_rate or 0)
+    )
+    bucket_rows.append({
+        "平台": "美股",
+        "市值(TWD)": _sum(us_full["市值(TWD)"]),
+        "成本(TWD)": float(us_cost_twd.sum()),
+    })
+    # 基金 4 桶
+    for plat in PLATFORM_OPTIONS:
+        sub = fund_full[fund_full["平台"] == plat]
+        bucket_rows.append({
+            "平台": (
+                "基富通台幣" if plat == "基富通-台幣"
+                else "基富通外幣" if plat == "基富通-外幣"
+                else "渣打基金" if plat == "渣打"
+                else "台新基金"
+            ),
+            "市值(TWD)": _sum(sub["市值(TWD)"]) if not sub.empty else 0.0,
+            "成本(TWD)": _sum(sub["__cost_twd"]) if not sub.empty else 0.0,
+        })
+
+    bucket_df = pd.DataFrame(bucket_rows)
+    bucket_df["損益(TWD)"] = bucket_df["市值(TWD)"] - bucket_df["成本(TWD)"]
+    bucket_df["損益%"] = bucket_df.apply(
+        lambda r: (r["損益(TWD)"] / r["成本(TWD)"] * 100) if r["成本(TWD)"] else None,
+        axis=1,
+    )
+
+    total_mv = float(bucket_df["市值(TWD)"].sum())
+    total_cost = float(bucket_df["成本(TWD)"].sum())
+    total_pl = total_mv - total_cost
+    total_pct = (total_pl / total_cost * 100) if total_cost else None
+
+    # ══════════════════════════════════════════════════════════════════
+    # 填入頂部摘要 + 匯率
+    # ══════════════════════════════════════════════════════════════════
+    with summary_placeholder.container():
+        st.markdown(
+            '<div class="j-card"><div class="j-card-title">📊 投資總覽（換算 TWD）</div>',
+            unsafe_allow_html=True,
+        )
+        # 大 KPI
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("總市值(TWD)", f"{int(round(total_mv)):,}")
+        k2.metric("總成本(TWD)", f"{int(round(total_cost)):,}")
+        k3.metric("總損益(TWD)", f"{int(round(total_pl)):,}",
+                  delta=f"{total_pct:+.2f}%" if total_pct is not None else None)
+        k4.metric("最後更新", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+        # 平台明細
+        disp = bucket_df.copy()
+        disp["市值(TWD)"] = disp["市值(TWD)"].apply(lambda v: int(round(v)) if pd.notna(v) else 0)
+        disp["成本(TWD)"] = disp["成本(TWD)"].apply(lambda v: int(round(v)) if pd.notna(v) else 0)
+        disp["損益(TWD)"] = disp["損益(TWD)"].apply(lambda v: int(round(v)) if pd.notna(v) else 0)
+        disp["損益%"] = disp["損益%"].apply(lambda v: f"{v:+.2f}%" if pd.notna(v) else "")
         st.dataframe(fmt_df(disp), use_container_width=True, hide_index=True)
-    else:
-        st.info("目前沒有匯率資料。")
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with fx_placeholder.container():
+        st.markdown(
+            '<div class="j-card"><div class="j-card-title">💱 即時匯率（→ TWD）'
+            '<span class="hint">下方所有市值都用這張表換算</span></div>',
+            unsafe_allow_html=True,
+        )
+        if not fx_df.empty:
+            disp_fx = fx_df.copy()
+            if "匯率" in disp_fx.columns:
+                disp_fx["匯率"] = disp_fx["匯率"].apply(lambda v: f"{v:,.4f}" if pd.notna(v) else "")
+            st.dataframe(fmt_df(disp_fx), use_container_width=True, hide_index=True)
+        else:
+            st.info("目前沒有匯率資料。")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════
+    # 詳細市值表（展開檢視）
+    # ══════════════════════════════════════════════════════════════════
+    with st.expander("🔍 看詳細市值表（每筆部位）"):
+        st.markdown("**台股**")
+        tw_cols = ["名稱", "代號", "單位數", "即時價", "資料日期",
+                   "市值(TWD)", "購買成本(TWD)", "損益(TWD)"]
+        st.dataframe(
+            fmt_df(tw_full[[c for c in tw_cols if c in tw_full.columns]]),
+            use_container_width=True, hide_index=True,
+        )
+
+        st.markdown("**美股**")
+        us_cols = ["名稱", "代號", "單位數", "即時價(USD)", "資料日期",
+                   "市值(USD)", "市值(TWD)", "購買成本(USD)", "損益(TWD)"]
+        st.dataframe(
+            fmt_df(us_full[[c for c in us_cols if c in us_full.columns]]),
+            use_container_width=True, hide_index=True,
+        )
+
+        st.markdown("**基金**")
+        fund_cols = ["基金名稱", "代號", "平台", "計價幣別", "單位數", "最新淨值",
+                     "資料日期", "市值(原幣)", "市值(TWD)", "購買成本(原幣)", "損益(TWD)"]
+        st.dataframe(
+            fmt_df(fund_full[[c for c in fund_cols if c in fund_full.columns]]),
+            use_container_width=True, hide_index=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════
