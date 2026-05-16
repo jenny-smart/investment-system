@@ -37,7 +37,6 @@ MARKET_SHEETS = [
     "渣打-美金", "渣打-南非", "台新-美金", "台新-南非",
 ]
 
-# ── Master config: 11 funds (MoneyDJ) ──────────────────────────────────────
 FUND_CONFIG = [
     {"code": "acft94",  "pattern": "yp010000", "currency": "TWD", "name": "富蘭克林華美新興國家固定收益B-新臺幣"},
     {"code": "acai222", "pattern": "yp010000", "currency": "TWD", "name": "柏瑞新興邊境非投資等級債券B類型"},
@@ -52,19 +51,18 @@ FUND_CONFIG = [
     {"code": "ANZH2",   "pattern": "yp010001", "currency": "ZAR", "name": "高盛新興市場債券Y（南非幣對沖）"},
 ]
 
-# ── Master config: stocks ───────────────────────────────────────────────────
 STOCK_CONFIG = [
-    {"ticker": "PYPL",  "name": "PayPal",       "currency": "USD"},
-    {"ticker": "XYZ",   "name": "XYZ",           "currency": "USD"},
+    {"ticker": "PYPL",  "name": "PayPal", "currency": "USD"},
+    {"ticker": "XYZ",   "name": "XYZ",    "currency": "USD"},
 ]
 
-# ── FX pairs needed ─────────────────────────────────────────────────────────
 FX_PAIRS = {
     "USD": "USDTWD=X",
     "CNY": "CNYTWD=X",
     "JPY": "JPYTWD=X",
     "ZAR": "ZARTWD=X",
 }
+
 
 # ─── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
@@ -74,10 +72,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ─── CSS: pure white + mint theme ──────────────────────────────────────────
 st.markdown("""
 <style>
-/* hide sidebar */
 [data-testid="stSidebar"],
 [data-testid="collapsedControl"],
 section[data-testid="stSidebarNav"],
@@ -87,10 +83,9 @@ html, body, [class*="css"] {
     font-family: "PingFang TC", "Noto Sans TC", -apple-system,
                  BlinkMacSystemFont, "Segoe UI", sans-serif !important;
 }
-.stApp { background: #f7faf9 !important; }
+.stApp { background: #f7faf9 !important; color: #0f2b20 !important; }
 .block-container { padding: 0 !important; max-width: 100% !important; }
 
-/* ── Top bar ─────────────────────────────────────────────────────── */
 .j-topbar {
     background: #ffffff;
     border-bottom: 1px solid #e5eae8;
@@ -109,15 +104,6 @@ html, body, [class*="css"] {
 .j-brand .dot { color: #10b981; font-size: 18px; }
 .j-tagline { font-size: 11px; color: #a0b0a8; }
 
-/* ── Source row ──────────────────────────────────────────────────── */
-.j-source-row {
-    background: #ffffff;
-    border-bottom: 1px solid #e5eae8;
-    padding: 8px 32px;
-    display: flex; align-items: center; gap: 12px;
-}
-
-/* ── Tabs ────────────────────────────────────────────────────────── */
 .stTabs [data-baseweb="tab-list"] {
     background: #ffffff;
     border-bottom: 2px solid #e5eae8;
@@ -142,7 +128,6 @@ html, body, [class*="css"] {
     padding: 28px 32px;
 }
 
-/* ── Metrics ─────────────────────────────────────────────────────── */
 [data-testid="stMetric"] {
     background: #ffffff !important;
     border: 1px solid #e5eae8 !important;
@@ -164,16 +149,15 @@ html, body, [class*="css"] {
 }
 [data-testid="stMetricDelta"] { font-size: 12px !important; }
 
-/* ── Dataframe ───────────────────────────────────────────────────── */
 [data-testid="stDataFrame"] {
     border: 1px solid #e5eae8 !important;
     border-radius: 12px !important;
     overflow: hidden !important;
     box-shadow: 0 1px 4px rgba(0,0,0,.04) !important;
+    background: #ffffff !important;
 }
 .dvn-scroller { background: #ffffff !important; }
 
-/* ── Selectbox ───────────────────────────────────────────────────── */
 [data-baseweb="select"] > div {
     background: #ffffff !important;
     border-color: #e5eae8 !important;
@@ -182,7 +166,6 @@ html, body, [class*="css"] {
     font-size: 13px !important;
 }
 
-/* ── Radio ───────────────────────────────────────────────────────── */
 [data-testid="stRadio"] fieldset { border: none !important; }
 [data-testid="stRadio"] > div {
     flex-direction: row !important; flex-wrap: nowrap !important; gap: 8px !important;
@@ -205,7 +188,6 @@ html, body, [class*="css"] {
     font-weight: 600 !important;
 }
 
-/* ── Buttons ─────────────────────────────────────────────────────── */
 .stButton > button {
     background: #10b981 !important; color: #fff !important;
     border: none !important; border-radius: 8px !important;
@@ -215,7 +197,6 @@ html, body, [class*="css"] {
 }
 .stButton > button:hover { background: #047857 !important; }
 
-/* ── Section card ────────────────────────────────────────────────── */
 .j-card {
     background: #ffffff;
     border: 1px solid #e5eae8;
@@ -225,31 +206,13 @@ html, body, [class*="css"] {
     box-shadow: 0 1px 4px rgba(0,0,0,.04);
 }
 .j-card-title {
-    font-size: 10.5px; font-weight: 700; color: #8fa89e;
-    letter-spacing: .8px; text-transform: uppercase;
+    font-size: 13px; font-weight: 700; color: #10b981;
     margin-bottom: 14px; padding-bottom: 10px;
     border-bottom: 1px solid #f0f5f3;
 }
 .j-page-title { font-size: 21px; font-weight: 700; color: #0f2b20; margin-bottom: 3px; }
 .j-page-sub   { font-size: 12.5px; color: #8fa89e; margin-bottom: 22px; }
 
-/* ── Status badges ───────────────────────────────────────────────── */
-.badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:600; }
-.badge-ok  { background:#ecfdf5; color:#047857; }
-.badge-err { background:#fef2f2; color:#dc2626; }
-.badge-warn{ background:#fffbeb; color:#d97706; }
-
-/* ── Live price table ────────────────────────────────────────────── */
-.price-row { display:flex; align-items:center; justify-content:space-between;
-    padding:9px 0; border-bottom:1px solid #f0f5f3; font-size:13px; }
-.price-row:last-child { border-bottom:none; }
-.price-name { color:#2d5a47; font-weight:500; flex:1; }
-.price-val  { font-weight:700; color:#0f2b20; min-width:90px; text-align:right; }
-.price-cur  { color:#8fa89e; font-size:11px; min-width:36px; text-align:right; }
-.price-ok   { color:#10b981; font-size:11px; min-width:50px; text-align:right; }
-.price-err  { color:#ef4444; font-size:11px; min-width:50px; text-align:right; }
-
-/* ── Spinner ─────────────────────────────────────────────────────── */
 [data-testid="stSpinner"] p { color:#10b981 !important; }
 [data-testid="stAlert"] { border-radius:10px !important; font-size:13px !important; }
 </style>
@@ -260,6 +223,7 @@ html, body, [class*="css"] {
 def google_export_url(sid: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=xlsx"
 
+
 @st.cache_data(ttl=600, show_spinner=False)
 def download_xlsx(sid: str) -> bytes:
     r = requests.get(google_export_url(sid), timeout=60)
@@ -268,14 +232,17 @@ def download_xlsx(sid: str) -> bytes:
         raise ValueError("Google Sheet 回傳 HTML（可能需要登入或尚未公開）")
     return r.content
 
+
 @st.cache_data(ttl=600, show_spinner=False)
 def load_local_xlsx(path: str) -> bytes:
     return Path(path).read_bytes()
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def read_sheet(xlsx_bytes: bytes, sheet_name: str) -> pd.DataFrame:
     return pd.read_excel(BytesIO(xlsx_bytes), sheet_name=sheet_name,
                          header=None, engine="openpyxl")
+
 
 def workbook_bytes(mode: str, which: str) -> bytes:
     if which == "primary":
@@ -284,20 +251,22 @@ def workbook_bytes(mode: str, which: str) -> bytes:
     return (load_local_xlsx(str(MARKET_LOCAL))
             if mode == "本機快取" else download_xlsx(MARKET_SPREADSHEET_ID))
 
+
 def numeric(v: Any) -> float | None:
     try:
         return None if v is None or pd.isna(v) else float(v)
     except Exception:
         return None
 
+
 def money(v: Any) -> str:
-    """3-digit comma integer — per architecture spec."""
     n = numeric(v)
     return "-" if n is None else f"{n:,.0f}"
 
+
 def fmt_df(df: pd.DataFrame) -> pd.DataFrame:
-    """NaN / None / NaT → empty string."""
     return df.fillna("").astype(str).replace({"nan": "", "None": "", "NaT": "", "NaN": ""})
+
 
 def cleaned_table(df: pd.DataFrame, max_rows: int = 120, max_cols: int = 40) -> pd.DataFrame:
     t = df.dropna(how="all").dropna(axis=1, how="all")
@@ -305,22 +274,54 @@ def cleaned_table(df: pd.DataFrame, max_rows: int = 120, max_cols: int = 40) -> 
     t.columns = [str(c) for c in t.columns]
     return fmt_df(t)
 
+
 def row_by_label(df: pd.DataFrame, label: str) -> pd.Series | None:
+    if df.empty:
+        return None
     lbs = df.iloc[:, 0].astype(str).str.strip()
     m = df.loc[lbs == label]
     return None if m.empty else m.iloc[0]
 
+
+def find_value_by_keywords(df: pd.DataFrame, keywords: list[str], col: int = 1) -> float:
+    """在總覽 A 欄用關鍵字找第一個數值。避免標籤有 total / Total / 空白差異導致抓不到。"""
+    if df.empty:
+        return 0.0
+    labels = df.iloc[:, 0].astype(str).str.replace(" ", "", regex=False).str.lower()
+    normalized_keywords = [k.replace(" ", "").lower() for k in keywords]
+    for kw in normalized_keywords:
+        matches = df.loc[labels.str.contains(kw, na=False)]
+        for _, row in matches.iterrows():
+            if len(row) > col:
+                val = numeric(row.iloc[col])
+                if val is not None:
+                    return val
+    return 0.0
+
+
+def value_from_labels(df: pd.DataFrame, labels: list[str], col: int = 1) -> float:
+    for label in labels:
+        row = row_by_label(df, label)
+        if row is not None and len(row) > col:
+            val = numeric(row.iloc[col])
+            if val is not None:
+                return val
+    return find_value_by_keywords(df, labels, col=col)
+
+
 def metric_from_overview(df: pd.DataFrame, label: str, col: int = 1) -> str:
-    row = row_by_label(df, label)
-    return money(row.iloc[col]) if row is not None and len(row) > col else "-"
+    return money(value_from_labels(df, [label], col=col))
+
 
 def make_section_from_header(df: pd.DataFrame, sc: int, ec: int, max_rows: int = 80) -> pd.DataFrame:
     s = df.iloc[:max_rows, sc:ec].dropna(how="all").copy()
-    if s.empty: return s
+    if s.empty:
+        return s
     hdr = s.iloc[0].fillna("")
     s = s.iloc[1:].copy()
     s.columns = [str(v).strip() or f"col_{i+1}" for i, v in enumerate(hdr)]
     return fmt_df(s.dropna(how="all"))
+
 
 def monthly_income_trend(monthly_df: pd.DataFrame) -> pd.DataFrame:
     header    = monthly_df.iloc[0]
@@ -335,17 +336,21 @@ def monthly_income_trend(monthly_df: pd.DataFrame) -> pd.DataFrame:
             records.append({"月份": dt, "收入": amt})
     return pd.DataFrame(records)
 
+
 def ledger_long_table(ledger: pd.DataFrame) -> pd.DataFrame:
     months  = ledger.iloc[0, 1:14]
     records = []
     for ri in range(1, min(len(ledger), 160)):
         cat = ledger.iloc[ri, 0]
-        if cat is None or pd.isna(cat): continue
+        if cat is None or pd.isna(cat):
+            continue
         for offset, mv in enumerate(months, start=1):
             amt = numeric(ledger.iloc[ri, offset])
-            if amt is None or amt == 0: continue
+            if amt is None or amt == 0:
+                continue
             records.append({"月份": str(mv), "項目": str(cat), "金額": amt, "來源列": ri + 1})
     return pd.DataFrame(records)
+
 
 def fund_sheet_metrics(df: pd.DataFrame) -> dict[str, str]:
     row = df.iloc[1] if len(df) > 1 else pd.Series(dtype=object)
@@ -356,15 +361,50 @@ def fund_sheet_metrics(df: pd.DataFrame) -> dict[str, str]:
         "月配息":   money(row.iloc[14]) if len(row) > 14 else "-",
     }
 
+
 def load_health_summary() -> list[dict[str, Any]]:
-    if not SUMMARY_JSON.exists(): return []
+    if not SUMMARY_JSON.exists():
+        return []
     return json.loads(SUMMARY_JSON.read_text(encoding="utf-8"))
+
+
+def build_overview_assets(overview: pd.DataFrame) -> pd.DataFrame:
+    """總覽主卡片資料。
+
+    重點修正：
+    原本總資產只顯示 Google Sheet 的「加總Total」。
+    這裡改成把台股、銀行、保險、UNCLE 待還、基富通、渣打美股、渣打基金、台新基金都納入。
+    """
+    rows = [
+        ("台股", value_from_labels(overview, ["台股total", "台股Total", "台股"])),
+        ("銀行", value_from_labels(overview, ["銀行total", "銀行Total", "銀行"])),
+        ("保險", value_from_labels(overview, ["保險total", "保險Total", "保險"])),
+        ("UNCLE 待還", value_from_labels(overview, ["uncle待還", "Uncle待還", "UNCLE待還", "待還"])),
+        ("基富通", value_from_labels(overview, ["基富通total", "基富通Total", "基富通"])),
+        ("渣打美股", value_from_labels(overview, ["渣打美股total", "渣打-美股total", "渣打-美股", "渣打美股"])),
+        ("渣打基金", value_from_labels(overview, ["渣打基金total", "渣打基金Total", "渣打基金", "渣打-基金"])),
+        ("台新基金", value_from_labels(overview, ["台新基金total", "台新基金Total", "台新基金", "台新-基金"])),
+    ]
+
+    df = pd.DataFrame(rows, columns=["項目", "金額"])
+    df = df[df["金額"].fillna(0) != 0].copy()
+    total = float(df["金額"].sum()) if not df.empty else 0.0
+    df["占比"] = df["金額"].apply(lambda x: f"{x / total:.1%}" if total else "-")
+    df["金額數字"] = df["金額"]
+    df["金額"] = df["金額"].apply(money)
+    return df
+
+
+def display_table_or_info(df: pd.DataFrame, message: str, height: int = 340) -> None:
+    if df is None or df.empty:
+        st.info(message)
+    else:
+        st.dataframe(df, use_container_width=True, hide_index=True, height=height)
 
 
 # ─── Live price fetchers ────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[str, str]:
-    """Scrape MoneyDJ fund NAV. Returns (price_str, status)."""
     if not HAS_BS4:
         return "-", "缺少 beautifulsoup4"
     url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
@@ -373,7 +413,6 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[str, str]:
         r = requests.get(url, timeout=15, headers=headers)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
-        # XPath equivalent: #article form table[1] tr[2] td[2]
         table = soup.select_one("#article form table")
         if table:
             rows = table.find_all("tr")
@@ -387,9 +426,9 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[str, str]:
     except Exception as e:
         return "-", str(e)[:40]
 
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_price(ticker: str) -> tuple[str, str]:
-    """Yahoo Finance stock price. Returns (price_str, status)."""
     if not HAS_YF:
         return "-", "缺少 yfinance"
     try:
@@ -402,9 +441,9 @@ def fetch_stock_price(ticker: str) -> tuple[str, str]:
     except Exception as e:
         return "-", str(e)[:40]
 
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fx(pair: str) -> tuple[str, str]:
-    """Yahoo Finance FX rate. Returns (rate_str, status)."""
     if not HAS_YF:
         return "-", "缺少 yfinance"
     try:
@@ -426,7 +465,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ─── Source toggle + refresh ─────────────────────────────────────────────────
+
+# ─── Source toggle + refresh ───────────────────────────────────────────────
 sc1, sc2, sc3 = st.columns([2, 1, 9])
 with sc1:
     source_mode = st.radio("來源", ["Google Sheet", "本機快取"],
@@ -436,7 +476,8 @@ with sc2:
         st.cache_data.clear()
         st.rerun()
 
-# ─── Load workbooks ──────────────────────────────────────────────────────────
+
+# ─── Load workbooks ─────────────────────────────────────────────────────────
 with st.spinner("讀取試算表中…"):
     try:
         primary_bytes = workbook_bytes(source_mode, "primary")
@@ -449,7 +490,8 @@ with st.spinner("讀取試算表中…"):
 if not load_ok:
     st.stop()
 
-# ─── Tabs ────────────────────────────────────────────────────────────────────
+
+# ─── Tabs ──────────────────────────────────────────────────────────────────
 tabs = st.tabs(["◈ 總覽", "◷ 每月收入", "📒 2026 細帳",
                 "📊 市值來源", "💹 即時市值", "🔍 資料健康"])
 
@@ -462,40 +504,71 @@ with tabs[0]:
                 '<div class="j-page-sub">所有帳戶資產彙整</div>', unsafe_allow_html=True)
     try:
         overview = read_sheet(market_bytes, "總覽")
+        assets_df = build_overview_assets(overview)
+
+        calculated_total = float(assets_df["金額數字"].sum()) if not assets_df.empty else 0.0
+        sheet_total = value_from_labels(overview, ["加總Total", "總資產", "總資產total"])
+        total_assets = calculated_total if calculated_total else sheet_total
+
+        stock_tw = value_from_labels(overview, ["台股total", "台股"])
+        bank_assets = value_from_labels(overview, ["銀行total", "銀行"])
+        insurance_assets = value_from_labels(overview, ["保險total", "保險"])
+        uncle_assets = value_from_labels(overview, ["uncle待還", "UNCLE待還", "待還"])
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("🏦 總資產",     metric_from_overview(overview, "加總Total"))
-        c2.metric("📈 台股",        metric_from_overview(overview, "台股total"))
-        c3.metric("🏛 銀行",        metric_from_overview(overview, "銀行total"))
-        c4.metric("🛡 保險",        metric_from_overview(overview, "保險total"))
-        c5.metric("👤 Uncle 待還",  metric_from_overview(overview, "uncle待還"))
-
-        # Diagnostic — if all KPIs are "-", show first 20 labels
-        kpi_vals = [metric_from_overview(overview, lbl) for lbl in
-                    ["加總Total","台股total","銀行total","保險total","uncle待還"]]
-        if all(v == "-" for v in kpi_vals):
-            with st.expander("⚠️ KPI 全部為 — — 點此診斷 A 欄標籤", expanded=True):
-                labels = overview.iloc[:20, 0].astype(str).tolist()
-                st.code("\n".join(f"{i+1}: {l}" for i, l in enumerate(labels)))
+        c1.metric("🏦 總資產", money(total_assets))
+        c2.metric("📈 台股", money(stock_tw))
+        c3.metric("🏛 銀行", money(bank_assets))
+        c4.metric("🛡 保險", money(insurance_assets))
+        c5.metric("👤 UNCLE 待還", money(uncle_assets))
 
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # 新增第二排：基富通、渣打美股、渣打基金、台新基金、其他投資/空位
+        platform_map = {
+            "基富通": "🟧 基富通",
+            "渣打美股": "🇺🇸 渣打美股",
+            "渣打基金": "💹 渣打基金",
+            "台新基金": "🟥 台新基金",
+        }
+        platform_df = assets_df[assets_df["項目"].isin(platform_map.keys())].copy()
+
+        if not platform_df.empty:
+            pcols = st.columns(4)
+            for col, (_, row) in zip(pcols, platform_df.iterrows()):
+                col.metric(platform_map.get(row["項目"], row["項目"]), row["金額"], row["占比"])
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         l, r = st.columns([1, 1.6])
 
         with l:
             st.markdown('<div class="j-card"><div class="j-card-title">彙總摘要</div>', unsafe_allow_html=True)
-            summary = overview.iloc[:18, :5].copy()
-            summary.columns = ["項目","現值","損益","收入/配息","合計"]
-            st.dataframe(fmt_df(summary), use_container_width=True, hide_index=True, height=340)
+            if assets_df.empty:
+                st.info("尚未讀到資產分類資料，請檢查「總覽」A 欄標籤。")
+            else:
+                summary_view = assets_df[["項目", "金額", "占比"]].copy()
+                st.dataframe(summary_view, use_container_width=True, hide_index=True, height=340)
             st.markdown('</div>', unsafe_allow_html=True)
 
         with r:
             st.markdown('<div class="j-card"><div class="j-card-title">投資明細</div>', unsafe_allow_html=True)
-            inv = make_section_from_header(overview, 5, 18, 90)
-            show_cols = [c for c in ["投資分類","日期","現值","損益","台幣成本","台幣市值",
-                                      "累積配息","台幣配息","配息率","損益率"] if c in inv.columns]
-            st.dataframe(inv[show_cols] if show_cols else inv,
-                         use_container_width=True, hide_index=True, height=340)
+            investment_items = ["台股", "基富通", "渣打美股", "渣打基金", "台新基金"]
+            investment_view = assets_df[assets_df["項目"].isin(investment_items)][["項目", "金額", "占比"]].copy()
+            if investment_view.empty:
+                # fallback：若總覽右側表格有資料，就顯示原始投資明細
+                inv = make_section_from_header(overview, 5, 18, 90)
+                show_cols = [c for c in ["投資分類", "日期", "現值", "損益", "台幣成本", "台幣市值",
+                                          "累積配息", "台幣配息", "配息率", "損益率"] if c in inv.columns]
+                display_table_or_info(inv[show_cols] if show_cols else inv, "尚未讀到投資明細資料。", height=340)
+            else:
+                st.dataframe(investment_view, use_container_width=True, hide_index=True, height=340)
             st.markdown('</div>', unsafe_allow_html=True)
+
+        # 下方保留原總覽右側資料，避免資料表空白時看不到診斷內容
+        with st.expander("原始總覽資料 / 診斷", expanded=False):
+            raw = cleaned_table(overview, max_rows=80, max_cols=18)
+            st.dataframe(raw, use_container_width=True, hide_index=True, height=420)
 
     except Exception as e:
         st.warning(f"⚠️ 總覽工作表讀取錯誤：{e}")
@@ -521,7 +594,7 @@ with tabs[1]:
                     unsafe_allow_html=True)
         tbl = monthly.iloc[:22, :46].dropna(axis=1, how="all")
         tbl.columns = [str(c) for c in tbl.columns]
-        st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=360)
+        display_table_or_info(fmt_df(tbl), "尚無每月收入資料。", height=360)
         st.markdown('</div>', unsafe_allow_html=True)
 
     except Exception as e:
@@ -540,7 +613,6 @@ with tabs[2]:
         long_df = ledger_long_table(ledger)
 
         if not long_df.empty:
-            # Summary metrics
             inc = long_df[long_df["金額"] > 0]["金額"].sum()
             out = long_df[long_df["金額"] < 0]["金額"].sum()
             m1, m2, m3, m4 = st.columns(4)
@@ -555,14 +627,14 @@ with tabs[2]:
 
             st.markdown('<div class="j-card"><div class="j-card-title">細帳明細（長表）</div>',
                         unsafe_allow_html=True)
-            st.dataframe(fmt_df(view), use_container_width=True, hide_index=True, height=340)
+            display_table_or_info(fmt_df(view), "尚無細帳資料。", height=340)
             st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="j-card"><div class="j-card-title">原始資料（寬表）</div>',
                     unsafe_allow_html=True)
         raw = ledger.iloc[:140, :16].copy()
         raw.columns = [str(c) for c in raw.columns]
-        st.dataframe(fmt_df(raw), use_container_width=True, hide_index=True, height=360)
+        display_table_or_info(fmt_df(raw), "尚無原始細帳資料。", height=360)
         st.markdown('</div>', unsafe_allow_html=True)
 
     except Exception as e:
@@ -589,7 +661,7 @@ with tabs[3]:
 
         st.markdown('<div class="j-card"><div class="j-card-title">工作表資料</div>',
                     unsafe_allow_html=True)
-        st.dataframe(cleaned_table(sheet), use_container_width=True, hide_index=True, height=500)
+        display_table_or_info(cleaned_table(sheet), f"尚無 {sel_sheet} 資料。", height=500)
         st.markdown('</div>', unsafe_allow_html=True)
 
     except Exception as e:
@@ -597,14 +669,13 @@ with tabs[3]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# TAB 5 — 即時市值  (AUTO-LOAD, no button)
+# TAB 5 — 即時市值
 # ═══════════════════════════════════════════════════════════════════════════
 with tabs[4]:
     st.markdown('<div class="j-page-title">即時市值</div>'
                 '<div class="j-page-sub">自動抓取・基金 NAV via MoneyDJ・股票 via Yahoo Finance・每 5 分鐘更新</div>',
                 unsafe_allow_html=True)
 
-    # ── FX rates ──────────────────────────────────────────────────────────
     st.markdown('<div class="j-card"><div class="j-card-title">匯率（TWD 換算）</div>',
                 unsafe_allow_html=True)
     fx_cols = st.columns(len(FX_PAIRS))
@@ -621,7 +692,6 @@ with tabs[4]:
                 pass
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Fund NAVs ─────────────────────────────────────────────────────────
     st.markdown('<div class="j-card"><div class="j-card-title">基金最新淨值（MoneyDJ）</div>',
                 unsafe_allow_html=True)
 
@@ -651,10 +721,9 @@ with tabs[4]:
 
     progress.empty()
     fund_df = pd.DataFrame(fund_rows)
-    st.dataframe(fund_df, use_container_width=True, hide_index=True, height=420)
+    display_table_or_info(fund_df, "尚無基金即時資料。", height=420)
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Stock prices ──────────────────────────────────────────────────────
     st.markdown('<div class="j-card"><div class="j-card-title">股票即時價（Yahoo Finance）</div>',
                 unsafe_allow_html=True)
 
@@ -670,7 +739,7 @@ with tabs[4]:
         })
 
     stock_df = pd.DataFrame(stock_rows)
-    st.dataframe(stock_df, use_container_width=True, hide_index=True)
+    display_table_or_info(stock_df, "尚無股票即時資料。", height=180)
     st.markdown('</div>', unsafe_allow_html=True)
 
     if not HAS_YF:
@@ -702,11 +771,11 @@ with tabs[5]:
 
             heavy = (pd.DataFrame(book["sheets"])
                      .sort_values("formulas", ascending=False)
-                     [["sheet","class","rows","cols","nonempty","formulas","literal_errors"]]
+                     [["sheet", "class", "rows", "cols", "nonempty", "formulas", "literal_errors"]]
                      .head(12))
-            st.dataframe(fmt_df(heavy), use_container_width=True, hide_index=True)
+            display_table_or_info(fmt_df(heavy), "尚無資料健康摘要。", height=280)
 
             funcs = pd.DataFrame(
                 [{"公式": k, "次數": v} for k, v in book["workbook_functions"].items()])
-            st.dataframe(fmt_df(funcs), use_container_width=True, hide_index=True)
+            display_table_or_info(fmt_df(funcs), "尚無公式統計。", height=280)
             st.markdown('</div>', unsafe_allow_html=True)
