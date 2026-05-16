@@ -91,16 +91,16 @@ FX_PAIRS = {"USD": "USDTWD=X", "CNY": "CNYTWD=X", "JPY": "JPYTWD=X", "ZAR": "ZAR
 
 # 總覽頁用來查各分類的關鍵字
 OVERVIEW_ALIASES = {
-    "總資產":   ["加總Total", "總資產", "總資產total", "總資產總額"],
-    "台股":     ["台股total", "台股Total", "台股"],
-    "銀行":     ["銀行total", "銀行Total", "銀行"],
-    "保險":     ["保險total", "保險Total", "保險"],
-    "UNCLE 待還": ["uncle待還", "Uncle待還", "UNCLE待還", "待還"],
-    "基富通":   ["基富通total", "基富通Total", "基富通", "基金（基富通）", "基金(基富通)"],
-    "渣打美股": ["渣打美股total", "渣打-美股total", "渣打-美股", "渣打美股", "美股（渣打）", "美股(渣打)"],
-    "渣打基金": ["渣打基金total", "渣打基金Total", "渣打基金", "渣打-基金", "基金（渣打）", "基金(渣打)"],
-    "台新基金": ["台新基金total", "台新基金Total", "台新基金", "台新-基金", "基金（台新）", "基金(台新)"],
-    "其他投資": ["其他投資total", "其他投資Total", "其他投資"],
+    "總資產":     ["加總Total", "加總total", "加總TOTAL", "總資產"],
+    "台股":       ["台股total", "台股Total", "台股"],
+    "銀行":       ["銀行total", "銀行Total", "銀行"],
+    "保險":       ["保險total", "保險Total", "保險"],
+    "UNCLE 待還": ["uncle待還", "Uncle待還", "UNCLE待還", "uncle待还"],
+    "基富通":     ["基富通-台", "基富通-人", "基富通-日"],
+    "渣打美股":   ["渣打-pypl", "渣打-sq", "渣打美股"],
+    "渣打基金":   ["渣打-大華", "渣打-美金", "渣打-南非", "渣打基金"],
+    "台新基金":   ["台新-南非", "台新-美金", "台新基金"],
+    "其他投資":   ["懷思投資", "其他投資"],
 }
 
 
@@ -376,18 +376,18 @@ def parse_all_platforms(market_bytes: bytes) -> tuple[dict[str, dict], pd.DataFr
     return platform_summary, detail_df
 
 
-def value_from_overview(overview: pd.DataFrame, keywords: list[str], col: int = 1) -> float:
-    """從總覽工作表搜尋關鍵字對應的數值"""
+def value_from_overview(overview: pd.DataFrame, keywords: list[str]) -> float:
+    """從總覽工作表 A欄找關鍵字、B欄取值（A=項目名稱, B=金額）"""
     if overview.empty:
         return 0.0
-    labels = overview.iloc[:, 0].astype(str).str.replace(" ", "", regex=False).str.lower()
+    col_a = overview.iloc[:, 0].astype(str).str.replace(" ", "", regex=False).str.lower()
     for kw in keywords:
         kw_norm = kw.replace(" ", "").lower()
-        matches = overview.loc[labels.str.contains(kw_norm, na=False, regex=False)]
+        matches = overview.loc[col_a.str.contains(kw_norm, na=False, regex=False)]
         for _, row in matches.iterrows():
-            if len(row) > col:
-                val = numeric(row.iloc[col])
-                if val is not None:
+            if len(row) > 1:
+                val = numeric(row.iloc[1])
+                if val is not None and val != 0:
                     return val
     return 0.0
 
@@ -522,9 +522,9 @@ with tabs[0]:
         invest_total_val    = sum(platform_summary.get(p, {}).get("台幣市值") or 0 for p in invest_items)
         invest_total_profit = sum(platform_summary.get(p, {}).get("損益") or 0 for p in invest_items)
         invest_total_div    = sum(platform_summary.get(p, {}).get("台幣配息") or 0 for p in invest_items)
-        bank_val    = value_from_overview(overview, OVERVIEW_ALIASES["銀行"])
-        insure_val  = value_from_overview(overview, OVERVIEW_ALIASES["保險"])
-        uncle_val   = value_from_overview(overview, OVERVIEW_ALIASES["UNCLE 待還"])
+        bank_val    = value_from_overview(overview, ["銀行total", "銀行Total", "銀行"])
+        insure_val  = value_from_overview(overview, ["保險total", "保險Total", "保險"])
+        uncle_val   = value_from_overview(overview, ["uncle待還", "Uncle待還", "UNCLE待還"])
         total_assets = invest_total_val + bank_val + insure_val
         net_assets   = total_assets - uncle_val
 
@@ -889,7 +889,25 @@ with tabs[6]:
         display_df(cnt, height=200)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    summaries = load_health_summary()
+    # 總覽 A/B 欄原始值（除錯用）
+    try:
+        ov_raw = read_sheet(market_bytes, "總覽")
+        st.markdown('<div class="j-card"><div class="j-card-title">總覽工作表 A/B 欄原始值（除錯）</div>', unsafe_allow_html=True)
+        ov_ab = ov_raw.iloc[:45, :2].copy()
+        ov_ab.columns = ["A欄（項目）", "B欄（金額）"]
+        display_df(fmt_df(ov_ab), height=500)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # 顯示目前抓到的關鍵值
+        st.markdown('<div class="j-card"><div class="j-card-title">關鍵數值確認</div>', unsafe_allow_html=True)
+        check_rows = []
+        for label, aliases in OVERVIEW_ALIASES.items():
+            val = value_from_overview(ov_raw, aliases)
+            check_rows.append({"項目": label, "抓到的值": money(val), "搜尋關鍵字": str(aliases[:2])})
+        display_df(pd.DataFrame(check_rows), height=300)
+        st.markdown("</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"總覽除錯失敗：{e}")
     if summaries:
         for book in summaries:
             fname = Path(book["file"]).name
