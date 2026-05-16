@@ -9,6 +9,8 @@ Jenny All｜投資系統 — 清新版本
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,21 @@ from typing import Any
 import pandas as pd
 import requests
 import streamlit as st
+
+# yfinance is optional — we import lazily so the app still loads if it's missing
+try:
+    import yfinance as yf
+    _YF_OK = True
+except Exception:
+    yf = None  # type: ignore[assignment]
+    _YF_OK = False
+
+try:
+    from bs4 import BeautifulSoup
+    _BS4_OK = True
+except Exception:
+    BeautifulSoup = None  # type: ignore[assignment]
+    _BS4_OK = False
 
 # ─── Config ──────────────────────────────────────────────────────────────
 PRIMARY_SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
@@ -424,6 +441,171 @@ def section_from_header(df: pd.DataFrame, sc: int, ec: int, rows: int = 80) -> p
     return s.dropna(how="all")
 
 
+# ─── Market price fetchers (stocks / funds / FX) ─────────────────────────
+TW_STOCK_RE = re.compile(r"^\d{4,6}$")  # 台股代碼通常 4~6 碼純數字
+
+
+def normalize_tw_ticker(symbol: str) -> str:
+    """`2330` → `2330.TW`； `0050` → `0050.TW`；其他原樣保留。"""
+    s = symbol.strip().upper()
+    if "." in s:
+        return s
+    if TW_STOCK_RE.match(s):
+        return f"{s}.TW"  # 主要市場；上櫃則需手動 .TWO
+    return s
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_quotes(symbols: list[str]) -> pd.DataFrame:
+    """批次抓股票最新收盤價。回傳 DataFrame：代碼/即時價/幣別/資料時間/狀態。"""
+    if not _YF_OK:
+        return pd.DataFrame(
+            [{"代碼": s, "即時價": None, "幣別": "", "資料時間": "", "狀態": "未安裝 yfinance"} for s in symbols]
+        )
+    rows = []
+    normed = [normalize_tw_ticker(s) for s in symbols]
+    try:
+        data = yf.download(
+            " ".join(normed),
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+        )
+    except Exception as e:
+        return pd.DataFrame([{"代碼": s, "即時價": None, "幣別": "", "資料時間": "", "狀態": f"下載失敗: {e}"} for s in normed])
+
+    for original, norm in zip(symbols, normed):
+        price = None
+        ts = ""
+        ccy = ""
+        status = "ok"
+        try:
+            if len(normed) == 1:
+                col = data["Close"] if "Close" in data.columns else None
+            else:
+                col = data[(norm, "Close")] if (norm, "Close") in data.columns else None
+            if col is not None and not col.dropna().empty:
+                last = col.dropna()
+                price = float(last.iloc[-1])
+                ts = str(last.index[-1].date())
+            else:
+                status = "查無資料"
+            if norm.endswith(".TW") or norm.endswith(".TWO"):
+                ccy = "TWD"
+            elif norm.endswith("=X"):
+                ccy = norm[:3]
+            else:
+                ccy = "USD"
+        except Exception as e:
+            status = f"err: {e}"
+        rows.append(
+            {"代碼": original, "yfinance": norm, "即時價": price, "幣別": ccy, "資料時間": ts, "狀態": status}
+        )
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_fx_rates(currencies: list[str], base: str = "TWD") -> pd.DataFrame:
+    """抓主要外幣 → TWD 的匯率（例 USDTWD=X）。"""
+    if not _YF_OK:
+        return pd.DataFrame(
+            [{"幣別": c, "匯率": None, "資料時間": "", "狀態": "未安裝 yfinance"} for c in currencies]
+        )
+    symbols = [f"{c.upper()}{base}=X" for c in currencies]
+    try:
+        data = yf.download(
+            " ".join(symbols), period="5d", interval="1d",
+            group_by="ticker", progress=False, threads=True,
+        )
+    except Exception as e:
+        return pd.DataFrame([{"幣別": c, "匯率": None, "資料時間": "", "狀態": f"下載失敗: {e}"} for c in currencies])
+
+    rows = []
+    for c, sym in zip(currencies, symbols):
+        rate = None
+        ts = ""
+        status = "ok"
+        try:
+            if len(symbols) == 1:
+                col = data["Close"] if "Close" in data.columns else None
+            else:
+                col = data[(sym, "Close")] if (sym, "Close") in data.columns else None
+            if col is not None and not col.dropna().empty:
+                last = col.dropna()
+                rate = float(last.iloc[-1])
+                ts = str(last.index[-1].date())
+            else:
+                status = "查無資料"
+        except Exception as e:
+            status = f"err: {e}"
+        rows.append({"幣別": f"{c.upper()}/{base}", "匯率": rate, "資料時間": ts, "狀態": status})
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_fund_nav_moneydj(fund_code: str) -> dict[str, Any]:
+    """從 MoneyDJ 抓單檔基金最新淨值。
+
+    fund_code: MoneyDJ 上的基金代號（網址裡的 ?a=XXXXXX）。
+    回傳：{nav, date, name, status}。
+    """
+    if not _BS4_OK:
+        return {"nav": None, "date": "", "name": "", "status": "未安裝 beautifulsoup4"}
+    url = f"https://www.moneydj.com/funddj/yp/yp012000.djhtm?a={fund_code}"
+    try:
+        r = requests.get(url, timeout=30, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36",
+        })
+        r.raise_for_status()
+        # MoneyDJ 一般是 Big5 編碼
+        r.encoding = r.apparent_encoding or "big5"
+        soup = BeautifulSoup(r.text, "lxml")
+        # 抓「最新淨值」與「資料日期」— MoneyDJ 用 <td>標籤</td><td>值</td> 排版
+        nav = None
+        date = ""
+        name = ""
+        title = soup.find("title")
+        if title:
+            name = title.get_text(strip=True).split("-")[0].strip()
+        text = soup.get_text(" ", strip=True)
+        # 嘗試從整頁文字裡找 "最新淨值 12.3456"
+        m = re.search(r"最新淨值[\s:：]*([0-9]+(?:\.[0-9]+)?)", text)
+        if m:
+            nav = float(m.group(1))
+        m2 = re.search(r"資料日期[\s:：]*([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})", text)
+        if m2:
+            date = m2.group(1)
+        if nav is None:
+            return {"nav": None, "date": "", "name": name, "status": "未在頁面找到「最新淨值」欄位（MoneyDJ 結構可能調整）"}
+        return {"nav": nav, "date": date, "name": name, "status": "ok"}
+    except requests.exceptions.RequestException as e:
+        return {"nav": None, "date": "", "name": "", "status": f"連線失敗：{e}"}
+    except Exception as e:
+        return {"nav": None, "date": "", "name": "", "status": f"解析失敗：{e}"}
+
+
+def fetch_fund_navs(codes: list[str]) -> pd.DataFrame:
+    """批次抓 MoneyDJ 基金淨值。"""
+    rows = []
+    for c in codes:
+        c = c.strip()
+        if not c:
+            continue
+        info = fetch_fund_nav_moneydj(c)
+        rows.append(
+            {
+                "基金代號": c,
+                "基金名稱": info.get("name", ""),
+                "最新淨值": info.get("nav"),
+                "資料日期": info.get("date", ""),
+                "狀態": info.get("status", ""),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def get_sheet_safely(xlsx: bytes, target: str) -> tuple[pd.DataFrame | None, str | None, str | None]:
     """Return (df, actual_sheet_name, error_message). One of df / error will be set."""
     try:
@@ -535,7 +717,7 @@ if pri is None and mkt is None:
     st.stop()
 
 # ─── Tabs ────────────────────────────────────────────────────────────────
-tabs = st.tabs(["總覽", "每月收入", "2026 細帳", "市值來源", "資料健康"])
+tabs = st.tabs(["總覽", "每月收入", "2026 細帳", "市值來源", "即時行情", "資料健康"])
 
 # ══════════════════════════════════════════════════════════════════════════
 # TAB 1 — 總覽
@@ -762,9 +944,164 @@ with tabs[3]:
             st.markdown("</div>", unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════
-# TAB 5 — 資料健康
+# TAB 5 — 即時行情（股票 + 基金 + 匯率）
 # ══════════════════════════════════════════════════════════════════════════
 with tabs[4]:
+    st.markdown('<div class="j-page-title">📡 即時行情</div>', unsafe_allow_html=True)
+    badge_yf = "" if _YF_OK else '<span class="pill pill-warn">缺 yfinance 套件</span>'
+    badge_bs = "" if _BS4_OK else '<span class="pill pill-warn">缺 beautifulsoup4 套件</span>'
+    st.markdown(
+        '<div class="j-page-sub">'
+        '股票走 yfinance（Yahoo Finance）・基金走 MoneyDJ・匯率走 yfinance '
+        f'{badge_yf} {badge_bs}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── 股票 ────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="j-card"><div class="j-card-title">股票即時報價 '
+        '<span class="hint">台股自動加 .TW；美股直接打代號</span></div>',
+        unsafe_allow_html=True,
+    )
+    col_in, col_btn = st.columns([5, 1])
+    with col_in:
+        stock_input = st.text_input(
+            "代碼（逗號分隔）",
+            value="2330, 0050, 2317, AAPL, VOO",
+            label_visibility="collapsed",
+            key="stock_input",
+            placeholder="例：2330, 0050, AAPL, TSLA",
+        )
+    with col_btn:
+        do_stock = st.button("查詢股價", key="btn_stock")
+
+    if do_stock and stock_input.strip():
+        with st.spinner("抓取股價中…"):
+            syms = [s.strip() for s in stock_input.split(",") if s.strip()]
+            stocks_df = fetch_stock_quotes(syms)
+        if not stocks_df.empty:
+            # 計算 TWD 市值需要股數，這裡先只顯示單價
+            display = stocks_df.copy()
+            st.dataframe(fmt_df(display), use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── 持倉市值計算機（股票）─────────────────────────────────────────
+    st.markdown(
+        '<div class="j-card"><div class="j-card-title">持倉市值計算 '
+        '<span class="hint">貼上「代碼,股數」一行一檔</span></div>',
+        unsafe_allow_html=True,
+    )
+    sample = "2330, 100\n0050, 500\nAAPL, 20"
+    holdings_text = st.text_area("持倉", value=sample, height=140, label_visibility="collapsed", key="holdings_in")
+    if st.button("計算持倉市值", key="btn_holdings"):
+        rows = []
+        for line in holdings_text.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2 and parts[0]:
+                try:
+                    rows.append({"代碼": parts[0], "股數": float(parts[1].replace(",", ""))})
+                except ValueError:
+                    continue
+        if rows:
+            holdings = pd.DataFrame(rows)
+            with st.spinner("抓取股價中…"):
+                quotes = fetch_stock_quotes(holdings["代碼"].tolist())
+            merged = holdings.merge(quotes, on="代碼", how="left")
+            merged["市值"] = merged["股數"] * merged["即時價"]
+            # 排版：拉到最上面看市值
+            cols_order = ["代碼", "yfinance", "股數", "即時價", "幣別", "市值", "資料時間", "狀態"]
+            merged = merged[[c for c in cols_order if c in merged.columns]]
+
+            total_twd = 0.0
+            for _, r in merged.iterrows():
+                mv = r.get("市值")
+                if pd.notna(mv):
+                    if r.get("幣別") == "TWD":
+                        total_twd += mv
+                    # 非 TWD 部位先不換算（要先抓匯率），下方匯率區可補
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("筆數", f"{len(merged):,}")
+            m2.metric("TWD 部位市值", f"{int(round(total_twd)):,}")
+            m3.metric("更新時間", datetime.now().strftime("%H:%M"))
+
+            st.dataframe(fmt_df(merged), use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── 基金 ────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="j-card"><div class="j-card-title">基金最新淨值 '
+        '<span class="hint">MoneyDJ 代號（網址 ?a= 後面那串）</span></div>',
+        unsafe_allow_html=True,
+    )
+    fund_input = st.text_input(
+        "基金代號（逗號分隔）",
+        value="",
+        label_visibility="collapsed",
+        key="fund_input",
+        placeholder="例：ACVTBR,ACUSGE — 從 MoneyDJ 網址 ?a= 後面複製",
+    )
+    col_units, col_btn2 = st.columns([5, 1])
+    with col_units:
+        unit_input = st.text_input(
+            "對應單位數（逗號分隔，順序對齊基金代號；可留空只查淨值）",
+            value="",
+            key="fund_units",
+            placeholder="例：1000, 500",
+        )
+    with col_btn2:
+        do_fund = st.button("查詢淨值", key="btn_fund")
+
+    if do_fund and fund_input.strip():
+        codes = [c.strip() for c in fund_input.split(",") if c.strip()]
+        units = [u.strip() for u in unit_input.split(",")] if unit_input.strip() else []
+        with st.spinner("抓取基金淨值中…"):
+            funds_df = fetch_fund_navs(codes)
+        if units:
+            unit_vals = []
+            for i in range(len(codes)):
+                try:
+                    unit_vals.append(float(units[i].replace(",", "")) if i < len(units) and units[i] else None)
+                except ValueError:
+                    unit_vals.append(None)
+            funds_df["單位數"] = unit_vals
+            funds_df["市值（原幣）"] = funds_df["最新淨值"] * funds_df["單位數"]
+
+        if not funds_df.empty:
+            st.dataframe(fmt_df(funds_df), use_container_width=True, hide_index=True)
+            st.caption(
+                "📎 找不到基金代號？打開 MoneyDJ 基金網站，搜尋基金名稱，"
+                "網址會長得像 `?a=ACVTBR`，後面那串就是代號。"
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── 匯率 ────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="j-card"><div class="j-card-title">匯率（→ TWD）</div>',
+        unsafe_allow_html=True,
+    )
+    fx_cols = st.multiselect(
+        "幣別",
+        ["USD", "CNY", "JPY", "ZAR", "EUR", "HKD"],
+        default=["USD", "CNY", "JPY", "ZAR"],
+        label_visibility="collapsed",
+    )
+    if st.button("更新匯率", key="btn_fx") and fx_cols:
+        with st.spinner("抓取匯率中…"):
+            fx_df = fetch_fx_rates(fx_cols)
+        if not fx_df.empty:
+            # 顯示時匯率保留 4 位小數而不是整數
+            disp = fx_df.copy()
+            disp["匯率"] = disp["匯率"].apply(lambda v: f"{v:,.4f}" if pd.notna(v) else "")
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TAB 6 — 資料健康
+# ══════════════════════════════════════════════════════════════════════════
+with tabs[5]:
     st.markdown('<div class="j-page-title">🔍 資料健康</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="j-page-sub">工作表結構・公式統計・錯誤偵測</div>',
