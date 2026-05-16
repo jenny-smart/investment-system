@@ -504,7 +504,7 @@ with tabs[0]:
                 '<div class="j-page-sub">所有帳戶資產彙整</div>', unsafe_allow_html=True)
     try:
         overview = read_sheet(market_bytes, "總覽")
-        assets_df = build_overview_assets(overview)
+        assets_df = build_overview_assets_from_all_sources(overview, market_bytes)
 
         calculated_total = float(assets_df["金額數字"].sum()) if not assets_df.empty else 0.0
         sheet_total = value_from_labels(overview, ["加總Total", "總資產", "總資產total"])
