@@ -1,16 +1,6 @@
-"""
-Jenny All｜投資系統 — 清新版本
-================================
-- 純白底 + 薄荷綠強調色，中文小字也看得清楚
-- 強化資料來源切換：Google Sheet / 本機快取 / 手動上傳 xlsx
-- 讀不到資料時會給出具體診斷（缺哪個工作表、Google Sheet 是否回傳 HTML、找到哪些列標籤）
-- 同一檔案即可上線 Streamlit Community Cloud，本機執行也支援
-"""
 from __future__ import annotations
 
 import json
-import re
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -19,28 +9,27 @@ import pandas as pd
 import requests
 import streamlit as st
 
-# yfinance is optional — we import lazily so the app still loads if it's missing
 try:
     import yfinance as yf
-    _YF_OK = True
-except Exception:
-    yf = None  # type: ignore[assignment]
-    _YF_OK = False
+    HAS_YF = True
+except ImportError:
+    HAS_YF = False
 
 try:
     from bs4 import BeautifulSoup
-    _BS4_OK = True
-except Exception:
-    BeautifulSoup = None  # type: ignore[assignment]
-    _BS4_OK = False
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
 
-# ─── Config ──────────────────────────────────────────────────────────────
+
+# ─── Config ────────────────────────────────────────────────────────────────
+BASE_DIR               = Path(__file__).resolve().parent
+PROJECT_DIR            = BASE_DIR.parent
 PRIMARY_SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
-MARKET_SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
-BASE_DIR = Path(__file__).resolve().parent
-PRIMARY_LOCAL = BASE_DIR / "inputs" / "investment-system-source.xlsx"
-MARKET_LOCAL = BASE_DIR / "inputs" / "market-value-source.xlsx"
-SUMMARY_JSON = BASE_DIR / "outputs" / "workbook_structure_summary.json"
+MARKET_SPREADSHEET_ID  = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
+PRIMARY_LOCAL          = PROJECT_DIR / "inputs" / "investment-system-source.xlsx"
+MARKET_LOCAL           = PROJECT_DIR / "inputs" / "market-value-source.xlsx"
+SUMMARY_JSON           = PROJECT_DIR / "outputs" / "workbook_structure_summary.json"
 
 MARKET_SHEETS = [
     "總覽", "台股", "「台股」的副本", "渣打-美股",
@@ -48,1165 +37,676 @@ MARKET_SHEETS = [
     "渣打-美金", "渣打-南非", "台新-美金", "台新-南非",
 ]
 
-# Theme palette — 清新薄荷綠
-INK = "#1f2937"          # 主文字
-INK_SOFT = "#4b5563"     # 次要文字
-MUTED = "#9ca3af"        # 灰色說明
-BORDER = "#e5e7eb"       # 卡片邊線
-SURFACE = "#ffffff"      # 卡片底色
-PAGE = "#f7faf9"         # 頁面底色（極淺薄荷）
-MINT = "#10b981"         # 主強調（薄荷綠）
-MINT_SOFT = "#ecfdf5"    # 淺薄荷
-MINT_INK = "#047857"     # 深薄荷（文字用）
-ROSE = "#ef4444"         # 負值
-ROSE_SOFT = "#fef2f2"
-AMBER = "#f59e0b"
-SKY = "#0ea5e9"
+# ── Master config: 11 funds (MoneyDJ) ──────────────────────────────────────
+FUND_CONFIG = [
+    {"code": "acft94",  "pattern": "yp010000", "currency": "TWD", "name": "富蘭克林華美新興國家固定收益B-新臺幣"},
+    {"code": "acai222", "pattern": "yp010000", "currency": "TWD", "name": "柏瑞新興邊境非投資等級債券B類型"},
+    {"code": "acft99",  "pattern": "yp010000", "currency": "CNY", "name": "富蘭克林華美新興國家固定收益B-人民幣"},
+    {"code": "acob36",  "pattern": "yp010000", "currency": "USD", "name": "大華銀新加坡房地產收益-美元月配"},
+    {"code": "shzx0",   "pattern": "yp010001", "currency": "JPY", "name": "貝萊德全球智慧數據股票入息A6日圓"},
+    {"code": "TLZO3",   "pattern": "yp010001", "currency": "JPY", "name": "安聯收益成長AMgi月收（日圓避險）"},
+    {"code": "pizn8",   "pattern": "yp010001", "currency": "USD", "name": "東方匯理新興市場債券A美元（月配）"},
+    {"code": "pizo1",   "pattern": "yp010001", "currency": "USD", "name": "東方匯理新興市場債券U美元（月配）"},
+    {"code": "pizm9",   "pattern": "yp010001", "currency": "ZAR", "name": "東方匯理新興市場債券U南非幣（月配）"},
+    {"code": "anzb6",   "pattern": "yp010001", "currency": "USD", "name": "高盛新興市場債券Y股美元"},
+    {"code": "ANZH2",   "pattern": "yp010001", "currency": "ZAR", "name": "高盛新興市場債券Y（南非幣對沖）"},
+]
 
+# ── Master config: stocks ───────────────────────────────────────────────────
+STOCK_CONFIG = [
+    {"ticker": "PYPL",  "name": "PayPal",       "currency": "USD"},
+    {"ticker": "XYZ",   "name": "XYZ",           "currency": "USD"},
+]
+
+# ── FX pairs needed ─────────────────────────────────────────────────────────
+FX_PAIRS = {
+    "USD": "USDTWD=X",
+    "CNY": "CNYTWD=X",
+    "JPY": "JPYTWD=X",
+    "ZAR": "ZARTWD=X",
+}
+
+# ─── Page config ───────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Jenny All｜投資系統",
-    page_icon="🌱",
+    page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# ─── CSS ─────────────────────────────────────────────────────────────────
-st.markdown(
-    f"""
+# ─── CSS: pure white + mint theme ──────────────────────────────────────────
+st.markdown("""
 <style>
-/* hide sidebar — keep top bar only */
-[data-testid="stSidebar"], [data-testid="collapsedControl"],
-section[data-testid="stSidebarNav"], button[kind="header"] {{
-    display: none !important;
-}}
+/* hide sidebar */
+[data-testid="stSidebar"],
+[data-testid="collapsedControl"],
+section[data-testid="stSidebarNav"],
+button[kind="header"] { display: none !important; }
 
-/* base */
-html, body, [class*="css"] {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
-                 "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
-}}
-.stApp {{ background: {PAGE}; color: {INK}; }}
-.block-container {{ padding: 0 !important; max-width: 100% !important; }}
+html, body, [class*="css"] {
+    font-family: "PingFang TC", "Noto Sans TC", -apple-system,
+                 BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+.stApp { background: #f7faf9 !important; }
+.block-container { padding: 0 !important; max-width: 100% !important; }
 
-/* ── top nav ────────────────────────────────────────────────────────── */
-.jenny-topbar {{
+/* ── Top bar ─────────────────────────────────────────────────────── */
+.j-topbar {
+    background: #ffffff;
+    border-bottom: 1px solid #e5eae8;
+    padding: 0 32px;
+    height: 56px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: {SURFACE};
-    border-bottom: 1px solid {BORDER};
-    padding: 0 28px;
-    height: 56px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.05);
     position: sticky; top: 0; z-index: 999;
-}}
-.jenny-topbar .logo {{
-    font-size: 15px; font-weight: 700; color: {INK};
+}
+.j-brand {
+    font-size: 16px; font-weight: 700; color: #0f2b20;
     display: flex; align-items: center; gap: 8px;
-}}
-.jenny-topbar .logo .dot {{
-    width: 10px; height: 10px; border-radius: 50%;
-    background: {MINT};
-    box-shadow: 0 0 0 4px {MINT_SOFT};
-    display: inline-block;
-}}
-.jenny-topbar .meta {{
-    font-size: 12px; color: {MUTED};
-}}
+}
+.j-brand .dot { color: #10b981; font-size: 18px; }
+.j-tagline { font-size: 11px; color: #a0b0a8; }
 
-/* ── controls strip ─────────────────────────────────────────────────── */
-.jenny-controls {{ padding: 14px 28px 0; }}
+/* ── Source row ──────────────────────────────────────────────────── */
+.j-source-row {
+    background: #ffffff;
+    border-bottom: 1px solid #e5eae8;
+    padding: 8px 32px;
+    display: flex; align-items: center; gap: 12px;
+}
 
-/* ── tabs ───────────────────────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"] {{
-    background: {SURFACE};
-    border-bottom: 1px solid {BORDER};
-    padding: 0 28px;
-    gap: 4px;
-}}
-.stTabs [data-baseweb="tab"] {{
-    color: {INK_SOFT} !important;
-    font-size: 14px;
-    padding: 14px 16px;
-    border-bottom: 2px solid transparent !important;
+/* ── Tabs ────────────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: #ffffff;
+    border-bottom: 2px solid #e5eae8;
+    padding: 0 28px; gap: 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.stTabs [data-baseweb="tab"] {
+    color: #6b8a7a !important;
+    font-size: 13.5px !important;
+    font-weight: 500 !important;
+    padding: 13px 20px !important;
+    border-bottom: 3px solid transparent !important;
     background: transparent !important;
-    font-weight: 500;
-}}
-.stTabs [data-baseweb="tab"]:hover {{ color: {MINT_INK} !important; }}
-.stTabs [aria-selected="true"] {{
-    color: {MINT_INK} !important;
-    border-bottom-color: {MINT} !important;
-    font-weight: 600 !important;
-}}
-.stTabs [data-baseweb="tab-panel"] {{
-    background: {PAGE};
-    padding: 22px 28px 40px;
-}}
+}
+.stTabs [aria-selected="true"] {
+    color: #047857 !important;
+    border-bottom-color: #10b981 !important;
+    font-weight: 700 !important;
+}
+.stTabs [data-baseweb="tab-panel"] {
+    background: #f7faf9;
+    padding: 28px 32px;
+}
 
-/* ── metric cards ───────────────────────────────────────────────────── */
-[data-testid="stMetric"] {{
-    background: {SURFACE};
-    border: 1px solid {BORDER};
-    border-radius: 12px;
-    padding: 14px 18px !important;
-    box-shadow: 0 1px 2px rgba(16,24,40,.04);
-}}
-[data-testid="stMetricLabel"] {{
-    font-size: 12px !important;
-    color: {MUTED} !important;
-    font-weight: 500;
-    letter-spacing: 0;
-    text-transform: none;
-}}
-[data-testid="stMetricLabel"] p {{
-    font-size: 12px !important;
-    color: {MUTED} !important;
-}}
-[data-testid="stMetricValue"] {{
+/* ── Metrics ─────────────────────────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: #ffffff !important;
+    border: 1px solid #e5eae8 !important;
+    border-radius: 12px !important;
+    padding: 18px 22px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04) !important;
+}
+[data-testid="stMetricLabel"] p {
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    letter-spacing: .5px !important;
+    text-transform: uppercase !important;
+    color: #8fa89e !important;
+}
+[data-testid="stMetricValue"] {
     font-size: 22px !important;
     font-weight: 700 !important;
-    color: {INK} !important;
-    line-height: 1.3;
-}}
-[data-testid="stMetricDelta"] {{ font-size: 12px !important; }}
+    color: #0f2b20 !important;
+}
+[data-testid="stMetricDelta"] { font-size: 12px !important; }
 
-/* ── dataframe ──────────────────────────────────────────────────────── */
-[data-testid="stDataFrame"] {{
-    border: 1px solid {BORDER} !important;
-    border-radius: 10px !important;
-    overflow: hidden;
-    background: {SURFACE};
-}}
+/* ── Dataframe ───────────────────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border: 1px solid #e5eae8 !important;
+    border-radius: 12px !important;
+    overflow: hidden !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04) !important;
+}
+.dvn-scroller { background: #ffffff !important; }
 
-/* ── radio (source selector) ────────────────────────────────────────── */
-[data-testid="stRadio"] > div {{
-    display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap;
-}}
-[data-testid="stRadio"] label {{
-    background: {SURFACE};
-    border: 1px solid {BORDER};
-    border-radius: 999px;
-    padding: 6px 14px;
-    font-size: 13px;
-    color: {INK_SOFT} !important;
-    cursor: pointer;
-    transition: all .15s ease;
-}}
-[data-testid="stRadio"] label:hover {{
-    border-color: {MINT};
-    color: {MINT_INK} !important;
-}}
-[data-testid="stRadio"] label:has(input:checked) {{
-    background: {MINT_SOFT};
-    border-color: {MINT};
-    color: {MINT_INK} !important;
-    font-weight: 600;
-}}
-[data-testid="stRadio"] label > div:first-child {{ display: none; }}
-
-/* ── selectbox / file uploader ──────────────────────────────────────── */
-[data-baseweb="select"] > div {{
-    background: {SURFACE} !important;
-    border-color: {BORDER} !important;
-    color: {INK} !important;
+/* ── Selectbox ───────────────────────────────────────────────────── */
+[data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-color: #e5eae8 !important;
     border-radius: 8px !important;
-    font-size: 14px;
-}}
-[data-testid="stFileUploader"] section {{
-    background: {SURFACE};
-    border: 1px dashed {BORDER};
-    border-radius: 10px;
-}}
+    color: #0f2b20 !important;
+    font-size: 13px !important;
+}
 
-/* ── primary button ─────────────────────────────────────────────────── */
-.stButton > button {{
-    background: {MINT_SOFT};
-    color: {MINT_INK};
-    border: 1px solid {MINT};
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    transition: all .15s ease;
-}}
-.stButton > button:hover {{
-    background: {MINT};
-    color: white;
-}}
+/* ── Radio ───────────────────────────────────────────────────────── */
+[data-testid="stRadio"] fieldset { border: none !important; }
+[data-testid="stRadio"] > div {
+    flex-direction: row !important; flex-wrap: nowrap !important; gap: 8px !important;
+}
+[data-testid="stRadio"] label {
+    background: #f0f5f3 !important;
+    border: 1.5px solid #d5e3de !important;
+    border-radius: 8px !important;
+    padding: 6px 14px !important;
+    font-size: 12.5px !important;
+    font-weight: 500 !important;
+    color: #4a7264 !important;
+    cursor: pointer !important;
+    white-space: nowrap !important;
+}
+[data-testid="stRadio"] label:has(input:checked) {
+    background: #ecfdf5 !important;
+    border-color: #10b981 !important;
+    color: #047857 !important;
+    font-weight: 600 !important;
+}
 
-/* ── card ───────────────────────────────────────────────────────────── */
-.j-card {{
-    background: {SURFACE};
-    border: 1px solid {BORDER};
-    border-radius: 12px;
-    padding: 18px 22px;
-    margin-bottom: 16px;
-    box-shadow: 0 1px 2px rgba(16,24,40,.04);
-}}
-.j-card-title {{
-    font-size: 13px; color: {INK};
-    font-weight: 600;
-    margin-bottom: 12px; padding-bottom: 10px;
-    border-bottom: 1px solid {BORDER};
-    display: flex; align-items: center; justify-content: space-between;
-}}
-.j-card-title .hint {{
-    font-size: 11px; color: {MUTED}; font-weight: 400;
-}}
+/* ── Buttons ─────────────────────────────────────────────────────── */
+.stButton > button {
+    background: #10b981 !important; color: #fff !important;
+    border: none !important; border-radius: 8px !important;
+    font-weight: 600 !important; font-size: 13px !important;
+    padding: 7px 18px !important;
+    box-shadow: 0 2px 6px rgba(16,185,129,.25) !important;
+}
+.stButton > button:hover { background: #047857 !important; }
 
-/* ── page heading ───────────────────────────────────────────────────── */
-.j-page-title {{
-    font-size: 22px; font-weight: 700; color: {INK};
-    margin: 4px 0 2px;
-    display: flex; align-items: center; gap: 10px;
-}}
-.j-page-sub {{
-    font-size: 13px; color: {INK_SOFT}; margin-bottom: 18px;
-}}
+/* ── Section card ────────────────────────────────────────────────── */
+.j-card {
+    background: #ffffff;
+    border: 1px solid #e5eae8;
+    border-radius: 14px;
+    padding: 22px 24px;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+}
+.j-card-title {
+    font-size: 10.5px; font-weight: 700; color: #8fa89e;
+    letter-spacing: .8px; text-transform: uppercase;
+    margin-bottom: 14px; padding-bottom: 10px;
+    border-bottom: 1px solid #f0f5f3;
+}
+.j-page-title { font-size: 21px; font-weight: 700; color: #0f2b20; margin-bottom: 3px; }
+.j-page-sub   { font-size: 12.5px; color: #8fa89e; margin-bottom: 22px; }
 
-/* ── status pill ────────────────────────────────────────────────────── */
-.pill {{
-    display:inline-block; padding:3px 10px; border-radius:999px;
-    font-size:11px; font-weight:600; letter-spacing:.2px;
-}}
-.pill-ok   {{ background:{MINT_SOFT}; color:{MINT_INK}; }}
-.pill-warn {{ background:#fff7ed; color:#c2410c; }}
-.pill-err  {{ background:{ROSE_SOFT}; color:{ROSE}; }}
-.pill-info {{ background:#eff6ff; color:#1d4ed8; }}
+/* ── Status badges ───────────────────────────────────────────────── */
+.badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:600; }
+.badge-ok  { background:#ecfdf5; color:#047857; }
+.badge-err { background:#fef2f2; color:#dc2626; }
+.badge-warn{ background:#fffbeb; color:#d97706; }
 
-/* ── colored numbers ────────────────────────────────────────────────── */
-.j-pos {{ color: {MINT_INK}; font-weight: 600; }}
-.j-neg {{ color: {ROSE}; font-weight: 600; }}
-.j-muted {{ color: {MUTED}; }}
+/* ── Live price table ────────────────────────────────────────────── */
+.price-row { display:flex; align-items:center; justify-content:space-between;
+    padding:9px 0; border-bottom:1px solid #f0f5f3; font-size:13px; }
+.price-row:last-child { border-bottom:none; }
+.price-name { color:#2d5a47; font-weight:500; flex:1; }
+.price-val  { font-weight:700; color:#0f2b20; min-width:90px; text-align:right; }
+.price-cur  { color:#8fa89e; font-size:11px; min-width:36px; text-align:right; }
+.price-ok   { color:#10b981; font-size:11px; min-width:50px; text-align:right; }
+.price-err  { color:#ef4444; font-size:11px; min-width:50px; text-align:right; }
 
-/* ── info / warn / error banners (Streamlit) ───────────────────────── */
-[data-testid="stAlert"] {{
-    border-radius: 10px;
-    border: 1px solid {BORDER};
-}}
-
-/* chart container */
-[data-testid="stVegaLiteChart"], [data-testid="stChart"] {{
-    background: {SURFACE};
-    border: 1px solid {BORDER};
-    border-radius: 10px;
-    padding: 8px;
-}}
+/* ── Spinner ─────────────────────────────────────────────────────── */
+[data-testid="stSpinner"] p { color:#10b981 !important; }
+[data-testid="stAlert"] { border-radius:10px !important; font-size:13px !important; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# ─── Helpers ─────────────────────────────────────────────────────────────
+
+# ─── Helpers ───────────────────────────────────────────────────────────────
 def google_export_url(sid: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=xlsx"
 
-
 @st.cache_data(ttl=600, show_spinner=False)
 def download_xlsx(sid: str) -> bytes:
-    """Download xlsx export, raising informative errors if Google returns HTML."""
-    url = google_export_url(sid)
-    r = requests.get(url, timeout=60, allow_redirects=True)
+    r = requests.get(google_export_url(sid), timeout=60)
     r.raise_for_status()
-    ct = r.headers.get("content-type", "")
-    body = r.content
-    # Detect HTML login / permission page disguised as 200
-    if "text/html" in ct or body[:6].lower().startswith(b"<!doct") or body[:5].lower().startswith(b"<html"):
-        raise RuntimeError(
-            f"Google Sheet 沒回傳 xlsx，而是 HTML（content-type={ct or 'n/a'}）。"
-            f"請打開 https://docs.google.com/spreadsheets/d/{sid}/edit，"
-            f"確認分享設定為「知道連結的任何人可檢視」。"
-        )
-    if not body[:2] == b"PK":  # xlsx is a zip starting with PK
-        raise RuntimeError(
-            f"回傳內容不是 xlsx 檔（開頭非 PK）。content-type={ct}, 長度={len(body)}。"
-        )
-    return body
-
+    if b"<!DOCTYPE" in r.content[:200]:
+        raise ValueError("Google Sheet 回傳 HTML（可能需要登入或尚未公開）")
+    return r.content
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_local(path: str) -> bytes:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"本機快取檔不存在：{path}")
-    return p.read_bytes()
-
-
-def load_uploaded(uploaded) -> bytes:
-    return uploaded.getvalue()
-
+def load_local_xlsx(path: str) -> bytes:
+    return Path(path).read_bytes()
 
 @st.cache_data(ttl=600, show_spinner=False)
-def list_sheets(xlsx: bytes) -> list[str]:
-    return pd.ExcelFile(BytesIO(xlsx), engine="openpyxl").sheet_names
+def read_sheet(xlsx_bytes: bytes, sheet_name: str) -> pd.DataFrame:
+    return pd.read_excel(BytesIO(xlsx_bytes), sheet_name=sheet_name,
+                         header=None, engine="openpyxl")
 
+def workbook_bytes(mode: str, which: str) -> bytes:
+    if which == "primary":
+        return (load_local_xlsx(str(PRIMARY_LOCAL))
+                if mode == "本機快取" else download_xlsx(PRIMARY_SPREADSHEET_ID))
+    return (load_local_xlsx(str(MARKET_LOCAL))
+            if mode == "本機快取" else download_xlsx(MARKET_SPREADSHEET_ID))
 
-@st.cache_data(ttl=600, show_spinner=False)
-def read_sheet(xlsx: bytes, sheet: str) -> pd.DataFrame:
-    return pd.read_excel(BytesIO(xlsx), sheet_name=sheet, header=None, engine="openpyxl")
-
-
-def find_sheet(xlsx: bytes, target: str) -> str | None:
-    """Find the actual sheet name matching `target` (exact, then fuzzy)."""
-    names = list_sheets(xlsx)
-    if target in names:
-        return target
-    norm_t = target.replace(" ", "").replace("　", "").lower()
-    for n in names:
-        if n.replace(" ", "").replace("　", "").lower() == norm_t:
-            return n
-    # contains
-    for n in names:
-        if target in n or n in target:
-            return n
-    return None
-
-
-def num(v: Any) -> float | None:
+def numeric(v: Any) -> float | None:
     try:
         return None if v is None or pd.isna(v) else float(v)
     except Exception:
         return None
 
-
 def money(v: Any) -> str:
-    """All money values: rounded integer with 3-digit comma separators."""
-    n = num(v)
-    if n is None:
-        return "—"
-    return f"{int(round(n)):,}"
-
-
-def pct(v: Any) -> str:
-    n = num(v)
-    return "—" if n is None else f"{n:.2%}"
-
+    """3-digit comma integer — per architecture spec."""
+    n = numeric(v)
+    return "-" if n is None else f"{n:,.0f}"
 
 def fmt_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Display formatter:
-    - Numeric cells → rounded integer with 3-digit comma separators
-    - Empty / None / NaN / NaT → empty string (空格保持空格)
-    - Strings that *look* like 'nan' / 'none' → empty string
-    """
-    def cell(v: Any) -> Any:
-        if isinstance(v, bool):
-            return v
-        # Anything pandas considers missing → blank
-        try:
-            if pd.isna(v):
-                return ""
-        except (TypeError, ValueError):
-            pass
-        if isinstance(v, (int, float)):
-            return f"{int(round(v)):,}"
-        s = str(v).strip()
-        if s.lower() in ("nan", "none", "nat", "<na>", "null"):
-            return ""
-        return s
-    try:
-        return df.map(cell)  # pandas ≥ 2.1
-    except AttributeError:
-        return df.applymap(cell)
+    """NaN / None / NaT → empty string."""
+    return df.fillna("").astype(str).replace({"nan": "", "None": "", "NaT": "", "NaN": ""})
 
-
-def cleaned(df: pd.DataFrame, rows: int = 120, cols: int = 40) -> pd.DataFrame:
+def cleaned_table(df: pd.DataFrame, max_rows: int = 120, max_cols: int = 40) -> pd.DataFrame:
     t = df.dropna(how="all").dropna(axis=1, how="all")
-    t = t.iloc[:rows, :cols].copy()
+    t = t.iloc[:max_rows, :max_cols].copy()
     t.columns = [str(c) for c in t.columns]
-    return t
+    return fmt_df(t)
 
-
-def row_label(df: pd.DataFrame, label: str) -> pd.Series | None:
-    """Find a row whose first column matches `label` (exact, then fuzzy contains)."""
+def row_by_label(df: pd.DataFrame, label: str) -> pd.Series | None:
     lbs = df.iloc[:, 0].astype(str).str.strip()
     m = df.loc[lbs == label]
-    if not m.empty:
-        return m.iloc[0]
-    # Try contains
-    m2 = df.loc[lbs.str.contains(label, na=False, regex=False)]
-    return None if m2.empty else m2.iloc[0]
+    return None if m.empty else m.iloc[0]
 
+def metric_from_overview(df: pd.DataFrame, label: str, col: int = 1) -> str:
+    row = row_by_label(df, label)
+    return money(row.iloc[col]) if row is not None and len(row) > col else "-"
 
-def metric_ov(df: pd.DataFrame, label: str, col: int = 1) -> str:
-    row = row_label(df, label)
-    return money(row.iloc[col]) if row is not None and len(row) > col else "—"
-
-
-def section_from_header(df: pd.DataFrame, sc: int, ec: int, rows: int = 80) -> pd.DataFrame:
-    s = df.iloc[:rows, sc:ec].dropna(how="all").copy()
-    if s.empty:
-        return s
+def make_section_from_header(df: pd.DataFrame, sc: int, ec: int, max_rows: int = 80) -> pd.DataFrame:
+    s = df.iloc[:max_rows, sc:ec].dropna(how="all").copy()
+    if s.empty: return s
     hdr = s.iloc[0].fillna("")
     s = s.iloc[1:].copy()
     s.columns = [str(v).strip() or f"col_{i+1}" for i, v in enumerate(hdr)]
-    return s.dropna(how="all")
+    return fmt_df(s.dropna(how="all"))
+
+def monthly_income_trend(monthly_df: pd.DataFrame) -> pd.DataFrame:
+    header    = monthly_df.iloc[0]
+    total_row = row_by_label(monthly_df, "合計")
+    if total_row is None:
+        return pd.DataFrame(columns=["月份", "收入"])
+    records = []
+    for ci, hv in enumerate(header):
+        dt  = pd.to_datetime(hv, errors="coerce")
+        amt = numeric(total_row.iloc[ci])
+        if pd.notna(dt) and amt is not None:
+            records.append({"月份": dt, "收入": amt})
+    return pd.DataFrame(records)
+
+def ledger_long_table(ledger: pd.DataFrame) -> pd.DataFrame:
+    months  = ledger.iloc[0, 1:14]
+    records = []
+    for ri in range(1, min(len(ledger), 160)):
+        cat = ledger.iloc[ri, 0]
+        if cat is None or pd.isna(cat): continue
+        for offset, mv in enumerate(months, start=1):
+            amt = numeric(ledger.iloc[ri, offset])
+            if amt is None or amt == 0: continue
+            records.append({"月份": str(mv), "項目": str(cat), "金額": amt, "來源列": ri + 1})
+    return pd.DataFrame(records)
+
+def fund_sheet_metrics(df: pd.DataFrame) -> dict[str, str]:
+    row = df.iloc[1] if len(df) > 1 else pd.Series(dtype=object)
+    return {
+        "投資成本": money(row.iloc[9])  if len(row) > 9  else "-",
+        "總市值":   money(row.iloc[10]) if len(row) > 10 else "-",
+        "損益":     money(row.iloc[12]) if len(row) > 12 else "-",
+        "月配息":   money(row.iloc[14]) if len(row) > 14 else "-",
+    }
+
+def load_health_summary() -> list[dict[str, Any]]:
+    if not SUMMARY_JSON.exists(): return []
+    return json.loads(SUMMARY_JSON.read_text(encoding="utf-8"))
 
 
-# ─── Market price fetchers (stocks / funds / FX) ─────────────────────────
-TW_STOCK_RE = re.compile(r"^\d{4,6}$")  # 台股代碼通常 4~6 碼純數字
-
-
-def normalize_tw_ticker(symbol: str) -> str:
-    """`2330` → `2330.TW`； `0050` → `0050.TW`；其他原樣保留。"""
-    s = symbol.strip().upper()
-    if "." in s:
-        return s
-    if TW_STOCK_RE.match(s):
-        return f"{s}.TW"  # 主要市場；上櫃則需手動 .TWO
-    return s
-
-
+# ─── Live price fetchers ────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_stock_quotes(symbols: list[str]) -> pd.DataFrame:
-    """批次抓股票最新收盤價。回傳 DataFrame：代碼/即時價/幣別/資料時間/狀態。"""
-    if not _YF_OK:
-        return pd.DataFrame(
-            [{"代碼": s, "即時價": None, "幣別": "", "資料時間": "", "狀態": "未安裝 yfinance"} for s in symbols]
-        )
-    rows = []
-    normed = [normalize_tw_ticker(s) for s in symbols]
+def fetch_fund_nav(code: str, pattern: str) -> tuple[str, str]:
+    """Scrape MoneyDJ fund NAV. Returns (price_str, status)."""
+    if not HAS_BS4:
+        return "-", "缺少 beautifulsoup4"
+    url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
     try:
-        data = yf.download(
-            " ".join(normed),
-            period="5d",
-            interval="1d",
-            group_by="ticker",
-            progress=False,
-            threads=True,
-        )
-    except Exception as e:
-        return pd.DataFrame([{"代碼": s, "即時價": None, "幣別": "", "資料時間": "", "狀態": f"下載失敗: {e}"} for s in normed])
-
-    for original, norm in zip(symbols, normed):
-        price = None
-        ts = ""
-        ccy = ""
-        status = "ok"
-        try:
-            if len(normed) == 1:
-                col = data["Close"] if "Close" in data.columns else None
-            else:
-                col = data[(norm, "Close")] if (norm, "Close") in data.columns else None
-            if col is not None and not col.dropna().empty:
-                last = col.dropna()
-                price = float(last.iloc[-1])
-                ts = str(last.index[-1].date())
-            else:
-                status = "查無資料"
-            if norm.endswith(".TW") or norm.endswith(".TWO"):
-                ccy = "TWD"
-            elif norm.endswith("=X"):
-                ccy = norm[:3]
-            else:
-                ccy = "USD"
-        except Exception as e:
-            status = f"err: {e}"
-        rows.append(
-            {"代碼": original, "yfinance": norm, "即時價": price, "幣別": ccy, "資料時間": ts, "狀態": status}
-        )
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_fx_rates(currencies: list[str], base: str = "TWD") -> pd.DataFrame:
-    """抓主要外幣 → TWD 的匯率（例 USDTWD=X）。"""
-    if not _YF_OK:
-        return pd.DataFrame(
-            [{"幣別": c, "匯率": None, "資料時間": "", "狀態": "未安裝 yfinance"} for c in currencies]
-        )
-    symbols = [f"{c.upper()}{base}=X" for c in currencies]
-    try:
-        data = yf.download(
-            " ".join(symbols), period="5d", interval="1d",
-            group_by="ticker", progress=False, threads=True,
-        )
-    except Exception as e:
-        return pd.DataFrame([{"幣別": c, "匯率": None, "資料時間": "", "狀態": f"下載失敗: {e}"} for c in currencies])
-
-    rows = []
-    for c, sym in zip(currencies, symbols):
-        rate = None
-        ts = ""
-        status = "ok"
-        try:
-            if len(symbols) == 1:
-                col = data["Close"] if "Close" in data.columns else None
-            else:
-                col = data[(sym, "Close")] if (sym, "Close") in data.columns else None
-            if col is not None and not col.dropna().empty:
-                last = col.dropna()
-                rate = float(last.iloc[-1])
-                ts = str(last.index[-1].date())
-            else:
-                status = "查無資料"
-        except Exception as e:
-            status = f"err: {e}"
-        rows.append({"幣別": f"{c.upper()}/{base}", "匯率": rate, "資料時間": ts, "狀態": status})
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_fund_nav_moneydj(fund_code: str) -> dict[str, Any]:
-    """從 MoneyDJ 抓單檔基金最新淨值。
-
-    fund_code: MoneyDJ 上的基金代號（網址裡的 ?a=XXXXXX）。
-    回傳：{nav, date, name, status}。
-    """
-    if not _BS4_OK:
-        return {"nav": None, "date": "", "name": "", "status": "未安裝 beautifulsoup4"}
-    url = f"https://www.moneydj.com/funddj/yp/yp012000.djhtm?a={fund_code}"
-    try:
-        r = requests.get(url, timeout=30, headers={
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/537.36",
-        })
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, timeout=15, headers=headers)
         r.raise_for_status()
-        # MoneyDJ 一般是 Big5 編碼
-        r.encoding = r.apparent_encoding or "big5"
         soup = BeautifulSoup(r.text, "lxml")
-        # 抓「最新淨值」與「資料日期」— MoneyDJ 用 <td>標籤</td><td>值</td> 排版
-        nav = None
-        date = ""
-        name = ""
-        title = soup.find("title")
-        if title:
-            name = title.get_text(strip=True).split("-")[0].strip()
-        text = soup.get_text(" ", strip=True)
-        # 嘗試從整頁文字裡找 "最新淨值 12.3456"
-        m = re.search(r"最新淨值[\s:：]*([0-9]+(?:\.[0-9]+)?)", text)
-        if m:
-            nav = float(m.group(1))
-        m2 = re.search(r"資料日期[\s:：]*([0-9]{4}/[0-9]{1,2}/[0-9]{1,2})", text)
-        if m2:
-            date = m2.group(1)
-        if nav is None:
-            return {"nav": None, "date": "", "name": name, "status": "未在頁面找到「最新淨值」欄位（MoneyDJ 結構可能調整）"}
-        return {"nav": nav, "date": date, "name": name, "status": "ok"}
-    except requests.exceptions.RequestException as e:
-        return {"nav": None, "date": "", "name": "", "status": f"連線失敗：{e}"}
+        # XPath equivalent: #article form table[1] tr[2] td[2]
+        table = soup.select_one("#article form table")
+        if table:
+            rows = table.find_all("tr")
+            if len(rows) >= 2:
+                cells = rows[1].find_all("td")
+                if len(cells) >= 2:
+                    val = cells[1].get_text(strip=True)
+                    if val:
+                        return val, "ok"
+        return "-", "未找到淨值欄位"
     except Exception as e:
-        return {"nav": None, "date": "", "name": "", "status": f"解析失敗：{e}"}
+        return "-", str(e)[:40]
 
-
-def fetch_fund_navs(codes: list[str]) -> pd.DataFrame:
-    """批次抓 MoneyDJ 基金淨值。"""
-    rows = []
-    for c in codes:
-        c = c.strip()
-        if not c:
-            continue
-        info = fetch_fund_nav_moneydj(c)
-        rows.append(
-            {
-                "基金代號": c,
-                "基金名稱": info.get("name", ""),
-                "最新淨值": info.get("nav"),
-                "資料日期": info.get("date", ""),
-                "狀態": info.get("status", ""),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def get_sheet_safely(xlsx: bytes, target: str) -> tuple[pd.DataFrame | None, str | None, str | None]:
-    """Return (df, actual_sheet_name, error_message). One of df / error will be set."""
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_price(ticker: str) -> tuple[str, str]:
+    """Yahoo Finance stock price. Returns (price_str, status)."""
+    if not HAS_YF:
+        return "-", "缺少 yfinance"
     try:
-        actual = find_sheet(xlsx, target)
-        if actual is None:
-            available = ", ".join(list_sheets(xlsx)[:20])
-            return None, None, f"找不到工作表「{target}」。可用的工作表：{available}…"
-        return read_sheet(xlsx, actual), actual, None
+        t = yf.Ticker(ticker)
+        info = t.fast_info
+        price = getattr(info, "last_price", None)
+        if price:
+            return f"{price:,.4f}", "ok"
+        return "-", "無資料"
     except Exception as e:
-        return None, None, f"讀取「{target}」失敗：{e}"
+        return "-", str(e)[:40]
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_fx(pair: str) -> tuple[str, str]:
+    """Yahoo Finance FX rate. Returns (rate_str, status)."""
+    if not HAS_YF:
+        return "-", "缺少 yfinance"
+    try:
+        t = yf.Ticker(pair)
+        info = t.fast_info
+        rate = getattr(info, "last_price", None)
+        if rate:
+            return f"{rate:,.4f}", "ok"
+        return "-", "無資料"
+    except Exception as e:
+        return "-", str(e)[:40]
 
 
-# ─── Top bar ─────────────────────────────────────────────────────────────
-st.markdown(
-    """
-<div class="jenny-topbar">
-    <div class="logo"><span class="dot"></span> Jenny All｜投資系統</div>
-    <div class="meta">資料每 10 分鐘自動快取・薄荷清新版</div>
+# ─── Top bar ────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="j-topbar">
+  <div class="j-brand"><span class="dot">◈</span> Jenny All &nbsp;|&nbsp; 投資系統</div>
+  <div class="j-tagline">資料每 10 分鐘自動更新・市價每 5 分鐘自動更新</div>
 </div>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# ─── Source toggle ───────────────────────────────────────────────────────
-st.markdown('<div class="jenny-controls">', unsafe_allow_html=True)
-col_src, col_refresh, col_status = st.columns([3, 1, 6])
-with col_src:
-    source_mode = st.radio(
-        "資料來源",
-        ["Google Sheet", "本機快取", "上傳檔案"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-with col_refresh:
+# ─── Source toggle + refresh ─────────────────────────────────────────────────
+sc1, sc2, sc3 = st.columns([2, 1, 9])
+with sc1:
+    source_mode = st.radio("來源", ["Google Sheet", "本機快取"],
+                           horizontal=True, label_visibility="collapsed")
+with sc2:
     if st.button("🔄 重新整理"):
         st.cache_data.clear()
         st.rerun()
 
-uploaded_primary = None
-uploaded_market = None
-if source_mode == "上傳檔案":
-    up1, up2 = st.columns(2)
-    with up1:
-        uploaded_primary = st.file_uploader(
-            "主帳本 xlsx（含 每月收入 / 2026細帳）", type=["xlsx"], key="up_primary"
-        )
-    with up2:
-        uploaded_market = st.file_uploader(
-            "市值來源 xlsx（含 總覽 / 各平台）", type=["xlsx"], key="up_market"
-        )
-st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ─── Load data ───────────────────────────────────────────────────────────
-def load_workbook(which: str) -> tuple[bytes | None, str | None]:
-    """Return (bytes, error). which ∈ {'primary','market'}."""
-    try:
-        if source_mode == "Google Sheet":
-            sid = PRIMARY_SPREADSHEET_ID if which == "primary" else MARKET_SPREADSHEET_ID
-            return download_xlsx(sid), None
-        if source_mode == "本機快取":
-            path = PRIMARY_LOCAL if which == "primary" else MARKET_LOCAL
-            return load_local(str(path)), None
-        # 上傳檔案
-        up = uploaded_primary if which == "primary" else uploaded_market
-        if up is None:
-            return None, "請先上傳檔案"
-        return load_uploaded(up), None
-    except Exception as e:
-        return None, str(e)
-
-
+# ─── Load workbooks ──────────────────────────────────────────────────────────
 with st.spinner("讀取試算表中…"):
-    pri, pri_err = load_workbook("primary")
-    mkt, mkt_err = load_workbook("market")
+    try:
+        primary_bytes = workbook_bytes(source_mode, "primary")
+        market_bytes  = workbook_bytes(source_mode, "market")
+        load_ok = True
+    except Exception as exc:
+        st.error(f"❌ 讀取失敗：{exc}")
+        load_ok = False
 
-# Status pills
-status_bits = []
-if pri_err:
-    status_bits.append(f'<span class="pill pill-err">主帳本：{pri_err[:60]}</span>')
-elif pri is not None:
-    status_bits.append(
-        f'<span class="pill pill-ok">主帳本 OK · {len(list_sheets(pri))} 個工作表</span>'
-    )
-if mkt_err:
-    status_bits.append(f'<span class="pill pill-err">市值來源：{mkt_err[:60]}</span>')
-elif mkt is not None:
-    status_bits.append(
-        f'<span class="pill pill-ok">市值來源 OK · {len(list_sheets(mkt))} 個工作表</span>'
-    )
-
-st.markdown(
-    f'<div style="padding:10px 28px 0; display:flex; gap:8px; flex-wrap:wrap;">{" ".join(status_bits)}</div>',
-    unsafe_allow_html=True,
-)
-
-if pri is None and mkt is None:
-    st.markdown('<div style="padding: 20px 28px">', unsafe_allow_html=True)
-    st.error("兩份試算表都讀不到。請檢查上方的錯誤訊息，或切換「資料來源」試試看。")
-    if source_mode == "Google Sheet":
-        st.info(
-            "**Google Sheet 讀不到時最常見的原因**：\n\n"
-            "1. 分享設定不是「知道連結的任何人可檢視」\n"
-            "2. 試算表 ID 換了（請對照程式碼開頭的 `PRIMARY_SPREADSHEET_ID` / `MARKET_SPREADSHEET_ID`）\n"
-            "3. Streamlit Cloud 暫時連不上 Google\n\n"
-            "建議先用「上傳檔案」直接拖兩個 xlsx 上來看資料是否正常。"
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
+if not load_ok:
     st.stop()
 
-# ─── Tabs ────────────────────────────────────────────────────────────────
-tabs = st.tabs(["總覽", "每月收入", "2026 細帳", "市值來源", "即時行情", "資料健康"])
+# ─── Tabs ────────────────────────────────────────────────────────────────────
+tabs = st.tabs(["◈ 總覽", "◷ 每月收入", "📒 2026 細帳",
+                "📊 市值來源", "💹 即時市值", "🔍 資料健康"])
 
-# ══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TAB 1 — 總覽
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 with tabs[0]:
-    st.markdown('<div class="j-page-title">🏠 總覽</div>', unsafe_allow_html=True)
-    st.markdown('<div class="j-page-sub">所有帳戶資產彙整</div>', unsafe_allow_html=True)
+    st.markdown('<div class="j-page-title">總覽</div>'
+                '<div class="j-page-sub">所有帳戶資產彙整</div>', unsafe_allow_html=True)
+    try:
+        overview = read_sheet(market_bytes, "總覽")
 
-    if mkt is None:
-        st.warning(f"市值來源讀不到：{mkt_err}")
-    else:
-        ov, ov_name, ov_err = get_sheet_safely(mkt, "總覽")
-        if ov_err:
-            st.warning(ov_err)
-        else:
-            # KPI row
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("總資產", metric_ov(ov, "加總Total"))
-            c2.metric("台股", metric_ov(ov, "台股total"))
-            c3.metric("銀行", metric_ov(ov, "銀行total"))
-            c4.metric("保險", metric_ov(ov, "保險total"))
-            c5.metric("Uncle 待還", metric_ov(ov, "uncle待還"))
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("🏦 總資產",     metric_from_overview(overview, "加總Total"))
+        c2.metric("📈 台股",        metric_from_overview(overview, "台股total"))
+        c3.metric("🏛 銀行",        metric_from_overview(overview, "銀行total"))
+        c4.metric("🛡 保險",        metric_from_overview(overview, "保險total"))
+        c5.metric("👤 Uncle 待還",  metric_from_overview(overview, "uncle待還"))
 
-            # If every KPI is "—", show a diagnostic
-            if all(
-                metric_ov(ov, lbl) == "—"
-                for lbl in ["加總Total", "台股total", "銀行total", "保險total", "uncle待還"]
-            ):
-                with st.expander("⚠️ KPI 全部顯示 — 點開看診斷"):
-                    st.write("找到的工作表 A 欄前 20 列：")
-                    st.dataframe(
-                        fmt_df(ov.iloc[:20, :2].rename(columns={0: "A欄標籤", 1: "B欄值"})),
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-                    st.caption(
-                        "如果 A 欄標籤跟程式碼裡的 `加總Total / 台股total / 銀行total / 保險total / uncle待還` 不一致，"
-                        "請改名其中之一就會對上。"
-                    )
+        # Diagnostic — if all KPIs are "-", show first 20 labels
+        kpi_vals = [metric_from_overview(overview, lbl) for lbl in
+                    ["加總Total","台股total","銀行total","保險total","uncle待還"]]
+        if all(v == "-" for v in kpi_vals):
+            with st.expander("⚠️ KPI 全部為 — — 點此診斷 A 欄標籤", expanded=True):
+                labels = overview.iloc[:20, 0].astype(str).tolist()
+                st.code("\n".join(f"{i+1}: {l}" for i, l in enumerate(labels)))
 
-            st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        l, r = st.columns([1, 1.6])
 
-            left, right = st.columns([1, 1.5])
-            with left:
-                st.markdown(
-                    '<div class="j-card"><div class="j-card-title">彙總摘要 <span class="hint">前 18 列</span></div>',
-                    unsafe_allow_html=True,
-                )
-                summary = ov.iloc[:18, :5].copy()
-                summary.columns = ["項目", "現值", "損益", "收入/配息", "合計"]
-                st.dataframe(fmt_df(summary), use_container_width=True, hide_index=True, height=320)
-                st.markdown("</div>", unsafe_allow_html=True)
+        with l:
+            st.markdown('<div class="j-card"><div class="j-card-title">彙總摘要</div>', unsafe_allow_html=True)
+            summary = overview.iloc[:18, :5].copy()
+            summary.columns = ["項目","現值","損益","收入/配息","合計"]
+            st.dataframe(fmt_df(summary), use_container_width=True, hide_index=True, height=340)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            with right:
-                st.markdown(
-                    '<div class="j-card"><div class="j-card-title">投資明細 <span class="hint">F–R 欄</span></div>',
-                    unsafe_allow_html=True,
-                )
-                inv = section_from_header(ov, 5, 18, 90)
-                show = [
-                    c
-                    for c in [
-                        "投資分類", "日期", "現值", "損益",
-                        "台幣成本", "台幣市值", "累積配息", "台幣配息",
-                        "配息率", "損益率",
-                    ]
-                    if c in inv.columns
-                ]
-                st.dataframe(
-                    fmt_df(inv[show] if show else inv),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=320,
-                )
-                st.markdown("</div>", unsafe_allow_html=True)
+        with r:
+            st.markdown('<div class="j-card"><div class="j-card-title">投資明細</div>', unsafe_allow_html=True)
+            inv = make_section_from_header(overview, 5, 18, 90)
+            show_cols = [c for c in ["投資分類","日期","現值","損益","台幣成本","台幣市值",
+                                      "累積配息","台幣配息","配息率","損益率"] if c in inv.columns]
+            st.dataframe(inv[show_cols] if show_cols else inv,
+                         use_container_width=True, hide_index=True, height=340)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════
+    except Exception as e:
+        st.warning(f"⚠️ 總覽工作表讀取錯誤：{e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TAB 2 — 每月收入
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 with tabs[1]:
-    st.markdown('<div class="j-page-title">💰 每月收入</div>', unsafe_allow_html=True)
-    st.markdown('<div class="j-page-sub">配息・股利・利息月走勢</div>', unsafe_allow_html=True)
+    st.markdown('<div class="j-page-title">每月收入</div>'
+                '<div class="j-page-sub">配息・股利・利息月走勢</div>', unsafe_allow_html=True)
+    try:
+        monthly = read_sheet(primary_bytes, "每月收入")
+        trend   = monthly_income_trend(monthly)
 
-    if pri is None:
-        st.warning(f"主帳本讀不到：{pri_err}")
-    else:
-        monthly, m_name, m_err = get_sheet_safely(pri, "每月收入")
-        if m_err:
-            st.warning(m_err)
-        else:
-            hdr = monthly.iloc[0]
-            total_row = row_label(monthly, "合計")
-            records = []
-            if total_row is not None:
-                for ci, hv in enumerate(hdr):
-                    dt = pd.to_datetime(hv, errors="coerce")
-                    amt = num(total_row.iloc[ci])
-                    if pd.notna(dt) and amt is not None:
-                        records.append({"月份": dt, "收入": amt})
+        if not trend.empty:
+            st.markdown('<div class="j-card"><div class="j-card-title">月收入走勢</div>',
+                        unsafe_allow_html=True)
+            st.bar_chart(trend.set_index("月份"), height=240, color="#10b981")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-            if records:
-                trend = pd.DataFrame(records).set_index("月份")
-                st.markdown(
-                    '<div class="j-card"><div class="j-card-title">月收入走勢 '
-                    f'<span class="hint">{len(records)} 個月</span></div>',
-                    unsafe_allow_html=True,
-                )
-                st.bar_chart(trend, height=240, color=MINT)
-                st.markdown("</div>", unsafe_allow_html=True)
-            else:
-                st.info("找不到「合計」這列、或合計列裡沒有可解析的數字。請檢查工作表結構。")
+        st.markdown('<div class="j-card"><div class="j-card-title">每月收入明細</div>',
+                    unsafe_allow_html=True)
+        tbl = monthly.iloc[:22, :46].dropna(axis=1, how="all")
+        tbl.columns = [str(c) for c in tbl.columns]
+        st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=360)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-            st.markdown(
-                '<div class="j-card"><div class="j-card-title">明細資料 '
-                '<span class="hint">前 22 列 × 46 欄</span></div>',
-                unsafe_allow_html=True,
-            )
-            tbl = monthly.iloc[:22, :46].dropna(axis=1, how="all")
-            tbl.columns = [str(c) for c in tbl.columns]
-            st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=340)
-            st.markdown("</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"⚠️ 每月收入工作表讀取錯誤：{e}")
 
-# ══════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TAB 3 — 2026 細帳
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 with tabs[2]:
-    st.markdown('<div class="j-page-title">📒 2026 細帳</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="j-page-sub">全年進出帳記錄・帳戶移轉・配息・支出</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="j-page-title">2026 細帳</div>'
+                '<div class="j-page-sub">全年進出帳記錄・帳戶移轉・配息・支出</div>',
+                unsafe_allow_html=True)
+    try:
+        ledger  = read_sheet(primary_bytes, "2026細帳")
+        long_df = ledger_long_table(ledger)
 
-    if pri is None:
-        st.warning(f"主帳本讀不到：{pri_err}")
-    else:
-        ledger, l_name, l_err = get_sheet_safely(pri, "2026細帳")
-        if l_err:
-            st.warning(l_err)
-        else:
-            months = ledger.iloc[0, 1:14]
-            rows_data = []
-            for ri in range(1, min(len(ledger), 160)):
-                cat = ledger.iloc[ri, 0]
-                if cat is None or pd.isna(cat):
-                    continue
-                for offset, mv in enumerate(months, start=1):
-                    amt = num(ledger.iloc[ri, offset])
-                    if amt is None or amt == 0:
-                        continue
-                    rows_data.append({"月份": str(mv), "項目": str(cat), "金額": amt})
+        if not long_df.empty:
+            # Summary metrics
+            inc = long_df[long_df["金額"] > 0]["金額"].sum()
+            out = long_df[long_df["金額"] < 0]["金額"].sum()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("收入合計",  money(inc))
+            m2.metric("支出合計",  money(abs(out)))
+            m3.metric("淨收支",    money(inc + out))
+            m4.metric("記錄筆數",  f"{len(long_df):,}")
 
-            if rows_data:
-                long = pd.DataFrame(rows_data)
+            cats = ["全部"] + sorted(long_df["項目"].unique().tolist())
+            sel  = st.selectbox("篩選項目", cats)
+            view = long_df if sel == "全部" else long_df[long_df["項目"] == sel]
 
-                # summary metrics
-                total_in = long[long["金額"] > 0]["金額"].sum()
-                total_out = long[long["金額"] < 0]["金額"].sum()
-                m1, m2, m3 = st.columns(3)
-                m1.metric("收入合計", money(total_in))
-                m2.metric("支出合計", money(abs(total_out)))
-                m3.metric("淨收支", money(total_in + total_out))
+            st.markdown('<div class="j-card"><div class="j-card-title">細帳明細（長表）</div>',
+                        unsafe_allow_html=True)
+            st.dataframe(fmt_df(view), use_container_width=True, hide_index=True, height=340)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-                col_f, _ = st.columns([3, 9])
-                with col_f:
-                    cats = ["全部"] + sorted(long["項目"].unique().tolist())
-                    sel = st.selectbox("篩選項目", cats, label_visibility="collapsed")
-                view = long if sel == "全部" else long[long["項目"] == sel]
+        st.markdown('<div class="j-card"><div class="j-card-title">原始資料（寬表）</div>',
+                    unsafe_allow_html=True)
+        raw = ledger.iloc[:140, :16].copy()
+        raw.columns = [str(c) for c in raw.columns]
+        st.dataframe(fmt_df(raw), use_container_width=True, hide_index=True, height=360)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-                st.markdown(
-                    '<div class="j-card"><div class="j-card-title">篩選結果 '
-                    f'<span class="hint">{len(view)} 筆</span></div>',
-                    unsafe_allow_html=True,
-                )
-                st.dataframe(fmt_df(view), use_container_width=True, hide_index=True, height=320)
-                st.markdown("</div>", unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"⚠️ 2026細帳工作表讀取錯誤：{e}")
 
-                with st.expander("查看原始寬表（前 140 列）"):
-                    raw = ledger.iloc[:140, :16].copy()
-                    raw.columns = [str(c) for c in raw.columns]
-                    st.dataframe(fmt_df(raw), use_container_width=True, hide_index=True, height=340)
-            else:
-                st.info("這份工作表的格子全是空的或全為 0，沒有可顯示的明細。")
 
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # TAB 4 — 市值來源
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 with tabs[3]:
-    st.markdown('<div class="j-page-title">📊 市值來源</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="j-page-sub">各平台基金・台股・外幣市值</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="j-page-title">市值來源</div>'
+                '<div class="j-page-sub">各平台基金・台股・外幣市值（Google Sheet 快照）</div>',
+                unsafe_allow_html=True)
 
-    if mkt is None:
-        st.warning(f"市值來源讀不到：{mkt_err}")
-    else:
-        all_sheets = list_sheets(mkt)
-        default_list = [s for s in MARKET_SHEETS if s in all_sheets] or all_sheets
-        sel_sheet = st.selectbox("選擇工作表", default_list)
+    sel_sheet = st.selectbox("選擇工作表", MARKET_SHEETS)
+    try:
+        sheet = read_sheet(market_bytes, sel_sheet)
 
-        sheet_df, actual_name, err = get_sheet_safely(mkt, sel_sheet)
-        if err:
-            st.warning(err)
-        else:
-            if sel_sheet not in {"總覽", "台股", "「台股」的副本", "渣打-美股"}:
-                r = sheet_df.iloc[1] if len(sheet_df) > 1 else pd.Series(dtype=object)
+        if sel_sheet not in {"總覽", "台股", "「台股」的副本", "渣打-美股"}:
+            metrics = fund_sheet_metrics(sheet)
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            for col, (label, val) in zip([mc1, mc2, mc3, mc4], metrics.items()):
+                col.metric(label, val)
 
-                def mval(col: int) -> str:
-                    return money(r.iloc[col]) if len(r) > col else "—"
+        st.markdown('<div class="j-card"><div class="j-card-title">工作表資料</div>',
+                    unsafe_allow_html=True)
+        st.dataframe(cleaned_table(sheet), use_container_width=True, hide_index=True, height=500)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-                mc1, mc2, mc3, mc4 = st.columns(4)
-                mc1.metric("投資成本", mval(9))
-                mc2.metric("總市值", mval(10))
-                mc3.metric("損益", mval(12))
-                mc4.metric("月配息", mval(14))
+    except Exception as e:
+        st.warning(f"⚠️ 工作表 {sel_sheet} 讀取錯誤：{e}")
 
-            st.markdown(
-                '<div class="j-card"><div class="j-card-title">工作表資料 '
-                f'<span class="hint">{actual_name or sel_sheet}</span></div>',
-                unsafe_allow_html=True,
-            )
-            tbl = cleaned(sheet_df)
-            st.dataframe(fmt_df(tbl), use_container_width=True, hide_index=True, height=480)
-            st.markdown("</div>", unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════
-# TAB 5 — 即時行情（股票 + 基金 + 匯率）
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 5 — 即時市值  (AUTO-LOAD, no button)
+# ═══════════════════════════════════════════════════════════════════════════
 with tabs[4]:
-    st.markdown('<div class="j-page-title">📡 即時行情</div>', unsafe_allow_html=True)
-    badge_yf = "" if _YF_OK else '<span class="pill pill-warn">缺 yfinance 套件</span>'
-    badge_bs = "" if _BS4_OK else '<span class="pill pill-warn">缺 beautifulsoup4 套件</span>'
-    st.markdown(
-        '<div class="j-page-sub">'
-        '股票走 yfinance（Yahoo Finance）・基金走 MoneyDJ・匯率走 yfinance '
-        f'{badge_yf} {badge_bs}'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="j-page-title">即時市值</div>'
+                '<div class="j-page-sub">自動抓取・基金 NAV via MoneyDJ・股票 via Yahoo Finance・每 5 分鐘更新</div>',
+                unsafe_allow_html=True)
 
-    # ── 股票 ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="j-card"><div class="j-card-title">股票即時報價 '
-        '<span class="hint">台股自動加 .TW；美股直接打代號</span></div>',
-        unsafe_allow_html=True,
-    )
-    col_in, col_btn = st.columns([5, 1])
-    with col_in:
-        stock_input = st.text_input(
-            "代碼（逗號分隔）",
-            value="2330, 0050, 2317, AAPL, VOO",
-            label_visibility="collapsed",
-            key="stock_input",
-            placeholder="例：2330, 0050, AAPL, TSLA",
-        )
-    with col_btn:
-        do_stock = st.button("查詢股價", key="btn_stock")
-
-    if do_stock and stock_input.strip():
-        with st.spinner("抓取股價中…"):
-            syms = [s.strip() for s in stock_input.split(",") if s.strip()]
-            stocks_df = fetch_stock_quotes(syms)
-        if not stocks_df.empty:
-            # 計算 TWD 市值需要股數，這裡先只顯示單價
-            display = stocks_df.copy()
-            st.dataframe(fmt_df(display), use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── 持倉市值計算機（股票）─────────────────────────────────────────
-    st.markdown(
-        '<div class="j-card"><div class="j-card-title">持倉市值計算 '
-        '<span class="hint">貼上「代碼,股數」一行一檔</span></div>',
-        unsafe_allow_html=True,
-    )
-    sample = "2330, 100\n0050, 500\nAAPL, 20"
-    holdings_text = st.text_area("持倉", value=sample, height=140, label_visibility="collapsed", key="holdings_in")
-    if st.button("計算持倉市值", key="btn_holdings"):
-        rows = []
-        for line in holdings_text.splitlines():
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 2 and parts[0]:
-                try:
-                    rows.append({"代碼": parts[0], "股數": float(parts[1].replace(",", ""))})
-                except ValueError:
-                    continue
-        if rows:
-            holdings = pd.DataFrame(rows)
-            with st.spinner("抓取股價中…"):
-                quotes = fetch_stock_quotes(holdings["代碼"].tolist())
-            merged = holdings.merge(quotes, on="代碼", how="left")
-            merged["市值"] = merged["股數"] * merged["即時價"]
-            # 排版：拉到最上面看市值
-            cols_order = ["代碼", "yfinance", "股數", "即時價", "幣別", "市值", "資料時間", "狀態"]
-            merged = merged[[c for c in cols_order if c in merged.columns]]
-
-            total_twd = 0.0
-            for _, r in merged.iterrows():
-                mv = r.get("市值")
-                if pd.notna(mv):
-                    if r.get("幣別") == "TWD":
-                        total_twd += mv
-                    # 非 TWD 部位先不換算（要先抓匯率），下方匯率區可補
-
-            m1, m2, m3 = st.columns(3)
-            m1.metric("筆數", f"{len(merged):,}")
-            m2.metric("TWD 部位市值", f"{int(round(total_twd)):,}")
-            m3.metric("更新時間", datetime.now().strftime("%H:%M"))
-
-            st.dataframe(fmt_df(merged), use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── 基金 ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="j-card"><div class="j-card-title">基金最新淨值 '
-        '<span class="hint">MoneyDJ 代號（網址 ?a= 後面那串）</span></div>',
-        unsafe_allow_html=True,
-    )
-    fund_input = st.text_input(
-        "基金代號（逗號分隔）",
-        value="",
-        label_visibility="collapsed",
-        key="fund_input",
-        placeholder="例：ACVTBR,ACUSGE — 從 MoneyDJ 網址 ?a= 後面複製",
-    )
-    col_units, col_btn2 = st.columns([5, 1])
-    with col_units:
-        unit_input = st.text_input(
-            "對應單位數（逗號分隔，順序對齊基金代號；可留空只查淨值）",
-            value="",
-            key="fund_units",
-            placeholder="例：1000, 500",
-        )
-    with col_btn2:
-        do_fund = st.button("查詢淨值", key="btn_fund")
-
-    if do_fund and fund_input.strip():
-        codes = [c.strip() for c in fund_input.split(",") if c.strip()]
-        units = [u.strip() for u in unit_input.split(",")] if unit_input.strip() else []
-        with st.spinner("抓取基金淨值中…"):
-            funds_df = fetch_fund_navs(codes)
-        if units:
-            unit_vals = []
-            for i in range(len(codes)):
-                try:
-                    unit_vals.append(float(units[i].replace(",", "")) if i < len(units) and units[i] else None)
-                except ValueError:
-                    unit_vals.append(None)
-            funds_df["單位數"] = unit_vals
-            funds_df["市值（原幣）"] = funds_df["最新淨值"] * funds_df["單位數"]
-
-        if not funds_df.empty:
-            st.dataframe(fmt_df(funds_df), use_container_width=True, hide_index=True)
-            st.caption(
-                "📎 找不到基金代號？打開 MoneyDJ 基金網站，搜尋基金名稱，"
-                "網址會長得像 `?a=ACVTBR`，後面那串就是代號。"
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── 匯率 ────────────────────────────────────────────────────────────
-    st.markdown(
-        '<div class="j-card"><div class="j-card-title">匯率（→ TWD）</div>',
-        unsafe_allow_html=True,
-    )
-    fx_cols = st.multiselect(
-        "幣別",
-        ["USD", "CNY", "JPY", "ZAR", "EUR", "HKD"],
-        default=["USD", "CNY", "JPY", "ZAR"],
-        label_visibility="collapsed",
-    )
-    if st.button("更新匯率", key="btn_fx") and fx_cols:
-        with st.spinner("抓取匯率中…"):
-            fx_df = fetch_fx_rates(fx_cols)
-        if not fx_df.empty:
-            # 顯示時匯率保留 4 位小數而不是整數
-            disp = fx_df.copy()
-            disp["匯率"] = disp["匯率"].apply(lambda v: f"{v:,.4f}" if pd.notna(v) else "")
-            st.dataframe(disp, use_container_width=True, hide_index=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# TAB 6 — 資料健康
-# ══════════════════════════════════════════════════════════════════════════
-with tabs[5]:
-    st.markdown('<div class="j-page-title">🔍 資料健康</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="j-page-sub">工作表結構・公式統計・錯誤偵測</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Live health: count NaN / errors in each loaded workbook
-    def workbook_health(xlsx: bytes, name: str) -> pd.DataFrame:
-        rows = []
-        for sh in list_sheets(xlsx):
+    # ── FX rates ──────────────────────────────────────────────────────────
+    st.markdown('<div class="j-card"><div class="j-card-title">匯率（TWD 換算）</div>',
+                unsafe_allow_html=True)
+    fx_cols = st.columns(len(FX_PAIRS))
+    fx_rates: dict[str, float] = {}
+    for col, (cur, pair) in zip(fx_cols, FX_PAIRS.items()):
+        with st.spinner(f"抓取 {cur}…"):
+            rate_str, status = fetch_fx(pair)
+        col.metric(f"1 {cur} = ? TWD", rate_str,
+                   delta="✓ 即時" if status == "ok" else f"⚠ {status}")
+        if status == "ok":
             try:
-                df = read_sheet(xlsx, sh)
-                nonempty = int(df.notna().sum().sum())
-                errors = int(
-                    df.astype(str)
-                    .apply(lambda s: s.str.contains(r"#REF!|#N/A|#DIV/0!|#VALUE!|#NAME\?", na=False))
-                    .sum()
-                    .sum()
-                )
-                rows.append(
-                    {
-                        "workbook": name,
-                        "sheet": sh,
-                        "rows": int(df.shape[0]),
-                        "cols": int(df.shape[1]),
-                        "nonempty_cells": nonempty,
-                        "error_cells": errors,
-                    }
-                )
-            except Exception as e:
-                rows.append(
-                    {
-                        "workbook": name,
-                        "sheet": sh,
-                        "rows": 0,
-                        "cols": 0,
-                        "nonempty_cells": 0,
-                        "error_cells": -1,
-                    }
-                )
-        return pd.DataFrame(rows)
+                fx_rates[cur] = float(rate_str.replace(",", ""))
+            except Exception:
+                pass
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    health_frames = []
-    if pri is not None:
-        health_frames.append(workbook_health(pri, "主帳本"))
-    if mkt is not None:
-        health_frames.append(workbook_health(mkt, "市值來源"))
+    # ── Fund NAVs ─────────────────────────────────────────────────────────
+    st.markdown('<div class="j-card"><div class="j-card-title">基金最新淨值（MoneyDJ）</div>',
+                unsafe_allow_html=True)
 
-    if health_frames:
-        all_health = pd.concat(health_frames, ignore_index=True)
-        err_total = int(all_health["error_cells"].clip(lower=0).sum())
-        sh_total = len(all_health)
-        h1, h2, h3 = st.columns(3)
-        h1.metric("工作表總數", f"{sh_total:,}")
-        h2.metric("非空儲存格", f"{int(all_health['nonempty_cells'].sum()):,}")
-        h3.metric("錯誤儲存格", f"{err_total:,}")
+    fund_rows = []
+    progress = st.progress(0, text="抓取基金淨值…")
+    for i, f in enumerate(FUND_CONFIG):
+        nav_str, status = fetch_fund_nav(f["code"], f["pattern"])
+        cur = f["currency"]
+        twd_str = "-"
+        if status == "ok" and cur in fx_rates:
+            try:
+                twd = float(nav_str.replace(",", "")) * fx_rates[cur]
+                twd_str = f"{twd:,.4f}"
+            except Exception:
+                pass
+        elif cur == "TWD" and status == "ok":
+            twd_str = nav_str
+        fund_rows.append({
+            "基金名稱":   f["name"],
+            "MoneyDJ代號": f["code"],
+            "幣別":       cur,
+            "最新淨值":   nav_str,
+            "台幣換算":   twd_str,
+            "狀態":       "✓" if status == "ok" else f"⚠ {status}",
+        })
+        progress.progress((i + 1) / len(FUND_CONFIG), text=f"抓取中… {i+1}/{len(FUND_CONFIG)}")
 
-        st.markdown(
-            '<div class="j-card"><div class="j-card-title">工作表健康總覽</div>',
-            unsafe_allow_html=True,
-        )
-        st.dataframe(
-            fmt_df(all_health.sort_values(["workbook", "error_cells"], ascending=[True, False])),
-            use_container_width=True,
-            hide_index=True,
-            height=420,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    progress.empty()
+    fund_df = pd.DataFrame(fund_rows)
+    st.dataframe(fund_df, use_container_width=True, hide_index=True, height=420)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Also support the cached JSON summary from the analysis script
-    if SUMMARY_JSON.exists():
-        try:
-            summaries = json.loads(SUMMARY_JSON.read_text(encoding="utf-8"))
-            for book in summaries:
-                fname = Path(book["file"]).name
-                st.markdown(
-                    f'<div class="j-card"><div class="j-card-title">{fname} '
-                    '<span class="hint">workbook_structure_summary.json</span></div>',
-                    unsafe_allow_html=True,
-                )
-                bm1, bm2, bm3 = st.columns(3)
-                bm1.metric("檔案大小 MB", book.get("size_mb", "—"))
-                bm2.metric("工作表數", book.get("sheet_count", "—"))
-                bm3.metric("公式種類", len(book.get("workbook_functions", {})))
+    # ── Stock prices ──────────────────────────────────────────────────────
+    st.markdown('<div class="j-card"><div class="j-card-title">股票即時價（Yahoo Finance）</div>',
+                unsafe_allow_html=True)
 
-                if "sheets" in book:
-                    heavy = (
-                        pd.DataFrame(book["sheets"])
-                        .sort_values("formulas", ascending=False)[
-                            ["sheet", "class", "rows", "cols", "nonempty", "formulas", "literal_errors"]
-                        ]
-                        .head(12)
-                    )
-                    st.dataframe(fmt_df(heavy), use_container_width=True, hide_index=True)
+    stock_rows = []
+    for s in STOCK_CONFIG:
+        price_str, status = fetch_stock_price(s["ticker"])
+        stock_rows.append({
+            "代號":  s["ticker"],
+            "名稱":  s["name"],
+            "幣別":  s["currency"],
+            "即時價": price_str,
+            "狀態":  "✓" if status == "ok" else f"⚠ {status}",
+        })
 
-                if book.get("workbook_functions"):
-                    funcs = pd.DataFrame(
-                        [{"公式": k, "次數": v} for k, v in book["workbook_functions"].items()]
-                    )
-                    st.dataframe(fmt_df(funcs), use_container_width=True, hide_index=True)
-                st.markdown("</div>", unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"讀取 workbook_structure_summary.json 失敗：{e}")
+    stock_df = pd.DataFrame(stock_rows)
+    st.dataframe(stock_df, use_container_width=True, hide_index=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if not HAS_YF:
+        st.info("提示：安裝 `yfinance` 以啟用股票/匯率即時抓取。`pip install yfinance`")
+    if not HAS_BS4:
+        st.info("提示：安裝 `beautifulsoup4` 與 `lxml` 以啟用基金 NAV 抓取。")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TAB 6 — 資料健康
+# ═══════════════════════════════════════════════════════════════════════════
+with tabs[5]:
+    st.markdown('<div class="j-page-title">資料健康</div>'
+                '<div class="j-page-sub">工作表結構・公式統計・錯誤偵測</div>',
+                unsafe_allow_html=True)
+
+    summaries = load_health_summary()
+    if not summaries:
+        st.info("尚未產生 workbook_structure_summary.json，請先執行分析腳本。")
     else:
-        st.caption(
-            "💡 若要看完整公式統計，可在本機跑分析腳本產出 `outputs/workbook_structure_summary.json`，"
-            "此頁會自動顯示。"
-        )
+        for book in summaries:
+            fname = Path(book["file"]).name
+            st.markdown(f'<div class="j-card"><div class="j-card-title">{fname}</div>',
+                        unsafe_allow_html=True)
+            bm1, bm2, bm3 = st.columns(3)
+            bm1.metric("檔案大小 MB",  book["size_mb"])
+            bm2.metric("工作表數",     book["sheet_count"])
+            bm3.metric("公式種類",     len(book["workbook_functions"]))
+
+            heavy = (pd.DataFrame(book["sheets"])
+                     .sort_values("formulas", ascending=False)
+                     [["sheet","class","rows","cols","nonempty","formulas","literal_errors"]]
+                     .head(12))
+            st.dataframe(fmt_df(heavy), use_container_width=True, hide_index=True)
+
+            funcs = pd.DataFrame(
+                [{"公式": k, "次數": v} for k, v in book["workbook_functions"].items()])
+            st.dataframe(fmt_df(funcs), use_container_width=True, hide_index=True)
+            st.markdown('</div>', unsafe_allow_html=True)
