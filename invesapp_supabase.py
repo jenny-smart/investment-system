@@ -570,13 +570,14 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         out["損益率"] = out["損益率"].apply(pct)
 
     rename_map = {
-    "original_units": "成本股數",
-    "units": "現在股數",
-    "avg_cost": "平均成本",
-    "corporate_action": "股數調整備註",
-}
+        "original_units": "成本股數",
+        "units": "現在股數",
+        "avg_cost": "平均成本",
+        "corporate_action": "股數調整備註",
+    }
 
-out = out.rename(columns=rename_map)
+    out = out.rename(columns=rename_map)
+
     return out
 
 def seed_presets() -> None:
