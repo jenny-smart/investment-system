@@ -1124,36 +1124,4 @@ with tabs[6]:
         use_container_width=True,
         hide_index=True,
     )
-```
-
----
-
-# 最後還要確認：
-
-## requirements.txt
-
-至少有：
-
-```txt
-streamlit
-pandas
-requests
-yfinance
-beautifulsoup4
-lxml
-supabase
-```
-
----
-
-# Streamlit Secrets
-
-```toml
-SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
-SUPABASE_ANON_KEY = "你的 anon key"
-```
-
----
-
-# Main file path
 
