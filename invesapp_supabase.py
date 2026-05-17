@@ -21,7 +21,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-17-supabase-v1"
+APP_VERSION = "2026-05-17-supabase-v2-platform-edit"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -269,6 +269,82 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def editable_platform_table(platform_name: str, current_positions: pd.DataFrame, editor_key: str) -> None:
+    st.markdown("#### ✏️ 編輯 / 新增")
+    st.caption("在這裡 key 單位數、平均成本、股票代碼或基金代號。新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
+
+    cols = [
+        "id", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
+        "currency", "units", "avg_cost", "monthly_dividend_per_unit", "note"
+    ]
+
+    base = current_positions[current_positions["platform"] == platform_name][cols].copy() if not current_positions.empty else pd.DataFrame(columns=cols)
+
+    blank = {
+        "id": None,
+        "platform": platform_name,
+        "asset_type": "基金" if platform_name in ["基富通", "渣打基金", "台新基金"] else platform_name,
+        "name": "",
+        "ticker": "",
+        "fund_code": "",
+        "fund_pattern": "yp010001" if platform_name in ["基富通", "渣打基金", "台新基金"] else "",
+        "currency": "TWD" if platform_name in ["台股", "基富通"] else "USD",
+        "units": 0.0,
+        "avg_cost": 0.0,
+        "monthly_dividend_per_unit": 0.0,
+        "note": "",
+    }
+    base = pd.concat([base, pd.DataFrame([blank])], ignore_index=True)
+
+    edited = st.data_editor(
+        base,
+        use_container_width=True,
+        hide_index=True,
+        height=360,
+        num_rows="dynamic",
+        column_config={
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
+            "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
+            "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
+            "units": st.column_config.NumberColumn("單位數 / 股數", min_value=0, step=1.0, format="%.4f"),
+            "avg_cost": st.column_config.NumberColumn("平均成本（原幣）", min_value=0, step=0.01, format="%.4f"),
+            "monthly_dividend_per_unit": st.column_config.NumberColumn("每單位月配息", min_value=0, step=0.0001, format="%.4f"),
+            "ticker": st.column_config.TextColumn("股票代碼"),
+            "fund_code": st.column_config.TextColumn("基金代號"),
+            "fund_pattern": st.column_config.TextColumn("基金 pattern"),
+            "name": st.column_config.TextColumn("產品名稱"),
+            "note": st.column_config.TextColumn("備註"),
+        },
+        key=editor_key,
+    )
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    if c1.button("💾 儲存此頁變更", key=f"save_{editor_key}"):
+        update_positions(edited)
+        st.success("已儲存")
+        st.rerun()
+
+    copy_id = c2.number_input("複製 ID", value=0, step=1, key=f"copy_{editor_key}")
+    if c2.button("📋 複製", key=f"copybtn_{editor_key}") and copy_id:
+        row = current_positions[current_positions["id"] == int(copy_id)]
+        if row.empty:
+            st.error("找不到此 ID")
+        else:
+            r = row.iloc[0].to_dict()
+            r.pop("id", None)
+            r["name"] = str(r.get("name", "")) + "（複製）"
+            add_position(r)
+            st.success("已複製")
+            st.rerun()
+
+    delete_id = c3.number_input("刪除 ID", value=0, step=1, key=f"delete_{editor_key}")
+    if c3.button("🗑️ 刪除", key=f"deletebtn_{editor_key}") and delete_id:
+        delete_position(int(delete_id))
+        st.success(f"已刪除 ID {delete_id}")
+        st.rerun()
+
+
 def seed_presets() -> None:
     existing = load_positions()
     if not existing.empty:
@@ -364,7 +440,12 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
             m3.metric("損益", signed_money(view["損益"].dropna().sum()))
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
-            st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=620)
+
+            st.markdown("#### 即時計算結果")
+            st.caption("此表為即時計算結果，不在這裡 key。市值 = 單位數 × 即時價格/淨值 × 匯率。")
+            st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=330)
+
+        editable_platform_table(platform, positions, f"editor_{platform}")
 
 with tabs[6]:
     st.subheader("匯率")
