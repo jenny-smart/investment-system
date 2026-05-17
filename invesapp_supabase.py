@@ -21,7 +21,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-18-supabase-v9-paste-order-repair"
+APP_VERSION = "2026-05-18-supabase-v11-fx-and-marketvalue-fix"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -494,13 +494,50 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fx(currency: str) -> tuple[float | None, str]:
-    currency = normalize_text(currency, "TWD")
+    """
+    強化版匯率：
+    - ZAR 固定走 ZARTWD=X
+    - USD 固定走 USDTWD=X
+    - JPY 固定走 JPYTWD=X
+    - CNY 固定走 CNYTWD=X
+    """
+    currency = normalize_text(currency, "TWD").upper()
+
+    alias = {
+        "台幣": "TWD",
+        "新台幣": "TWD",
+        "臺幣": "TWD",
+        "美金": "USD",
+        "美元": "USD",
+        "人民幣": "CNY",
+        "日幣": "JPY",
+        "日圓": "JPY",
+        "南非幣": "ZAR",
+    }
+
+    currency = alias.get(currency, currency)
+
     if currency == "TWD":
         return 1.0, "ok"
-    pair = FX_PAIRS.get(currency)
+
+    direct_pairs = {
+        "USD": "USDTWD=X",
+        "CNY": "CNYTWD=X",
+        "JPY": "JPYTWD=X",
+        "ZAR": "ZARTWD=X",
+    }
+
+    pair = direct_pairs.get(currency)
+
     if not pair:
-        return None, "未知幣別"
-    return fetch_yahoo_price(pair)
+        return None, f"未知幣別:{currency}"
+
+    price, status = fetch_yahoo_price(pair)
+
+    if price is None:
+        return None, f"匯率抓取失敗:{currency}"
+
+    return float(price), status
 
 
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
@@ -536,38 +573,93 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
 
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
+
     if df.empty:
         return df
 
     rows = []
 
     for _, r in df.iterrows():
-        currency = normalize_text(r.get("currency", "TWD"), "TWD")
-        asset_type = normalize_text(r.get("asset_type", ""), "")
 
+        name = normalize_text(r.get("name", ""))
+        currency = normalize_text(r.get("currency", "TWD")).upper()
+
+        # 自動修正錯置幣別
+        if "南非幣" in name:
+            currency = "ZAR"
+
+        elif (
+            "美元" in name
+            or "美金" in name
+            or normalize_text(r.get("asset_type")) == "美股"
+        ):
+            currency = "USD"
+
+        elif "人民幣" in name:
+            currency = "CNY"
+
+        elif "日圓" in name or "日幣" in name:
+            currency = "JPY"
+
+        asset_type = normalize_text(r.get("asset_type", ""))
+
+        # 美股 / 台股
         if asset_type in {"台股", "美股"}:
-            price, p_status = fetch_yahoo_price(str(r.get("ticker") or ""))
+
+            ticker = normalize_text(r.get("ticker", ""))
+
+            if not ticker and name:
+                ticker = name.upper()
+
+            price, p_status = fetch_yahoo_price(ticker)
+
+        # 基金
         else:
+
+            fund_code = normalize_text(r.get("fund_code", ""))
+            fund_pattern = normalize_text(r.get("fund_pattern", ""))
+
             price, p_status = fetch_fund_nav(
-                str(r.get("fund_code") or ""),
-                str(r.get("fund_pattern") or ""),
+                fund_code,
+                fund_pattern,
             )
 
         fx, fx_status = fetch_fx(currency)
+
         calc = calculate_cost_and_value(r, price, fx)
 
         units = normalize_number(r.get("units", 0), 0)
-        monthly_div = units * normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
-        monthly_div_twd = monthly_div * fx if fx is not None else None
+
+        monthly_div = (
+            units
+            * normalize_number(
+                r.get("monthly_dividend_per_unit", 0),
+                0,
+            )
+        )
+
+        monthly_div_twd = (
+            monthly_div * fx
+            if fx is not None
+            else None
+        )
 
         out = dict(r)
+
+        out["currency"] = currency
+
         out.update(calc)
+
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
             "每月配息": monthly_div_twd,
-            "狀態": "✓" if p_status == "ok" and fx_status == "ok" else f"價格:{p_status} 匯率:{fx_status}",
+            "狀態":
+                "✓"
+                if p_status == "ok" and fx_status == "ok"
+                else f"價格:{p_status} 匯率:{fx_status}",
         })
+
         rows.append(out)
 
     return pd.DataFrame(rows)
@@ -1333,6 +1425,7 @@ tabs = st.tabs([
     "資料安全",
     "修復排序",
     "貼上清單修復",
+    "全部歸零重建",
 ])
 
 show_cols = [
@@ -1412,7 +1505,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
 
             st.markdown("#### 即時計算結果")
-            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率")
+            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜南非幣自動使用 ZAR/TWD")
             st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
 
         editable_platform_table(platform, positions, f"editor_{platform}")
@@ -1475,3 +1568,222 @@ with tabs[9]:
 with tabs[10]:
     st.subheader("貼上清單修復")
     pasted_order_repair_section(positions)
+
+
+def infer_asset_from_pasted(raw_platform: str, raw_currency: str, name: str) -> dict[str, Any]:
+    raw_platform = normalize_text(raw_platform)
+    raw_currency = normalize_text(raw_currency)
+    clean_name = normalize_text(name)
+    lower_name = clean_name.lower()
+
+    currency = CURRENCY_ALIAS.get(raw_currency, raw_currency)
+
+    if raw_platform == "基富通":
+        platform = "基富通"
+    elif raw_platform == "渣打":
+        platform = "美股" if raw_currency == "美股" else "渣打基金"
+    elif raw_platform == "台新":
+        platform = "台新基金"
+    else:
+        platform = raw_platform
+
+    if raw_currency == "美股" or lower_name in {"pypl", "xyz"}:
+        asset_type = "美股"
+        ticker = clean_name.upper()
+        fund_code = ""
+        fund_pattern = ""
+        currency = "USD"
+        name_out = clean_name.upper()
+    else:
+        asset_type = "基金" if platform in ["基富通", "渣打基金", "台新基金"] else "台股"
+        ticker = ""
+        fund_code = ""
+        fund_pattern = ""
+
+        if "富蘭克林華美新興國家固定收益" in clean_name and ("新臺幣" in clean_name or "新台幣" in clean_name):
+            fund_code, fund_pattern = "acft94", "yp010000"
+        elif "柏瑞新興邊境非投資等級債券" in clean_name:
+            fund_code, fund_pattern = "acai222", "yp010000"
+        elif "富蘭克林華美新興國家固定收益" in clean_name and "人民幣" in clean_name:
+            fund_code, fund_pattern = "acft99", "yp010000"
+        elif "貝萊德全球智慧數據股票入息" in clean_name:
+            fund_code, fund_pattern = "shzx0", "yp010001"
+        elif "安聯收益成長" in clean_name:
+            fund_code, fund_pattern = "TLZO3", "yp010001"
+        elif "大華銀新加坡房地產收益" in clean_name:
+            fund_code, fund_pattern = "acob36", "yp010000"
+        elif "東方匯理" in clean_name and "新興市場債券A美元" in clean_name:
+            fund_code, fund_pattern = "pizn8", "yp010001"
+        elif "東方匯理" in clean_name and ("新興市場債券U 美元" in clean_name or "新興市場債券Ｕ 美元" in clean_name or "新興市場債券U美元" in clean_name):
+            fund_code, fund_pattern = "pizo1", "yp010001"
+        elif "東方匯理" in clean_name and "南非幣" in clean_name:
+            fund_code, fund_pattern = "pizm9", "yp010001"
+            currency = "ZAR"
+        elif "高盛新興市場債券基金Y股美元" in clean_name:
+            fund_code, fund_pattern = "anzb6", "yp010001"
+        elif "高盛新興市場債券基金Ｙ" in clean_name and "南非幣" in clean_name:
+            fund_code, fund_pattern = "ANZH2", "yp010001"
+            currency = "ZAR"
+
+        name_out = clean_name
+
+    return {
+        "platform": platform,
+        "asset_type": asset_type,
+        "name": name_out,
+        "ticker": ticker,
+        "fund_code": fund_code,
+        "fund_pattern": fund_pattern,
+        "currency": currency,
+        "original_units": 0,
+        "units": 0,
+        "corporate_action": "",
+        "avg_cost": 0,
+        "total_cost_input": 0,
+        "monthly_dividend_per_unit": 0,
+        "note": f"依原始清單重建：{raw_platform} / {raw_currency}",
+    }
+
+
+def build_reset_seed_df_from_pasted(pasted_text: str) -> pd.DataFrame:
+    targets = parse_pasted_order_text(pasted_text)
+    rows = []
+
+    for t in targets:
+        row = infer_asset_from_pasted(t["raw_platform"], t["raw_currency"], t["name"])
+        row["sort_order"] = t["target_order"]
+        row["原始平台"] = t["raw_platform"]
+        row["原始幣別"] = t["raw_currency"]
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+
+    cols = [
+        "sort_order",
+        "原始平台",
+        "原始幣別",
+        "platform",
+        "asset_type",
+        "name",
+        "ticker",
+        "fund_code",
+        "fund_pattern",
+        "currency",
+        "total_cost_input",
+        "original_units",
+        "units",
+        "avg_cost",
+        "monthly_dividend_per_unit",
+        "corporate_action",
+        "note",
+    ]
+    return pd.DataFrame(rows)[cols]
+
+
+def delete_all_positions() -> int:
+    current = load_positions()
+    if current.empty:
+        return 0
+
+    sb = supabase_client()
+    count = 0
+
+    for _, r in current.iterrows():
+        rid = r.get("id")
+        if pd.isna(rid):
+            continue
+        sb.table("positions").delete().eq("id", int(float(rid))).execute()
+        count += 1
+
+    return count
+
+
+def rebuild_positions_from_seed_df(seed_df: pd.DataFrame) -> int:
+    if seed_df.empty:
+        return 0
+
+    insert_cols = [
+        "sort_order",
+        "platform",
+        "asset_type",
+        "name",
+        "ticker",
+        "fund_code",
+        "fund_pattern",
+        "currency",
+        "original_units",
+        "units",
+        "corporate_action",
+        "avg_cost",
+        "total_cost_input",
+        "monthly_dividend_per_unit",
+        "note",
+    ]
+
+    sb = supabase_client()
+    count = 0
+
+    for _, r in seed_df.iterrows():
+        payload = {col: r.get(col) for col in insert_cols}
+        payload = normalize_payload(payload)
+        sb.table("positions").insert(payload).execute()
+        count += 1
+
+    return count
+
+
+def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
+    st.markdown("#### 🧨 全部歸零並依原始清單重建")
+    st.error("這會刪除 positions 全部資料，重新建立成本、股數、配息皆為 0 的乾淨清單。請務必先下載備份。")
+
+    backup = ensure_columns(current_positions).sort_values(["sort_order", "id"], na_position="last")
+    st.download_button(
+        "⬇️ 下載目前資料備份 CSV",
+        data=backup.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+        file_name="positions_backup_before_FULL_RESET.csv",
+        mime="text/csv",
+        key="download_backup_before_full_reset",
+        disabled=backup.empty,
+    )
+
+    pasted = st.text_area(
+        "貼上你的原始三欄清單：平台、幣別/類別、名稱。重建順序與重複列數會完全依這份文字。",
+        height=360,
+        key="full_reset_pasted_order_text",
+    )
+
+    seed_df = build_reset_seed_df_from_pasted(pasted)
+
+    if pasted and seed_df.empty:
+        st.warning("沒有解析到資料。請確認每列至少有：平台、幣別/類別、名稱。")
+        return
+
+    if not seed_df.empty:
+        st.success(f"已解析 {len(seed_df)} 筆，將以這些資料重建。")
+        st.dataframe(seed_df, use_container_width=True, hide_index=True, height=520)
+
+        st.download_button(
+            "⬇️ 下載即將重建的乾淨清單 CSV",
+            data=seed_df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+            file_name="positions_clean_rebuild_preview.csv",
+            mime="text/csv",
+            key="download_clean_rebuild_preview",
+        )
+
+    typed = st.text_input("若確認要全部刪除並重建，請輸入 RESET", key="full_reset_confirm_text")
+    confirm_backup = st.checkbox("我已下載備份，確認要全部歸零重建", key="full_reset_confirm_backup")
+
+    disabled = not (typed == "RESET" and confirm_backup and not seed_df.empty)
+
+    if st.button("🧨 刪除全部 positions 並重建", key="run_full_reset_rebuild", disabled=disabled):
+        deleted = delete_all_positions()
+        inserted = rebuild_positions_from_seed_df(seed_df)
+        st.success(f"完成：已刪除 {deleted} 筆，重建 {inserted} 筆。")
+        st.cache_data.clear()
+        st.rerun()
+
+
+with tabs[11]:
+    st.subheader("全部歸零重建")
+    full_reset_rebuild_section(positions)
