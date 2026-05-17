@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import pandas as pd
@@ -21,7 +22,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-18-supabase-v11-fx-and-marketvalue-fix"
+APP_VERSION = "2026-05-18-supabase-v14-google-finance-fallback"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -35,6 +36,11 @@ FX_PAIRS = {
     "CNY": "CNYTWD=X",
     "JPY": "JPYTWD=X",
     "ZAR": "ZARTWD=X",
+}
+
+US_STOCK_EXCHANGES = {
+    "PYPL": "NASDAQ",
+    "XYZ": "NYSE",
 }
 
 TW_PRESETS = {
@@ -439,57 +445,202 @@ def pct(v: Any) -> str:
     return f"{n:.2%}"
 
 
+def normalize_ticker(ticker: str) -> str:
+    t = normalize_text(ticker).strip()
+    if not t:
+        return ""
+    t = t.replace(" ", "")
+    return t.upper()
+
+
+def parse_google_finance_price(html: str) -> float | None:
+    """
+    Google Finance 頁面常見價格格式：
+    <div class="YMlKec fxKbKc">$68.12</div>
+    這裡不用依賴 class，直接抓 $ 後面的第一個合理價格。
+    """
+    text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+    text = text.replace(",", "")
+
+    # 優先抓美元價格
+    matches = re.findall(r"\$\s*([0-9]+(?:\.[0-9]+)?)", text)
+    for m in matches:
+        val = float(m)
+        if 0 < val < 100000:
+            return val
+
+    # fallback：抓 quote 頁附近常見小數
+    matches = re.findall(r"(?<!\d)([0-9]+\.[0-9]{1,4})(?!\d)", text)
+    for m in matches:
+        val = float(m)
+        if 0 < val < 100000:
+            return val
+
+    return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_google_finance_price(ticker: str, exchange: str | None = None) -> tuple[float | None, str]:
+    ticker = normalize_ticker(ticker)
+    if not ticker:
+        return None, "Google 無 ticker"
+
+    exchange = exchange or US_STOCK_EXCHANGES.get(ticker, "NASDAQ")
+    url = f"https://www.google.com/finance/quote/{ticker}:{exchange}"
+
+    try:
+        r = requests.get(
+            url,
+            timeout=20,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9,zh-TW;q=0.8",
+            },
+        )
+        r.raise_for_status()
+
+        price = parse_google_finance_price(r.text)
+        if price is None:
+            return None, f"Google 無價格:{ticker}:{exchange}"
+
+        return float(price), "ok"
+
+    except Exception as e:
+        return None, f"Google 錯誤:{str(e)[:40]}"
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_yahoo_price(ticker: str) -> tuple[float | None, str]:
+    ticker = normalize_ticker(ticker)
+
     if not ticker:
-        return None, "無代碼"
+        return None, "無 ticker"
+
     if not HAS_YF:
         return None, "缺少 yfinance"
 
     try:
         t = yf.Ticker(ticker)
-        price = getattr(t.fast_info, "last_price", None)
+        price = None
+
+        try:
+            price = getattr(t.fast_info, "last_price", None)
+        except Exception:
+            price = None
 
         if price is None:
-            hist = t.history(period="5d")
-            if not hist.empty:
-                price = hist["Close"].dropna().iloc[-1]
+            hist = t.history(period="7d", auto_adjust=False)
+            if not hist.empty and "Close" in hist:
+                close = hist["Close"].dropna()
+                if not close.empty:
+                    price = close.iloc[-1]
 
         if price is None:
-            return None, "無價格"
+            return None, f"Yahoo 無價格:{ticker}"
 
         return float(price), "ok"
 
     except Exception as e:
-        return None, str(e)[:50]
+        return None, f"Yahoo 錯誤:{str(e)[:40]}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
+    """
+    股票價格：
+    1. 先用 Yahoo Finance
+    2. 美股失敗時用 Google Finance fallback
+    """
+    ticker = normalize_ticker(ticker)
+
+    price, status = fetch_yahoo_price(ticker)
+    if price is not None:
+        return price, "Yahoo"
+
+    if asset_type == "美股" or ticker in US_STOCK_EXCHANGES:
+        g_price, g_status = fetch_google_finance_price(
+            ticker,
+            US_STOCK_EXCHANGES.get(ticker),
+        )
+        if g_price is not None:
+            return g_price, "Google"
+
+        return None, f"{status}; {g_status}"
+
+    return None, status
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
+    """
+    MoneyDJ 強化版。
+    URL 範例：
+    https://www.moneydj.com/funddj/ya/yp010000.djhtm?a=acft94
+    """
+    code = normalize_text(code)
+    pattern = normalize_text(pattern)
+
     if not code or not pattern:
-        return None, "無基金代碼"
+        return None, "無 fund_code/fund_pattern"
+
     if not HAS_BS4:
         return None, "缺少 beautifulsoup4"
 
     try:
         url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
-        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+
+        r = requests.get(
+            url,
+            timeout=20,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Referer": "https://www.moneydj.com/",
+            },
+        )
+
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "lxml")
-        table = soup.select_one("#article form table")
 
-        if table:
-            rows = table.find_all("tr")
-            if len(rows) >= 2:
-                cells = rows[1].find_all("td")
-                if len(cells) >= 2:
-                    nav = cells[1].get_text(strip=True).replace(",", "")
-                    return float(nav), "ok"
+        candidates: list[float] = []
 
-        return None, "找不到淨值"
+        for td in soup.find_all("td"):
+            txt = td.get_text(" ", strip=True).replace(",", "")
+            if not txt:
+                continue
+
+            if re.fullmatch(r"\d+(?:\.\d+)?", txt):
+                val = float(txt)
+                if 0 < val < 10000:
+                    candidates.append(val)
+
+        decimal_candidates = [
+            x for x in candidates
+            if isinstance(x, float) and not float(x).is_integer()
+        ]
+
+        if decimal_candidates:
+            return float(decimal_candidates[0]), "ok"
+
+        text = soup.get_text(" ", strip=True).replace(",", "")
+        nums = re.findall(r"(?<!\d)(\d+\.\d+)(?!\d)", text)
+
+        for n in nums:
+            val = float(n)
+            if 0 < val < 10000:
+                return val, "ok"
+
+        return None, f"MoneyDJ 找不到淨值:{code}"
 
     except Exception as e:
-        return None, str(e)[:50]
+        return None, f"MoneyDJ 錯誤:{str(e)[:40]}"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -611,7 +762,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             if not ticker and name:
                 ticker = name.upper()
 
-            price, p_status = fetch_yahoo_price(ticker)
+            price, p_status = fetch_stock_price(ticker, asset_type)
 
         # 基金
         else:
@@ -1426,6 +1577,7 @@ tabs = st.tabs([
     "修復排序",
     "貼上清單修復",
     "全部歸零重建",
+    "抓價測試",
 ])
 
 show_cols = [
@@ -1733,6 +1885,43 @@ def rebuild_positions_from_seed_df(seed_df: pd.DataFrame) -> int:
     return count
 
 
+
+def force_zero_all_positions() -> int:
+    """
+    強制把目前 positions 的成本、股數、配息全部歸零。
+    不改排序、不改名稱、不改平台、不改 ticker / fund_code。
+    """
+    current = load_positions()
+    if current.empty:
+        return 0
+
+    sb = supabase_client()
+    count = 0
+
+    zero_payload = {
+        "original_units": 0,
+        "units": 0,
+        "avg_cost": 0,
+        "total_cost_input": 0,
+        "monthly_dividend_per_unit": 0,
+        "corporate_action": "",
+    }
+
+    for _, r in current.iterrows():
+        rid = r.get("id")
+        if pd.isna(rid):
+            continue
+
+        sb.table("positions").update(zero_payload).eq(
+            "id",
+            int(float(rid))
+        ).execute()
+
+        count += 1
+
+    return count
+
+
 def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
     st.markdown("#### 🧨 全部歸零並依原始清單重建")
     st.error("這會刪除 positions 全部資料，重新建立成本、股數、配息皆為 0 的乾淨清單。請務必先下載備份。")
@@ -1774,12 +1963,22 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
     typed = st.text_input("若確認要全部刪除並重建，請輸入 RESET", key="full_reset_confirm_text")
     confirm_backup = st.checkbox("我已下載備份，確認要全部歸零重建", key="full_reset_confirm_backup")
 
+    st.markdown("#### 只歸零目前資料")
+    st.caption("如果你不想刪除重建，只想把現有所有成本、股數、配息歸零，可用這個。")
+    zero_only_confirm = st.checkbox("我確認只把目前資料全部歸零，不刪除列", key="zero_only_confirm")
+    if st.button("🧹 只歸零目前所有資料", key="zero_only_button", disabled=not zero_only_confirm):
+        zeroed = force_zero_all_positions()
+        st.success(f"已強制歸零 {zeroed} 筆資料。")
+        st.cache_data.clear()
+        st.rerun()
+
     disabled = not (typed == "RESET" and confirm_backup and not seed_df.empty)
 
     if st.button("🧨 刪除全部 positions 並重建", key="run_full_reset_rebuild", disabled=disabled):
         deleted = delete_all_positions()
         inserted = rebuild_positions_from_seed_df(seed_df)
-        st.success(f"完成：已刪除 {deleted} 筆，重建 {inserted} 筆。")
+        zeroed = force_zero_all_positions()
+        st.success(f"完成：已刪除 {deleted} 筆，重建 {inserted} 筆，強制歸零 {zeroed} 筆。")
         st.cache_data.clear()
         st.rerun()
 
@@ -1787,3 +1986,55 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 with tabs[11]:
     st.subheader("全部歸零重建")
     full_reset_rebuild_section(positions)
+
+
+def price_test_section() -> None:
+    st.subheader("抓價測試")
+    st.caption("用這裡確認美股 ticker、基金 MoneyDJ 代碼與匯率是否能抓到。")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("#### 美股 / 台股")
+        ticker = st.text_input("Ticker", value="PYPL", key="test_ticker")
+        if st.button("測試股票價格", key="test_yahoo_price"):
+            normalized = normalize_ticker(ticker)
+            y_price, y_status = fetch_yahoo_price(normalized)
+            g_price, g_status = fetch_google_finance_price(
+                normalized,
+                US_STOCK_EXCHANGES.get(normalized),
+            )
+            final_price, final_status = fetch_stock_price(normalized, "美股")
+            st.write({
+                "ticker": normalized,
+                "exchange": US_STOCK_EXCHANGES.get(normalized, "NASDAQ"),
+                "yahoo_price": y_price,
+                "yahoo_status": y_status,
+                "google_price": g_price,
+                "google_status": g_status,
+                "final_price": final_price,
+                "final_status": final_status,
+            })
+
+    with c2:
+        st.markdown("#### MoneyDJ 基金")
+        fund_pattern = st.text_input("fund_pattern", value="yp010000", key="test_fund_pattern")
+        fund_code = st.text_input("fund_code", value="acft94", key="test_fund_code")
+        if st.button("測試 MoneyDJ 淨值", key="test_moneydj_nav"):
+            nav, status = fetch_fund_nav(fund_code, fund_pattern)
+            st.write({
+                "url": f"https://www.moneydj.com/funddj/ya/{fund_pattern}.djhtm?a={fund_code}",
+                "nav": nav,
+                "status": status,
+            })
+
+    st.markdown("#### 匯率")
+    fx_rows = []
+    for cur in ["USD", "ZAR", "CNY", "JPY", "TWD"]:
+        rate, status = fetch_fx(cur)
+        fx_rows.append({"currency": cur, "rate": rate, "status": status})
+    st.dataframe(pd.DataFrame(fx_rows), use_container_width=True, hide_index=True)
+
+
+with tabs[12]:
+    price_test_section()
