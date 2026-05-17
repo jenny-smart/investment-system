@@ -21,7 +21,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-17-supabase-v3"
+APP_VERSION = "2026-05-18-supabase-v5"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -254,6 +254,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+
 def get_secret(name: str, default: str = "") -> str:
     try:
         return st.secrets.get(name, default)
@@ -273,63 +274,119 @@ def supabase_client() -> Client:
     return create_client(url, key)
 
 
-def load_positions() -> pd.DataFrame:
-    sb = supabase_client()
+def normalize_number(v: Any, default: float = 0.0) -> float:
+    try:
+        if v is None or pd.isna(v):
+            return default
+        if isinstance(v, str):
+            v = v.replace(",", "").replace("$", "").strip()
+            if v in {"", "-", "—", "nan", "None"}:
+                return default
+        return float(v)
+    except Exception:
+        return default
 
+
+def normalize_text(v: Any, default: str = "") -> str:
+    if v is None:
+        return default
+    try:
+        if pd.isna(v):
+            return default
+    except Exception:
+        pass
+    return str(v).strip()
+
+
+def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
+    defaults = {
+        "id": None,
+        "sort_order": 0,
+        "platform": "台股",
+        "asset_type": "台股",
+        "name": "",
+        "ticker": "",
+        "fund_code": "",
+        "fund_pattern": "",
+        "currency": "TWD",
+        "original_units": 0.0,
+        "units": 0.0,
+        "corporate_action": "",
+        "avg_cost": 0.0,
+        "total_cost_input": 0.0,
+        "monthly_dividend_per_unit": 0.0,
+        "note": "",
+    }
+    out = df.copy()
+    for col, default in defaults.items():
+        if col not in out.columns:
+            out[col] = default
+    return out
+
+
+def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
+    platform = normalize_text(r.get("platform", "台股"), "台股")
+    asset_type = normalize_text(r.get("asset_type", ""), "")
+    if not asset_type:
+        asset_type = "基金" if platform in ["基富通", "渣打基金", "台新基金"] else platform
+
+    currency = normalize_text(r.get("currency", ""), "")
+    if not currency:
+        currency = "TWD" if platform in ["台股", "基富通"] else "USD"
+
+    name = normalize_text(r.get("name", ""), "")
+    ticker = normalize_text(r.get("ticker", ""), "")
+    fund_code = normalize_text(r.get("fund_code", ""), "")
+    fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
+
+    if platform == "台股" and not ticker and name in TW_PRESETS:
+        ticker = TW_PRESETS.get(name, "")
+
+    return {
+        "sort_order": normalize_number(r.get("sort_order", 0), 0),
+        "platform": platform,
+        "asset_type": asset_type,
+        "name": name,
+        "ticker": ticker,
+        "fund_code": fund_code,
+        "fund_pattern": fund_pattern,
+        "currency": currency,
+        "original_units": normalize_number(r.get("original_units", 0), 0),
+        "units": normalize_number(r.get("units", 0), 0),
+        "corporate_action": normalize_text(r.get("corporate_action", ""), ""),
+        "avg_cost": normalize_number(r.get("avg_cost", 0), 0),
+        "total_cost_input": normalize_number(r.get("total_cost_input", 0), 0),
+        "monthly_dividend_per_unit": normalize_number(r.get("monthly_dividend_per_unit", 0), 0),
+        "note": normalize_text(r.get("note", ""), ""),
+    }
+
+
+def load_positions() -> pd.DataFrame:
     result = (
-        sb.table("positions")
+        supabase_client()
+        .table("positions")
         .select("*")
-        .order("platform")
         .order("sort_order")
         .order("id")
         .execute()
     )
-
-    return pd.DataFrame(result.data or [])
+    return ensure_columns(pd.DataFrame(result.data or []))
 
 
 def add_position(row: dict[str, Any]) -> None:
-    sb = supabase_client()
-    sb.table("positions").insert(row).execute()
+    payload = normalize_payload(row)
+    if payload.get("name"):
+        supabase_client().table("positions").insert(payload).execute()
 
 
 def update_positions(df: pd.DataFrame) -> None:
     sb = supabase_client()
+    df = ensure_columns(df)
 
     for _, r in df.iterrows():
-
         rid = r.get("id", None)
-
         is_new = pd.isna(rid) or str(rid).strip() == ""
-
-        payload = {
-            "platform": str(r.get("platform", "台股")),
-            "asset_type": str(r.get("asset_type", "台股")),
-            "name": str(r.get("name", "")).strip(),
-            "ticker": str(r.get("ticker", "")).strip(),
-            "fund_code": str(r.get("fund_code", "")).strip(),
-            "fund_pattern": str(r.get("fund_pattern", "")).strip(),
-            "currency": str(r.get("currency", "TWD")),
-            "original_units": float(
-                r.get("original_units", 0) or 0
-            ),
-
-            "units": float(
-                r.get("units", 0) or 0
-            ),
-
-            "corporate_action": str(
-                r.get("corporate_action", "")
-            ),
-            "avg_cost": float(r.get("avg_cost", 0) or 0),
-            "total_cost_input": float(
-                r.get("total_cost_input", 0) or 0
-            ),
-            "monthly_dividend_per_unit": float(
-                r.get("monthly_dividend_per_unit", 0) or 0
-            ),
-            "note": str(r.get("note", "")),
-        }
+        payload = normalize_payload(r)
 
         if not payload["name"]:
             continue
@@ -337,106 +394,67 @@ def update_positions(df: pd.DataFrame) -> None:
         if is_new:
             sb.table("positions").insert(payload).execute()
         else:
-            (
-                sb.table("positions")
-                .update(payload)
-                .eq("id", int(rid))
-                .execute()
-            )
+            sb.table("positions").update(payload).eq("id", int(float(rid))).execute()
 
 
 def delete_position(position_id: int) -> None:
-    (
-        supabase_client()
-        .table("positions")
-        .delete()
-        .eq("id", int(position_id))
-        .execute()
-    )
+    supabase_client().table("positions").delete().eq("id", int(position_id)).execute()
 
 
 def mark_position_sold(position_id: int) -> None:
-
-    (
-        supabase_client()
-        .table("positions")
-        .update({
-            "units": 0,
-            "note": "已賣出 / 已結清"
-        })
-        .eq("id", int(position_id))
-        .execute()
-    )
+    supabase_client().table("positions").update({
+        "units": 0,
+        "note": "已賣出 / 已結清",
+    }).eq("id", int(position_id)).execute()
 
 
 def to_float(v: Any) -> float | None:
-
     try:
-
         if v is None or pd.isna(v):
             return None
-
         if isinstance(v, str):
             v = v.replace(",", "").replace("$", "").strip()
-
             if v in {"", "-", "—"}:
                 return None
-
         return float(v)
-
     except Exception:
         return None
 
 
 def money(v: Any, decimals: int = 0) -> str:
-
     n = to_float(v)
-
     if n is None:
         return "-"
-
     return f"{n:,.{decimals}f}"
 
 
 def signed_money(v: Any) -> str:
-
     n = to_float(v)
-
     if n is None:
         return "-"
-
     return f"{n:+,.0f}"
 
 
 def pct(v: Any) -> str:
-
     n = to_float(v)
-
     if n is None:
         return "-"
-
     return f"{n:.2%}"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_yahoo_price(ticker: str) -> tuple[float | None, str]:
-
     if not ticker:
         return None, "無代碼"
-
     if not HAS_YF:
         return None, "缺少 yfinance"
 
     try:
-
         t = yf.Ticker(ticker)
-
         price = getattr(t.fast_info, "last_price", None)
 
         if price is None:
-
             hist = t.history(period="5d")
-
             if not hist.empty:
                 price = hist["Close"].dropna().iloc[-1]
 
@@ -451,48 +469,24 @@ def fetch_yahoo_price(ticker: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
-
     if not code or not pattern:
         return None, "無基金代碼"
-
     if not HAS_BS4:
         return None, "缺少 beautifulsoup4"
 
     try:
-
-        url = (
-            f"https://www.moneydj.com/funddj/ya/"
-            f"{pattern}.djhtm?a={code}"
-        )
-
-        r = requests.get(
-            url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-
+        url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
+        r = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         r.raise_for_status()
-
         soup = BeautifulSoup(r.text, "lxml")
-
         table = soup.select_one("#article form table")
 
         if table:
-
             rows = table.find_all("tr")
-
             if len(rows) >= 2:
-
                 cells = rows[1].find_all("td")
-
                 if len(cells) >= 2:
-
-                    nav = (
-                        cells[1]
-                        .get_text(strip=True)
-                        .replace(",", "")
-                    )
-
+                    nav = cells[1].get_text(strip=True).replace(",", "")
                     return float(nav), "ok"
 
         return None, "找不到淨值"
@@ -503,153 +497,93 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fx(currency: str) -> tuple[float | None, str]:
-
+    currency = normalize_text(currency, "TWD")
     if currency == "TWD":
         return 1.0, "ok"
-
     pair = FX_PAIRS.get(currency)
-
     if not pair:
         return None, "未知幣別"
-
     return fetch_yahoo_price(pair)
 
 
-def enrich(df: pd.DataFrame) -> pd.DataFrame:
+def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
+    """
+    通用算法：
+    1. 成本：優先採用 total_cost_input；沒有總投入成本時，用 original_units * avg_cost。
+    2. 市值：一律採用目前持有 units * 最新價格/淨值 * 匯率。
+    3. 不再用總投入成本反推現在股數，避免被 Supabase 舊資料或 0 值弄亂。
+    """
+    original_units = normalize_number(r.get("original_units", 0), 0)
+    units = normalize_number(r.get("units", 0), 0)
+    avg_cost = normalize_number(r.get("avg_cost", 0), 0)
+    total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
 
+    cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
+    value_original_currency = units * latest_price if latest_price is not None else None
+
+    twd_cost = cost_original_currency * fx if fx is not None else None
+    twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
+
+    pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
+    pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
+
+    return {
+        "成本原幣": cost_original_currency,
+        "市值原幣": value_original_currency,
+        "台幣成本": twd_cost,
+        "台幣市值": twd_value,
+        "損益": pnl,
+        "損益率": pnl_rate,
+    }
+
+
+def enrich(df: pd.DataFrame) -> pd.DataFrame:
+    df = ensure_columns(df)
     if df.empty:
         return df
 
     rows = []
 
     for _, r in df.iterrows():
+        currency = normalize_text(r.get("currency", "TWD"), "TWD")
+        asset_type = normalize_text(r.get("asset_type", ""), "")
 
-        currency = r.get("currency", "TWD")
-
-        original_units = float(
-            r.get("original_units")
-            or r.get("units")
-            or 0
-        )
-
-        units = float(
-            r.get("units")
-            or 0
-        )
-
-        avg_cost = float(
-            r.get("avg_cost")
-            or 0
-        )
-
-        total_cost_input = float(
-            r.get("total_cost_input")
-            or 0
-        )
-
-        # 如果沒填單位數，自動由總成本反推
-        if units == 0 and total_cost_input > 0 and avg_cost > 0:
-            units = total_cost_input / avg_cost
-
-        if original_units == 0 and total_cost_input > 0 and avg_cost > 0:
-            original_units = total_cost_input / avg_cost
-
-        if r.get("asset_type") in {"台股", "美股"}:
-
-            price, p_status = fetch_yahoo_price(
-                str(r.get("ticker") or "")
-            )
-
+        if asset_type in {"台股", "美股"}:
+            price, p_status = fetch_yahoo_price(str(r.get("ticker") or ""))
         else:
-
             price, p_status = fetch_fund_nav(
                 str(r.get("fund_code") or ""),
-                str(r.get("fund_pattern") or "")
+                str(r.get("fund_pattern") or ""),
             )
 
         fx, fx_status = fetch_fx(currency)
+        calc = calculate_cost_and_value(r, price, fx)
 
-        original_cost = (
-            total_cost_input
-            if total_cost_input > 0
-            else original_units * avg_cost
-        )
-
-        original_value = (
-            units * price
-            if price is not None
-            else None
-        )
-
-        twd_cost = (
-            original_cost * fx
-            if fx is not None
-            else None
-        )
-
-        twd_value = (
-            original_value * fx
-            if original_value is not None and fx is not None
-            else None
-        )
-
-        pnl = (
-            twd_value - twd_cost
-            if twd_value is not None and twd_cost is not None
-            else None
-        )
-
-        pnl_rate = (
-            pnl / twd_cost
-            if pnl is not None and twd_cost
-            else None
-        )
-
-        monthly_div = (
-            units
-            * float(r.get("monthly_dividend_per_unit") or 0)
-        )
-
-        monthly_div_twd = (
-            monthly_div * fx
-            if fx is not None
-            else None
-        )
+        units = normalize_number(r.get("units", 0), 0)
+        monthly_div = units * normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
+        monthly_div_twd = monthly_div * fx if fx is not None else None
 
         out = dict(r)
-
+        out.update(calc)
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
-            "台幣成本": twd_cost,
-            "台幣市值": twd_value,
-            "損益": pnl,
-            "損益率": pnl_rate,
             "每月配息": monthly_div_twd,
-            "狀態":
-                "✓"
-                if p_status == "ok" and fx_status == "ok"
-                else f"價格:{p_status} 匯率:{fx_status}"
+            "狀態": "✓" if p_status == "ok" and fx_status == "ok" else f"價格:{p_status} 匯率:{fx_status}",
         })
-
         rows.append(out)
 
     return pd.DataFrame(rows)
 
 
 def format_df(df: pd.DataFrame) -> pd.DataFrame:
-
     out = df.copy()
 
     for c in ["即時價格/淨值", "匯率"]:
-
         if c in out:
-            out[c] = out[c].apply(
-                lambda x: money(x, 4)
-            )
+            out[c] = out[c].apply(lambda x: money(x, 4))
 
-    for c in ["台幣成本", "台幣市值", "損益", "每月配息"]:
-
+    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "損益", "每月配息"]:
         if c in out:
             out[c] = out[c].apply(money)
 
@@ -658,83 +592,185 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
 
     rename_map = {
         "sort_order": "排序",
+        "platform": "平台",
+        "asset_type": "類型",
+        "name": "名稱",
+        "ticker": "股票代碼",
+        "fund_code": "基金代號",
+        "fund_pattern": "基金網址類型",
+        "currency": "幣別",
         "original_units": "成本股數",
         "units": "現在股數",
         "avg_cost": "平均成本",
-        "total_cost_input": "投入總成本",
+        "total_cost_input": "總投入成本",
+        "monthly_dividend_per_unit": "每單位月配息",
         "corporate_action": "股數調整備註",
+        "note": "備註",
     }
 
-    out = out.rename(columns=rename_map)
+    return out.rename(columns=rename_map)
 
-    return out
 
 def seed_presets() -> None:
-
     existing = load_positions()
+    if not existing.empty:
+        return
 
-    existing_names = set(
-        existing["name"].astype(str).tolist()
-    ) if not existing.empty else set()
+    sort_order = 1
 
-    for seq, name in enumerate(TW_STOCK_NAMES_DUPLICATE, start=1):
-
-        ticker = TW_PRESETS.get(name, "")
-        
-    if name not in existing_names:
+    for name in TW_STOCK_NAMES_DUPLICATE:
         add_position({
+            "sort_order": sort_order,
             "platform": "台股",
             "asset_type": "台股",
-            "name": f"{name} #{seq:03d}",
-            "ticker": ticker,
+            "name": name,
+            "ticker": TW_PRESETS.get(name, ""),
             "fund_code": "",
             "fund_pattern": "",
             "currency": "TWD",
+            "original_units": 0,
             "units": 0,
+            "corporate_action": "",
             "avg_cost": 0,
+            "total_cost_input": 0,
             "monthly_dividend_per_unit": 0,
             "note": f"預設台股清單：{name}",
         })
+        sort_order += 1
 
-    for seq, (
-        platform,
-        currency,
-        asset_type,
-        name,
-        ticker,
-        fund_code,
-        fund_pattern,
-    ) in enumerate(INVESTMENT_ITEMS_DUPLICATE, start=1):
-
+    for platform, currency, asset_type, name, ticker, fund_code, fund_pattern in INVESTMENT_ITEMS_DUPLICATE:
         add_position({
+            "sort_order": sort_order,
             "platform": platform,
             "asset_type": asset_type,
-            "name": f"{name} #{seq:03d}",
+            "name": name,
             "ticker": ticker,
             "fund_code": fund_code,
             "fund_pattern": fund_pattern,
             "currency": currency,
             "original_units": 0,
             "units": 0,
+            "corporate_action": "",
             "avg_cost": 0,
             "total_cost_input": 0,
             "monthly_dividend_per_unit": 0,
-            "corporate_action": "",
             "note": "預設投資清單",
         })
+        sort_order += 1
 
 
-def editable_platform_table(
-    platform_name: str,
-    current_positions: pd.DataFrame,
-    editor_key: str
-) -> None:
+def build_upload_template(positions: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "sort_order",
+        "platform",
+        "name",
+        "avg_cost",
+        "total_cost_input",
+        "original_units",
+        "units",
+        "monthly_dividend_per_unit",
+        "corporate_action",
+    ]
+    if positions.empty:
+        return pd.DataFrame(columns=cols)
+    return ensure_columns(positions)[cols].sort_values(["sort_order"]).copy()
 
-    st.markdown("#### ✏️ 編輯 / 新增")
-    st.caption(
-        "在這裡 key 成本股數、市值股數、平均成本、股票代碼或基金代號。"
-        "新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。"
+
+def read_uploaded_table(uploaded_file) -> pd.DataFrame:
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".csv"):
+        try:
+            return pd.read_csv(uploaded_file, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, encoding="big5")
+    if filename.endswith((".xlsx", ".xls")):
+        return pd.read_excel(uploaded_file)
+    raise ValueError("只支援 CSV / Excel 檔案")
+
+
+def apply_batch_update(upload_df: pd.DataFrame, current_positions: pd.DataFrame) -> tuple[int, int, list[str]]:
+    sb = supabase_client()
+    current = ensure_columns(current_positions)
+
+    if "sort_order" not in upload_df.columns:
+        raise ValueError("上傳檔案必須包含 sort_order 欄位，因為名稱可能重複。")
+
+    required_cols = ["sort_order", "platform", "name", "avg_cost", "total_cost_input", "original_units", "units"]
+    missing = [c for c in required_cols if c not in upload_df.columns]
+    if missing:
+        raise ValueError("上傳檔案缺少欄位：" + ", ".join(missing))
+
+    updated = 0
+    inserted = 0
+    skipped: list[str] = []
+
+    current_by_order = {}
+    if not current.empty:
+        for _, row in current.iterrows():
+            so = normalize_number(row.get("sort_order", 0), 0)
+            if so:
+                current_by_order[so] = row
+
+    for i, r in upload_df.iterrows():
+        payload = normalize_payload(r)
+        if not payload["name"]:
+            skipped.append(f"第 {i + 2} 列：name 空白")
+            continue
+
+        so = payload["sort_order"]
+        if not so:
+            skipped.append(f"第 {i + 2} 列：sort_order 空白或 0")
+            continue
+
+        old_row = current_by_order.get(so)
+        if old_row is not None:
+            merged = normalize_payload(old_row)
+            merged.update(payload)
+            sb.table("positions").update(merged).eq("id", int(old_row["id"])).execute()
+            updated += 1
+        else:
+            sb.table("positions").insert(payload).execute()
+            inserted += 1
+
+    return updated, inserted, skipped
+
+
+def upload_batch_section(current_positions: pd.DataFrame) -> None:
+    st.markdown("#### 📤 CSV / Excel 批次更新")
+    st.caption("名稱可重複，更新依據是 sort_order。建議先下載目前資料，修改成本與股數後再上傳。")
+
+    template = build_upload_template(current_positions)
+    csv_bytes = template.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+    st.download_button(
+        "⬇️ 下載目前資料批次更新範例 CSV",
+        data=csv_bytes,
+        file_name="positions_upload_template.csv",
+        mime="text/csv",
     )
+
+    uploaded = st.file_uploader("上傳 CSV / Excel", type=["csv", "xlsx", "xls"], key="batch_upload_file")
+
+    if uploaded is not None:
+        try:
+            upload_df = read_uploaded_table(uploaded)
+            st.dataframe(upload_df.head(50), use_container_width=True, hide_index=True)
+
+            if st.button("✅ 執行批次更新", key="run_batch_update"):
+                updated, inserted, skipped = apply_batch_update(upload_df, current_positions)
+                st.success(f"批次更新完成：更新 {updated} 筆，新增 {inserted} 筆，略過 {len(skipped)} 筆。")
+                if skipped:
+                    st.warning("\n".join(skipped[:20]))
+                st.rerun()
+
+        except Exception as e:
+            st.error(f"上傳檔案處理失敗：{e}")
+
+
+def editable_platform_table(platform_name: str, current_positions: pd.DataFrame, editor_key: str) -> None:
+    st.markdown("#### ✏️ 編輯 / 新增")
+    st.caption("新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
 
     cols = [
         "sort_order",
@@ -755,38 +791,31 @@ def editable_platform_table(
         "note",
     ]
 
+    current_positions = ensure_columns(current_positions)
+
     if current_positions.empty:
         base = pd.DataFrame(columns=cols)
     else:
         base = (
-            current_positions[
-                current_positions["platform"] == platform_name
-            ][cols]
+            current_positions[current_positions["platform"] == platform_name][cols]
             .sort_values(["sort_order", "id"], na_position="last")
             .copy()
         )
 
+    next_sort = 1
+    if not current_positions.empty:
+        next_sort = int(current_positions["sort_order"].fillna(0).max()) + 1
+
     blank = {
+        "sort_order": next_sort,
         "id": None,
         "platform": platform_name,
-        "asset_type": (
-            "基金"
-            if platform_name in ["基富通", "渣打基金", "台新基金"]
-            else platform_name
-        ),
+        "asset_type": "基金" if platform_name in ["基富通", "渣打基金", "台新基金"] else platform_name,
         "name": "",
         "ticker": "",
         "fund_code": "",
-        "fund_pattern": (
-            "yp010001"
-            if platform_name in ["基富通", "渣打基金", "台新基金"]
-            else ""
-        ),
-        "currency": (
-            "TWD"
-            if platform_name in ["台股", "基富通"]
-            else "USD"
-        ),
+        "fund_pattern": "yp010001" if platform_name in ["基富通", "渣打基金", "台新基金"] else "",
+        "currency": "TWD" if platform_name in ["台股", "基富通"] else "USD",
         "original_units": 0.0,
         "units": 0.0,
         "corporate_action": "",
@@ -796,22 +825,14 @@ def editable_platform_table(
         "note": "",
     }
 
-    base = pd.concat(
-        [base, pd.DataFrame([blank])],
-        ignore_index=True
-    )
+    base = pd.concat([base, pd.DataFrame([blank])], ignore_index=True)
 
     edited = st.data_editor(
         base,
-
         use_container_width=True,
-
         hide_index=True,
-
         height=360,
-
         num_rows="dynamic",
-
         column_order=[
             "sort_order",
             "platform",
@@ -819,260 +840,115 @@ def editable_platform_table(
             "name",
             "ticker",
             "fund_code",
+            "fund_pattern",
             "currency",
             "original_units",
             "units",
             "avg_cost",
+            "total_cost_input",
             "monthly_dividend_per_unit",
             "corporate_action",
             "note",
         ],
-
         column_config={
-
-            "sort_order": st.column_config.NumberColumn(
-                "排序",
-                step=1,
-            ),
-
-            "platform": st.column_config.SelectboxColumn(
-                "平台",
-                options=PLATFORMS,
-               required=True,
-            ),
-
-            "asset_type": st.column_config.SelectboxColumn(
-                "類型",
-                options=ASSET_TYPES,
-                required=True,
-            ),
+            "sort_order": st.column_config.NumberColumn("排序", step=1),
+            "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
+            "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
+            "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
         },
-
         key=editor_key,
     )
 
-
     c1, c2, c3, c4 = st.columns([1, 1.4, 1.4, 1.4])
 
-    if c1.button(
-        "💾 儲存此頁變更",
-        key=f"save_{editor_key}"
-    ):
-
+    if c1.button("💾 儲存此頁變更", key=f"save_{editor_key}"):
         update_positions(edited)
-
         st.success("已儲存")
-
         st.rerun()
 
-    platform_rows = current_positions[
-        current_positions["platform"] == platform_name
-    ].copy()
+    platform_rows = current_positions[current_positions["platform"] == platform_name].copy()
 
     if not platform_rows.empty:
-
         platform_rows["選項"] = (
-            platform_rows["name"].astype(str)
+            platform_rows["sort_order"].astype(str)
+            + "｜"
+            + platform_rows["name"].astype(str)
             + "｜"
             + platform_rows["ticker"].fillna("").astype(str)
             + platform_rows["fund_code"].fillna("").astype(str)
             + "｜ID "
             + platform_rows["id"].astype(str)
         )
-
         options = [""] + platform_rows["選項"].tolist()
-
     else:
         options = [""]
 
-    copy_choice = c2.selectbox(
-        "複製股票/基金名稱",
-        options,
-        key=f"copy_name_{editor_key}"
-    )
-
-    if c2.button(
-        "📋 複製選取品項",
-        key=f"copybtn_{editor_key}"
-    ) and copy_choice:
-
-        row = platform_rows[
-            platform_rows["選項"] == copy_choice
-        ]
-
+    copy_choice = c2.selectbox("複製股票/基金名稱", options, key=f"copy_name_{editor_key}")
+    if c2.button("📋 複製選取品項", key=f"copybtn_{editor_key}") and copy_choice:
+        row = platform_rows[platform_rows["選項"] == copy_choice]
         if row.empty:
             st.error("找不到此品項")
-
         else:
-
             r = row.iloc[0].to_dict()
-
             r.pop("id", None)
-
             r.pop("選項", None)
-
-            r["name"] = str(r.get("name", "")) + "（複製）"
-
+            r["sort_order"] = next_sort
             add_position(r)
-
             st.success("已複製")
-
             st.rerun()
 
-    sold_choice = c3.selectbox(
-        "賣出 / 結清品項",
-        options,
-        key=f"sold_name_{editor_key}"
-    )
-
-    if c3.button(
-        "✅ 標記賣出 / 結清",
-        key=f"soldbtn_{editor_key}"
-    ) and sold_choice:
-
-        row = platform_rows[
-            platform_rows["選項"] == sold_choice
-        ]
-
+    sold_choice = c3.selectbox("賣出 / 結清品項", options, key=f"sold_name_{editor_key}")
+    if c3.button("✅ 標記賣出 / 結清", key=f"soldbtn_{editor_key}") and sold_choice:
+        row = platform_rows[platform_rows["選項"] == sold_choice]
         if row.empty:
             st.error("找不到此品項")
-
         else:
-
-            mark_position_sold(
-                int(row.iloc[0]["id"])
-            )
-
-            st.success(
-                f"已標記賣出 / 結清：{row.iloc[0]['name']}"
-            )
-
+            mark_position_sold(int(row.iloc[0]["id"]))
+            st.success(f"已標記賣出 / 結清：{row.iloc[0]['name']}")
             st.rerun()
 
-    delete_choice = c4.selectbox(
-        "刪除股票/基金名稱",
-        options,
-        key=f"delete_name_{editor_key}"
-    )
-
-    if c4.button(
-        "🗑️ 刪除選取品項",
-        key=f"deletebtn_{editor_key}"
-    ) and delete_choice:
-
-        row = platform_rows[
-            platform_rows["選項"] == delete_choice
-        ]
-
+    delete_choice = c4.selectbox("刪除股票/基金名稱", options, key=f"delete_name_{editor_key}")
+    if c4.button("🗑️ 刪除選取品項", key=f"deletebtn_{editor_key}") and delete_choice:
+        row = platform_rows[platform_rows["選項"] == delete_choice]
         if row.empty:
             st.error("找不到此品項")
-
         else:
-
-            delete_position(
-                int(row.iloc[0]["id"])
-            )
-
-            st.success(
-                f"已刪除：{row.iloc[0]['name']}"
-            )
-
+            delete_position(int(row.iloc[0]["id"]))
+            st.success(f"已刪除：{row.iloc[0]['name']}")
             st.rerun()
 
 
 st.title("📈 Jenny 投資即時市值系統")
-
-st.caption(
-    f"版本：{APP_VERSION}｜Supabase 永久資料庫"
-)
+st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 try:
-
     seed_presets()
-
 except Exception as e:
-
     st.error(f"Supabase 初始化失敗：{e}")
-
     st.stop()
 
 
 positions = load_positions()
-
 enriched = enrich(positions)
 
-
-total_value = (
-    enriched["台幣市值"].dropna().sum()
-    if not enriched.empty
-    else 0
-)
-
-total_cost = (
-    enriched["台幣成本"].dropna().sum()
-    if not enriched.empty
-    else 0
-)
-
-total_pnl = (
-    enriched["損益"].dropna().sum()
-    if not enriched.empty
-    else 0
-)
-
-total_div = (
-    enriched["每月配息"].dropna().sum()
-    if not enriched.empty
-    else 0
-)
-
-total_rate = (
-    total_pnl / total_cost
-    if total_cost
-    else None
-)
-
+total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
+total_cost = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
+total_pnl = enriched["損益"].dropna().sum() if not enriched.empty and "損益" in enriched else 0
+total_div = enriched["每月配息"].dropna().sum() if not enriched.empty and "每月配息" in enriched else 0
+total_rate = total_pnl / total_cost if total_cost else None
 
 with st.container():
-
-    st.markdown(
-        '<div class="fixed-top"><div class="hero">',
-        unsafe_allow_html=True
-    )
-
+    st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-
-    c1.metric(
-        "總台幣市值",
-        money(total_value),
-        delta=f"{signed_money(total_pnl)} / {pct(total_rate)}"
-    )
-
-    c2.metric(
-        "總台幣成本",
-        money(total_cost)
-    )
-
-    c3.metric(
-        "每月配息",
-        money(total_div)
-    )
-
-    c4.metric(
-        "投資筆數",
-        f"{len(positions):,}"
-    )
-
+    c1.metric("總台幣市值", money(total_value), delta=f"{signed_money(total_pnl)} / {pct(total_rate)}")
+    c2.metric("總台幣成本", money(total_cost))
+    c3.metric("每月配息", money(total_div))
+    c4.metric("投資筆數", f"{len(positions):,}")
     if c5.button("🔄 更新即時價"):
-
         st.cache_data.clear()
-
         st.rerun()
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
-    st.markdown(
-        "</div></div>",
-        unsafe_allow_html=True
-    )
 
 tabs = st.tabs([
     "總覽",
@@ -1082,22 +958,25 @@ tabs = st.tabs([
     "渣打基金",
     "台新基金",
     "匯率",
+    "批次更新",
 ])
 
-
 show_cols = [
-    "id",
+    "sort_order",
     "platform",
     "asset_type",
     "name",
     "ticker",
     "fund_code",
     "currency",
+    "total_cost_input",
     "original_units",
     "units",
     "avg_cost",
     "即時價格/淨值",
     "匯率",
+    "成本原幣",
+    "市值原幣",
     "台幣成本",
     "台幣市值",
     "損益",
@@ -1109,11 +988,9 @@ show_cols = [
 
 
 with tabs[0]:
-
     st.subheader("資產配置")
 
     if not enriched.empty:
-
         summary = (
             enriched.groupby("platform", dropna=False)
             .agg(
@@ -1127,125 +1004,58 @@ with tabs[0]:
         )
 
         summary["損益率"] = summary.apply(
-            lambda r:
-                r["損益"] / r["台幣成本"]
-                if r["台幣成本"]
-                else None,
+            lambda r: r["損益"] / r["台幣成本"] if r["台幣成本"] else None,
             axis=1,
         )
 
         left, right = st.columns([1, 1.7])
 
         with left:
-
-            st.bar_chart(
-                summary.set_index("platform")[["台幣市值"]],
-                height=330,
-            )
+            st.bar_chart(summary.set_index("platform")[["台幣市值"]], height=330)
 
         with right:
-
-            st.dataframe(
-                format_df(summary),
-                use_container_width=True,
-                hide_index=True,
-                height=330,
-            )
+            st.dataframe(format_df(summary), use_container_width=True, hide_index=True, height=330)
 
         st.subheader("全部投資產品")
-
-        st.dataframe(
-            format_df(enriched[show_cols]),
-            use_container_width=True,
-            hide_index=True,
-            height=560,
-        )
+        st.dataframe(format_df(enriched[show_cols]), use_container_width=True, hide_index=True, height=560)
+    else:
+        st.info("目前沒有資料。")
 
 
 for idx, platform in enumerate(PLATFORMS, start=1):
-
     with tabs[idx]:
-
         st.subheader(platform)
 
-        view = (
-            enriched[
-                enriched["platform"] == platform
-            ].copy()
-            if not enriched.empty
-            else pd.DataFrame()
-        )
+        view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
 
         if view.empty:
-
             st.info(f"尚無 {platform} 資料")
-
         else:
-
             m1, m2, m3, m4 = st.columns(4)
-
-            m1.metric(
-                "台幣市值",
-                money(view["台幣市值"].dropna().sum())
-            )
-
-            m2.metric(
-                "台幣成本",
-                money(view["台幣成本"].dropna().sum())
-            )
-
-            m3.metric(
-                "損益",
-                signed_money(view["損益"].dropna().sum())
-            )
-
-            m4.metric(
-                "每月配息",
-                money(view["每月配息"].dropna().sum())
-            )
+            m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
+            m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
+            m3.metric("損益", signed_money(view["損益"].dropna().sum()))
+            m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
 
             st.markdown("#### 即時計算結果")
+            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率")
+            st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
 
-            st.caption(
-                "市值 = 單位數 × 即時價格/淨值 × 匯率"
-            )
-
-            st.dataframe(
-                format_df(view[show_cols]),
-                use_container_width=True,
-                hide_index=True,
-                height=360,
-            )
-
-        editable_platform_table(
-            platform,
-            positions,
-            f"editor_{platform}"
-        )
+        editable_platform_table(platform, positions, f"editor_{platform}")
 
 
 with tabs[6]:
-
     st.subheader("匯率")
-
     rows = []
-
     for cur in CURRENCIES:
-
         rate, status = fetch_fx(cur)
-
         rows.append({
             "幣別": cur,
             "對台幣匯率": money(rate, 4),
-            "狀態":
-                "✓"
-                if status == "ok"
-                else f"⚠ {status}",
+            "狀態": "✓" if status == "ok" else f"⚠ {status}",
         })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    st.dataframe(
-        pd.DataFrame(rows),
-        use_container_width=True,
-        hide_index=True,
-    )
 
+with tabs[7]:
+    upload_batch_section(positions)
