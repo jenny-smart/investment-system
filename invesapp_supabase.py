@@ -1015,6 +1015,7 @@ show_cols = [
     "ticker",
     "fund_code",
     "currency",
+    "original_units",
     "units",
     "avg_cost",
     "即時價格/淨值",
@@ -1024,6 +1025,7 @@ show_cols = [
     "損益",
     "損益率",
     "每月配息",
+    "corporate_action",
     "狀態",
 ]
 
