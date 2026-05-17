@@ -208,7 +208,7 @@ def load_positions() -> pd.DataFrame:
         sb.table("positions")
         .select("*")
         .order("platform")
-        .order("id")
+        .order("sort_order")
         .execute()
     )
 
@@ -659,6 +659,7 @@ def editable_platform_table(
     )
 
     cols = [
+        "sort_order",
         "id",
         "platform",
         "asset_type",
@@ -726,6 +727,10 @@ def editable_platform_table(
         height=360,
         num_rows="dynamic",
         column_config={
+            "sort_order": st.column_config.NumberColumn(
+                "排序",
+                step=1,
+            ),
             "id": st.column_config.NumberColumn(
                 "ID",
                 disabled=True
