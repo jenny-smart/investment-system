@@ -129,7 +129,7 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
-python id="3nkwsv"
+
 st.markdown("""
 <style>
 .stApp {
