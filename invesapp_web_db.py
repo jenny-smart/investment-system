@@ -62,21 +62,45 @@ st.markdown('''<style>
 </style>''', unsafe_allow_html=True)
 
 def conn():
-    c = sqlite3.connect(DB_PATH, check_same_thread=False)
-    c.execute('''CREATE TABLE IF NOT EXISTS positions(
-        id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT, asset_type TEXT, name TEXT, ticker TEXT,
-        fund_code TEXT, fund_pattern TEXT, currency TEXT, units REAL DEFAULT 0, avg_cost REAL DEFAULT 0,
-        monthly_dividend_per_unit REAL DEFAULT 0, note TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
-    c.commit(); return c
-
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    c.execute("PRAGMA busy_timeout=30000")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            name TEXT NOT NULL,
+            ticker TEXT DEFAULT '',
+            fund_code TEXT DEFAULT '',
+            fund_pattern TEXT DEFAULT '',
+            currency TEXT NOT NULL DEFAULT 'TWD',
+            units REAL NOT NULL DEFAULT 0,
+            avg_cost REAL NOT NULL DEFAULT 0,
+            monthly_dividend_per_unit REAL NOT NULL DEFAULT 0,
+            note TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    c.commit()
+    return c
 def load_positions():
     return pd.read_sql_query("SELECT * FROM positions ORDER BY platform,id", conn())
 
 def add_position(row):
-    conn().execute('''INSERT INTO positions(platform,asset_type,name,ticker,fund_code,fund_pattern,currency,units,avg_cost,monthly_dividend_per_unit,note)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)''', (row['platform'],row['asset_type'],row['name'],row.get('ticker',''),row.get('fund_code',''),row.get('fund_pattern',''),row['currency'],row['units'],row['avg_cost'],row['monthly_dividend_per_unit'],row.get('note','')))
-    conn().commit()
-
+    c = conn()
+    try:
+        c.execute("""INSERT INTO positions(platform,asset_type,name,ticker,fund_code,fund_pattern,currency,units,avg_cost,monthly_dividend_per_unit,note)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (
+            row["platform"], row["asset_type"], row["name"], row.get("ticker", ""),
+            row.get("fund_code", ""), row.get("fund_pattern", ""), row["currency"],
+            float(row.get("units", 0) or 0), float(row.get("avg_cost", 0) or 0),
+            float(row.get("monthly_dividend_per_unit", 0) or 0), row.get("note", "")
+        ))
+        c.commit()
+    finally:
+        c.close()
 def update_positions(df):
     c=conn()
     for _,r in df.iterrows():
