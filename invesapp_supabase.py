@@ -237,7 +237,17 @@ def update_positions(df: pd.DataFrame) -> None:
             "fund_code": str(r.get("fund_code", "")).strip(),
             "fund_pattern": str(r.get("fund_pattern", "")).strip(),
             "currency": str(r.get("currency", "TWD")),
-            "units": float(r.get("units", 0) or 0),
+            "original_units": float(
+                r.get("original_units", 0) or 0
+            ),
+
+            "units": float(
+                r.get("units", 0) or 0
+            ),
+
+            "corporate_action": str(
+                r.get("corporate_action", "")
+            ),
             "avg_cost": float(r.get("avg_cost", 0) or 0),
             "monthly_dividend_per_unit": float(
                 r.get("monthly_dividend_per_unit", 0) or 0
@@ -440,7 +450,21 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
         currency = r.get("currency", "TWD")
 
-        units = float(r.get("units") or 0)
+        original_units = float(
+            r.get("original_units")
+            or r.get("units")
+            or 0
+        )
+
+        units = float(
+            r.get("units")
+            or 0
+        )
+
+        avg_cost = float(
+            r.get("avg_cost")
+            or 0
+        )
 
         avg_cost = float(r.get("avg_cost") or 0)
 
@@ -459,7 +483,10 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
         fx, fx_status = fetch_fx(currency)
 
-        original_cost = units * avg_cost
+        original_cost = (
+            original_units
+            * avg_cost
+        )
 
         original_value = (
             units * price
@@ -618,7 +645,7 @@ def editable_platform_table(
 
     st.markdown("#### ✏️ 編輯 / 新增")
     st.caption(
-        "在這裡 key 單位數、平均成本、股票代碼或基金代號。"
+        "在這裡 key 成本股數、市值股數、平均成本、股票代碼或基金代號。"
         "新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。"
     )
 
@@ -631,7 +658,9 @@ def editable_platform_table(
         "fund_code",
         "fund_pattern",
         "currency",
+        "original_units",
         "units",
+        "corporate_action",
         "avg_cost",
         "monthly_dividend_per_unit",
         "note",
@@ -650,22 +679,27 @@ def editable_platform_table(
     blank = {
         "id": None,
         "platform": platform_name,
-        "asset_type":
+        "asset_type": (
             "基金"
             if platform_name in ["基富通", "渣打基金", "台新基金"]
-            else platform_name,
+            else platform_name
+        ),
         "name": "",
         "ticker": "",
         "fund_code": "",
-        "fund_pattern":
+        "fund_pattern": (
             "yp010001"
             if platform_name in ["基富通", "渣打基金", "台新基金"]
-            else "",
-        "currency":
+            else ""
+        ),
+        "currency": (
             "TWD"
             if platform_name in ["台股", "基富通"]
-            else "USD",
+            else "USD"
+        ),
+        "original_units": 0.0,
         "units": 0.0,
+        "corporate_action": "",
         "avg_cost": 0.0,
         "monthly_dividend_per_unit": 0.0,
         "note": "",
@@ -707,6 +741,16 @@ def editable_platform_table(
                 min_value=0,
                 step=1.0,
                 format="%.4f",
+            ),
+            "original_units": st.column_config.NumberColumn(
+                "成本股數",
+                min_value=0,
+                step=1.0,
+                format="%.4f",
+            ),
+
+            "corporate_action": st.column_config.TextColumn(
+                "股數調整備註"
             ),
             "avg_cost": st.column_config.NumberColumn(
                 "平均成本（原幣）",
