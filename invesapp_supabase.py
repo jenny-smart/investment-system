@@ -21,7 +21,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-18-supabase-v7-safe-no-auto-seed"
+APP_VERSION = "2026-05-18-supabase-v9-paste-order-repair"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -733,6 +733,383 @@ def apply_batch_update(upload_df: pd.DataFrame, current_positions: pd.DataFrame)
     return updated, inserted, skipped
 
 
+
+def canonical_order_rows() -> list[dict[str, Any]]:
+    """
+    預設順序表。只用來修復 sort_order，不會修改成本、股數、名稱、代碼。
+    重複名稱用目前資料中的 id 由小到大對應。
+    """
+    rows: list[dict[str, Any]] = []
+    order = 1
+
+    for name in TW_STOCK_NAMES_DUPLICATE:
+        rows.append({
+            "target_order": order,
+            "platform": "台股",
+            "asset_type": "台股",
+            "name": name,
+            "currency": "TWD",
+        })
+        order += 1
+
+    for platform, currency, asset_type, name, ticker, fund_code, fund_pattern in INVESTMENT_ITEMS_DUPLICATE:
+        rows.append({
+            "target_order": order,
+            "platform": platform,
+            "asset_type": asset_type,
+            "name": name,
+            "currency": currency,
+        })
+        order += 1
+
+    return rows
+
+
+def build_sort_repair_preview(current_positions: pd.DataFrame) -> pd.DataFrame:
+    """
+    依照 canonical_order_rows 修復 sort_order。
+    duplicate rows 用 platform + name + currency 分組，按 id 由小到大配對。
+    無法配對的列排到最後，保留原本相對順序。
+    """
+    current = ensure_columns(current_positions).copy()
+    if current.empty:
+        return pd.DataFrame()
+
+    current["_old_sort_order"] = current["sort_order"].apply(lambda x: normalize_number(x, 0))
+    current["_id_sort"] = current["id"].apply(lambda x: normalize_number(x, 999999999))
+    current["_matched"] = False
+    current["_new_sort_order"] = None
+    current["_match_note"] = ""
+
+    # Normalize for matching.
+    current["_match_platform"] = current["platform"].astype(str).str.strip()
+    current["_match_name"] = current["name"].astype(str).str.strip()
+    current["_match_currency"] = current["currency"].astype(str).str.strip()
+
+    # Build queue by key.
+    buckets: dict[tuple[str, str, str], list[int]] = {}
+    for idx, row in current.sort_values(["_id_sort"]).iterrows():
+        key = (
+            normalize_text(row.get("_match_platform", "")),
+            normalize_text(row.get("_match_name", "")),
+            normalize_text(row.get("_match_currency", "")),
+        )
+        buckets.setdefault(key, []).append(idx)
+
+    for target in canonical_order_rows():
+        key = (
+            normalize_text(target["platform"]),
+            normalize_text(target["name"]),
+            normalize_text(target["currency"]),
+        )
+        bucket = buckets.get(key, [])
+        if bucket:
+            idx = bucket.pop(0)
+            current.at[idx, "_new_sort_order"] = target["target_order"]
+            current.at[idx, "_matched"] = True
+            current.at[idx, "_match_note"] = "已依預設清單配對"
+
+    # Unmatched rows go after canonical rows, sorted by old sort then id.
+    next_order = len(canonical_order_rows()) + 1
+    unmatched = current[current["_matched"] == False].sort_values(["_old_sort_order", "_id_sort"])
+    for idx, row in unmatched.iterrows():
+        current.at[idx, "_new_sort_order"] = next_order
+        current.at[idx, "_match_note"] = "未在預設清單，排到最後"
+        next_order += 1
+
+    preview_cols = [
+        "id",
+        "platform",
+        "currency",
+        "name",
+        "_old_sort_order",
+        "_new_sort_order",
+        "_match_note",
+        "ticker",
+        "fund_code",
+        "units",
+        "avg_cost",
+        "total_cost_input",
+    ]
+
+    return current[preview_cols].rename(columns={
+        "_old_sort_order": "目前排序",
+        "_new_sort_order": "修復後排序",
+        "_match_note": "修復狀態",
+    })
+
+
+def apply_sort_repair(preview_df: pd.DataFrame) -> int:
+    if preview_df.empty:
+        return 0
+
+    sb = supabase_client()
+    count = 0
+
+    for _, r in preview_df.iterrows():
+        rid = r.get("id")
+        new_order = r.get("修復後排序")
+        if pd.isna(rid) or pd.isna(new_order):
+            continue
+        sb.table("positions").update({
+            "sort_order": float(new_order)
+        }).eq("id", int(float(rid))).execute()
+        count += 1
+
+    return count
+
+
+
+CURRENCY_ALIAS = {
+    "台幣": "TWD",
+    "新台幣": "TWD",
+    "臺幣": "TWD",
+    "TWD": "TWD",
+    "人民幣": "CNY",
+    "CNY": "CNY",
+    "日幣": "JPY",
+    "日圓": "JPY",
+    "JPY": "JPY",
+    "美金": "USD",
+    "美元": "USD",
+    "美股": "USD",
+    "USD": "USD",
+    "南非幣": "ZAR",
+    "ZAR": "ZAR",
+}
+
+
+def normalize_match_name(value: Any) -> str:
+    return normalize_text(value).lower().replace(" ", "")
+
+
+def parse_pasted_order_text(text: str) -> list[dict[str, Any]]:
+    """
+    解析使用者貼上的三欄清單：
+    平台<TAB或空白>幣別/類別<TAB或空白>名稱
+    完全依貼上順序產生 target_order。
+    """
+    rows: list[dict[str, Any]] = []
+    order = 1
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        if "\t" in line:
+            parts = [p.strip() for p in line.split("\t") if p.strip()]
+        else:
+            # 若沒有 tab，最多切成三段，第三段保留基金全名。
+            parts = line.split(maxsplit=2)
+
+        if len(parts) < 3:
+            continue
+
+        raw_platform, raw_currency, name = parts[0], parts[1], parts[2]
+        currency = CURRENCY_ALIAS.get(raw_currency, raw_currency)
+
+        rows.append({
+            "target_order": order,
+            "raw_platform": raw_platform,
+            "raw_currency": raw_currency,
+            "currency": currency,
+            "name": name.strip(),
+        })
+        order += 1
+
+    return rows
+
+
+def platform_candidates_from_raw(raw_platform: str, raw_currency: str) -> list[str]:
+    raw_platform = normalize_text(raw_platform)
+    raw_currency = normalize_text(raw_currency)
+
+    if raw_platform == "基富通":
+        return ["基富通"]
+
+    if raw_platform == "渣打":
+        if raw_currency == "美股":
+            return ["美股", "渣打"]
+        return ["渣打基金", "渣打"]
+
+    if raw_platform == "台新":
+        return ["台新基金", "台新"]
+
+    return [raw_platform]
+
+
+def build_pasted_sort_repair_preview(current_positions: pd.DataFrame, pasted_text: str) -> pd.DataFrame:
+    current = ensure_columns(current_positions).copy()
+    targets = parse_pasted_order_text(pasted_text)
+
+    if current.empty or not targets:
+        return pd.DataFrame()
+
+    current["_old_sort_order"] = current["sort_order"].apply(lambda x: normalize_number(x, 0))
+    current["_id_sort"] = current["id"].apply(lambda x: normalize_number(x, 999999999))
+    current["_matched"] = False
+    current["_new_sort_order"] = None
+    current["_match_note"] = ""
+
+    # 分桶：平台 + 幣別 + 名稱。名稱忽略大小寫與空格。
+    buckets: dict[tuple[str, str, str], list[int]] = {}
+    for idx, row in current.sort_values(["_id_sort"]).iterrows():
+        key = (
+            normalize_text(row.get("platform", "")),
+            normalize_text(row.get("currency", "")),
+            normalize_match_name(row.get("name", "")),
+        )
+        buckets.setdefault(key, []).append(idx)
+
+    for target in targets:
+        name_key = normalize_match_name(target["name"])
+        currency = normalize_text(target["currency"])
+        candidates = platform_candidates_from_raw(target["raw_platform"], target["raw_currency"])
+
+        matched_idx = None
+        matched_key = None
+
+        for platform in candidates:
+            key = (platform, currency, name_key)
+            if buckets.get(key):
+                matched_idx = buckets[key].pop(0)
+                matched_key = key
+                break
+
+        # 美股名稱可能存在 name=PYPL, ticker=PYPL；若名稱大小寫不同，上面已可配。
+        if matched_idx is not None:
+            current.at[matched_idx, "_new_sort_order"] = target["target_order"]
+            current.at[matched_idx, "_matched"] = True
+            current.at[matched_idx, "_match_note"] = (
+                f"依貼上清單配對：{target['raw_platform']} / {target['raw_currency']}"
+            )
+
+    next_order = len(targets) + 1
+    unmatched = current[current["_matched"] == False].sort_values(["_old_sort_order", "_id_sort"])
+    for idx, row in unmatched.iterrows():
+        current.at[idx, "_new_sort_order"] = next_order
+        current.at[idx, "_match_note"] = "貼上清單未配對，保留在最後"
+        next_order += 1
+
+    preview_cols = [
+        "id",
+        "platform",
+        "currency",
+        "name",
+        "_old_sort_order",
+        "_new_sort_order",
+        "_match_note",
+        "ticker",
+        "fund_code",
+        "units",
+        "avg_cost",
+        "total_cost_input",
+    ]
+
+    return current[preview_cols].rename(columns={
+        "_old_sort_order": "目前排序",
+        "_new_sort_order": "修復後排序",
+        "_match_note": "修復狀態",
+    })
+
+
+def pasted_order_repair_section(current_positions: pd.DataFrame) -> None:
+    st.markdown("#### 📋 依你貼上的原始清單修復排序")
+    st.warning("這裡只會更新 sort_order，不會改成本、股數、名稱、代碼。重複列數完全以你貼上的文字為準。")
+
+    if current_positions.empty:
+        st.info("目前沒有資料可修復。")
+        return
+
+    backup = ensure_columns(current_positions).sort_values(["sort_order", "id"], na_position="last")
+    st.download_button(
+        "⬇️ 先下載完整備份 CSV",
+        data=backup.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+        file_name="positions_backup_before_paste_order_repair.csv",
+        mime="text/csv",
+        key="download_backup_before_paste_order_repair",
+    )
+
+    pasted = st.text_area(
+        "貼上你的原始三欄清單：平台、幣別/類別、名稱",
+        height=320,
+        placeholder="基富通\t台幣\t富蘭克林華美新興國家固定收益基金B-新臺幣\n渣打\t美股\tpypl\n台新\t南非幣\t高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)",
+        key="pasted_order_text",
+    )
+
+    targets = parse_pasted_order_text(pasted)
+    if pasted:
+        st.caption(f"已解析 {len(targets)} 列。這個列數會成為排序修復基準。")
+
+    if not targets:
+        return
+
+    preview = build_pasted_sort_repair_preview(current_positions, pasted)
+
+    if preview.empty:
+        st.error("無法建立預覽，請確認貼上的文字至少有三欄。")
+        return
+
+    st.dataframe(preview, use_container_width=True, hide_index=True, height=520)
+
+    not_matched_count = int(preview["修復狀態"].astype(str).str.contains("未配對").sum())
+    if not_matched_count:
+        st.warning(f"有 {not_matched_count} 筆目前資料未在貼上清單配對，會被排到最後。")
+
+    st.download_button(
+        "⬇️ 下載貼上清單排序修復預覽 CSV",
+        data=preview.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+        file_name="pasted_order_repair_preview.csv",
+        mime="text/csv",
+        key="download_pasted_order_repair_preview",
+    )
+
+    confirm = st.checkbox("我已下載備份，確認只更新 sort_order", key="confirm_pasted_order_repair")
+    if st.button("✅ 套用貼上清單排序", key="apply_pasted_order_repair", disabled=not confirm):
+        n = apply_sort_repair(preview)
+        st.success(f"已更新 {n} 筆 sort_order。")
+        st.rerun()
+
+
+def sort_repair_section(current_positions: pd.DataFrame) -> None:
+    st.markdown("#### 🧭 修復排序")
+    st.warning("這個功能只會更新 sort_order，不會修改成本、股數、名稱、ticker、fund_code。請先下載備份。")
+
+    if current_positions.empty:
+        st.info("目前沒有資料可修復。")
+        return
+
+    backup = ensure_columns(current_positions).sort_values(["sort_order", "id"], na_position="last")
+    st.download_button(
+        "⬇️ 修復前先下載完整備份 CSV",
+        data=backup.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+        file_name="positions_backup_before_sort_repair.csv",
+        mime="text/csv",
+        key="download_backup_before_sort_repair",
+    )
+
+    preview = build_sort_repair_preview(current_positions)
+
+    st.caption("預覽：系統會依預設清單順序重排。重複名稱用 id 由小到大對應。")
+    st.dataframe(preview, use_container_width=True, hide_index=True, height=520)
+
+    csv = preview.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    st.download_button(
+        "⬇️ 下載排序修復預覽 CSV",
+        data=csv,
+        file_name="sort_repair_preview.csv",
+        mime="text/csv",
+        key="download_sort_repair_preview",
+    )
+
+    confirm = st.checkbox("我已下載備份，確認只更新 sort_order", key="confirm_sort_repair")
+    if st.button("✅ 套用排序修復", key="apply_sort_repair", disabled=not confirm):
+        n = apply_sort_repair(preview)
+        st.success(f"已更新 {n} 筆 sort_order。")
+        st.rerun()
+
+
 def upload_batch_section(current_positions: pd.DataFrame) -> None:
     st.markdown("#### 📤 CSV / Excel 批次更新")
     st.caption("名稱可重複，更新依據是 sort_order。建議先下載目前資料，修改成本與股數後再上傳。")
@@ -954,6 +1331,8 @@ tabs = st.tabs([
     "匯率",
     "批次更新",
     "資料安全",
+    "修復排序",
+    "貼上清單修復",
 ])
 
 show_cols = [
@@ -1086,3 +1465,13 @@ with tabs[8]:
             seed_presets()
             st.success("已手動建立預設清單。")
             st.rerun()
+
+
+with tabs[9]:
+    st.subheader("修復排序")
+    sort_repair_section(positions)
+
+
+with tabs[10]:
+    st.subheader("貼上清單修復")
+    pasted_order_repair_section(positions)
