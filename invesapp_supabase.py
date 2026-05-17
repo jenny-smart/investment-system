@@ -249,6 +249,9 @@ def update_positions(df: pd.DataFrame) -> None:
                 r.get("corporate_action", "")
             ),
             "avg_cost": float(r.get("avg_cost", 0) or 0),
+            "total_cost_input": float(
+                r.get("total_cost_input", 0) or 0
+            ),
             "monthly_dividend_per_unit": float(
                 r.get("monthly_dividend_per_unit", 0) or 0
             ),
@@ -466,7 +469,17 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             or 0
         )
 
-        avg_cost = float(r.get("avg_cost") or 0)
+        total_cost_input = float(
+            r.get("total_cost_input")
+            or 0
+        )
+
+        # 如果沒填單位數，自動由總成本反推
+        if units == 0 and total_cost_input > 0 and avg_cost > 0:
+            units = total_cost_input / avg_cost
+
+        if original_units == 0 and total_cost_input > 0 and avg_cost > 0:
+            original_units = total_cost_input / avg_cost
 
         if r.get("asset_type") in {"台股", "美股"}:
 
@@ -484,8 +497,9 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         fx, fx_status = fetch_fx(currency)
 
         original_cost = (
-            original_units
-            * avg_cost
+            total_cost_input
+            if total_cost_input > 0
+            else original_units * avg_cost
         )
 
         original_value = (
@@ -574,6 +588,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         "original_units": "成本股數",
         "units": "現在股數",
         "avg_cost": "平均成本",
+        "total_cost_input": "投入總成本",
         "corporate_action": "股數調整備註",
     }
 
@@ -673,6 +688,7 @@ def editable_platform_table(
         "units",
         "corporate_action",
         "avg_cost",
+        "total_cost_input",
         "monthly_dividend_per_unit",
         "note",
     ]
@@ -712,6 +728,7 @@ def editable_platform_table(
         "units": 0.0,
         "corporate_action": "",
         "avg_cost": 0.0,
+        "total_cost_input": 0.0,
         "monthly_dividend_per_unit": 0.0,
         "note": "",
     }
