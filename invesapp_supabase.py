@@ -672,13 +672,15 @@ def seed_presets() -> None:
 
     existing = load_positions()
 
-    if not existing.empty:
-        return
+    existing_names = set(
+        existing["name"].astype(str).tolist()
+    ) if not existing.empty else set()
 
     for seq, name in enumerate(TW_STOCK_NAMES_DUPLICATE, start=1):
 
         ticker = TW_PRESETS.get(name, "")
-
+        
+    if name not in existing_names:
         add_position({
             "platform": "台股",
             "asset_type": "台股",
