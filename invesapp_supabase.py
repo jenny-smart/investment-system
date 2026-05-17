@@ -331,7 +331,7 @@ def pct(v: Any) -> str:
 
     return f"{n:.2%}"
 
-python id="q8n5mu"
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_yahoo_price(ticker: str) -> tuple[float | None, str]:
 
@@ -543,7 +543,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         out["損益率"] = out["損益率"].apply(pct)
 
     return out
-python
+
 def seed_presets() -> None:
 
     existing = load_positions()
@@ -729,7 +729,7 @@ def editable_platform_table(
         key=editor_key,
     )
 
-python
+
     c1, c2, c3, c4 = st.columns([1, 1.4, 1.4, 1.4])
 
     if c1.button(
@@ -951,7 +951,7 @@ with st.container():
         "</div></div>",
         unsafe_allow_html=True
 
-python
+
 tabs = st.tabs([
     "總覽",
     "台股",
