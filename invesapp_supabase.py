@@ -723,83 +723,51 @@ def editable_platform_table(
 
     edited = st.data_editor(
         base,
+
         use_container_width=True,
+
         hide_index=True,
+
         height=360,
+
         num_rows="dynamic",
+
+        column_order=[
+            "sort_order",
+            "platform",
+            "asset_type",
+            "name",
+            "ticker",
+            "fund_code",
+            "currency",
+            "original_units",
+            "units",
+            "avg_cost",
+            "monthly_dividend_per_unit",
+            "corporate_action",
+            "note",
+        ],
+
         column_config={
+
             "sort_order": st.column_config.NumberColumn(
                 "排序",
                 step=1,
             ),
-            column_order=[
-                "sort_order",
-                "platform",
-                "asset_type",
-                "name",
-                "ticker",
-                "fund_code",
-                "currency",
-                "original_units",
-                "units",
-                "avg_cost",
-                "monthly_dividend_per_unit",
-                "corporate_action",
-                "note",
-            ]
-            "id": st.column_config.NumberColumn(
-                "ID",
-                disabled=True
-            ),
+
             "platform": st.column_config.SelectboxColumn(
                 "平台",
                 options=PLATFORMS,
-                required=True,
+               required=True,
             ),
+
             "asset_type": st.column_config.SelectboxColumn(
                 "類型",
                 options=ASSET_TYPES,
                 required=True,
             ),
-            "currency": st.column_config.SelectboxColumn(
-                "幣別",
-                options=CURRENCIES,
-                required=True,
-            ),
-            "units": st.column_config.NumberColumn(
-                "單位數 / 股數",
-                min_value=0,
-                step=1.0,
-                format="%.4f",
-            ),
-            "original_units": st.column_config.NumberColumn(
-                "成本股數",
-                min_value=0,
-                step=1.0,
-                format="%.4f",
-            ),
-
-            "corporate_action": st.column_config.TextColumn(
-                "股數調整備註"
-            ),
-            "avg_cost": st.column_config.NumberColumn(
-                "平均成本（原幣）",
-                min_value=0,
-                step=0.01,
-                format="%.4f",
-            ),
-            "monthly_dividend_per_unit": st.column_config.NumberColumn(
-                "每單位月配息",
-                min_value=0,
-                step=0.0001,
-                format="%.4f",
-            ),
-            "ticker": st.column_config.TextColumn("股票代碼"),
-            "fund_code": st.column_config.TextColumn("基金代號"),
-            "fund_pattern": st.column_config.TextColumn("基金 pattern"),
-            "name": st.column_config.TextColumn("產品名稱"),
-            "note": st.column_config.TextColumn("備註"),
         },
+
         key=editor_key,
     )
 
