@@ -570,6 +570,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         out["損益率"] = out["損益率"].apply(pct)
 
     rename_map = {
+        "sort_order": "排序",
         "original_units": "成本股數",
         "units": "現在股數",
         "avg_cost": "平均成本",
@@ -613,8 +614,8 @@ def seed_presets() -> None:
         add_position({
             "platform": "美股",
             "asset_type": "美股",
-            "name": name,
-            "ticker": ticker,
+            "name": "產品名稱",
+            "ticker": "股票代碼",
             "fund_code": "",
             "fund_pattern": "",
             "currency": "USD",
@@ -731,6 +732,21 @@ def editable_platform_table(
                 "排序",
                 step=1,
             ),
+            column_order=[
+                "sort_order",
+                "platform",
+                "asset_type",
+                "name",
+                "ticker",
+                "fund_code",
+                "currency",
+                "original_units",
+                "units",
+                "avg_cost",
+                "monthly_dividend_per_unit",
+                "corporate_action",
+                "note",
+            ]
             "id": st.column_config.NumberColumn(
                 "ID",
                 disabled=True
