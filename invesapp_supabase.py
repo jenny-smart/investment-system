@@ -281,6 +281,7 @@ def load_positions() -> pd.DataFrame:
         .select("*")
         .order("platform")
         .order("sort_order")
+        .order("id")
         .execute()
     )
 
@@ -761,6 +762,7 @@ def editable_platform_table(
             current_positions[
                 current_positions["platform"] == platform_name
             ][cols]
+            .sort_values(["sort_order", "id"], na_position="last")
             .copy()
         )
 
