@@ -5,3 +5,4 @@ openpyxl
 supabase
 yfinance
 beautifulsoup4
+lxml
