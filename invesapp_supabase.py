@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -22,7 +23,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-18-supabase-v16-overview-channel-cards"
+APP_VERSION = "2026-05-19-supabase-v17-lot-summary-dividend"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -344,6 +345,8 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     ticker = normalize_text(r.get("ticker", ""), "")
     fund_code = normalize_text(r.get("fund_code", ""), "")
     fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
+    if re.fullmatch(r"[A-Z]\d{5}", fund_code.upper()) and not fund_pattern:
+        fund_pattern = "anue"
 
     if platform == "台股" and not ticker and name in TW_PRESETS:
         ticker = TW_PRESETS.get(name, "")
@@ -459,12 +462,38 @@ def normalize_ticker(ticker: str) -> str:
     return t.upper()
 
 
-def parse_google_finance_price(html: str) -> float | None:
+def parse_google_finance_price(html: str, ticker: str = "", exchange: str = "") -> float | None:
     """
     Google Finance 頁面常見價格格式：
     <div class="YMlKec fxKbKc">$68.12</div>
-    這裡不用依賴 class，直接抓 $ 後面的第一個合理價格。
+    另有初始化資料：["PYPL","NASDAQ"],"PayPal Holdings Inc",0,"USD",[68.12,...]
     """
+    ticker = normalize_ticker(ticker)
+    exchange = normalize_text(exchange).upper()
+
+    if ticker and exchange:
+        anchor = f'["{ticker}","{exchange}"]'
+        anchor_pos = html.find(anchor)
+        if anchor_pos >= 0:
+            around = html[anchor_pos:anchor_pos + 900]
+            match = re.search(
+                r'"[A-Z]{3}",\s*\[\s*([0-9]+(?:\.[0-9]+)?)',
+                around,
+            )
+            if match:
+                val = float(match.group(1))
+                if 0 < val < 100000:
+                    return val
+
+    class_match = re.search(
+        r'class="[^"]*\bYMlKec\b[^"]*\bfxKbKc\b[^"]*"[^>]*>\s*[$A-Z]*\s*([0-9,]+(?:\.[0-9]+)?)',
+        html,
+    )
+    if class_match:
+        val = float(class_match.group(1).replace(",", ""))
+        if 0 < val < 100000:
+            return val
+
     text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)
     text = text.replace(",", "")
 
@@ -509,7 +538,7 @@ def fetch_google_finance_price(ticker: str, exchange: str | None = None) -> tupl
         )
         r.raise_for_status()
 
-        price = parse_google_finance_price(r.text)
+        price = parse_google_finance_price(r.text, ticker, exchange)
         if price is None:
             return None, f"Google 無價格:{ticker}:{exchange}"
 
@@ -581,14 +610,60 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_anue_fund_nav(code: str) -> tuple[float | None, str]:
+    """
+    鉅亨買基金 API。
+    網頁 URL 是 https://www.anuefund.com/fund/detail/A45089，
+    實際淨值資料在 /anuefundApi/FundDetail/FundInfo。
+    """
+    code = normalize_text(code).upper()
+    if not code:
+        return None, "鉅亨無 fund_code"
+
+    try:
+        url = (
+            "https://www.anuefund.com/anuefundApi/FundDetail/FundInfo"
+            f"?fundDetailEnum=FundINFO&FundID={code}"
+        )
+        r = requests.get(
+            url,
+            timeout=20,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": "application/json, text/plain, */*",
+                "Referer": f"https://www.anuefund.com/fund/detail/{code}",
+            },
+        )
+        r.raise_for_status()
+        payload = r.json()
+        header = ((payload.get("data") or {}).get("hearder") or {})
+        nav = to_float(header.get("nav"))
+        if nav is None:
+            return None, f"鉅亨找不到淨值:{code}"
+        return nav, "ok"
+    except Exception as e:
+        return None, f"鉅亨錯誤:{str(e)[:40]}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
     """
-    MoneyDJ 強化版。
+    基金淨值：
+    1. 鉅亨買基金代碼如 A45089 走 Anue API
+    2. 其餘走 MoneyDJ
     URL 範例：
+    https://www.anuefund.com/fund/detail/A45089
     https://www.moneydj.com/funddj/ya/yp010000.djhtm?a=acft94
     """
     code = normalize_text(code)
     pattern = normalize_text(pattern)
+
+    if re.fullmatch(r"[A-Z]\d{5}", code.upper()) or pattern.lower() == "anue":
+        return fetch_anue_fund_nav(code)
 
     if not code or not pattern:
         return None, "無 fund_code/fund_pattern"
@@ -613,7 +688,15 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
         )
 
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(r.content, "lxml", from_encoding="big5")
+
+        header_table = soup.find("table", class_="t01")
+        if header_table is not None:
+            cells = [td.get_text(" ", strip=True).replace(",", "") for td in header_table.find_all("td")]
+            for txt in cells:
+                val = to_float(txt)
+                if val is not None and 0 < val < 10000:
+                    return val, "ok"
 
         candidates: list[float] = []
 
@@ -697,10 +780,114 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
     return float(price), status
 
 
+def parse_year_month(value: Any) -> tuple[int, int] | None:
+    s = normalize_text(value)
+    if not s:
+        return None
+
+    match = re.search(r"(20\d{2})\s*[-/年.]\s*(\d{1,2})", s)
+    if match:
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if 1 <= month <= 12:
+            return year, month
+
+    dt = pd.to_datetime(s, errors="coerce")
+    if pd.notna(dt):
+        return int(dt.year), int(dt.month)
+
+    return None
+
+
+def month_index(year_month: tuple[int, int]) -> int:
+    year, month = year_month
+    return year * 12 + month
+
+
+def current_year_month() -> tuple[int, int]:
+    try:
+        today = pd.Timestamp.now(tz="Asia/Taipei")
+        return int(today.year), int(today.month)
+    except Exception:
+        today = date.today()
+        return today.year, today.month
+
+
+def parse_dividend_schedule(note: Any) -> list[tuple[int, float]]:
+    """
+    從配息備註讀取每單位配息調整紀錄。
+    格式範例：2026-04:0.035; 2026-06:0.032
+    月份代表「配息歸屬月份」，不是入帳月份。
+    """
+    text = normalize_text(note)
+    if not text:
+        return []
+
+    rows: list[tuple[int, float]] = []
+    pattern = re.compile(
+        r"(20\d{2})\s*[-/年.]\s*(\d{1,2})\s*(?:月)?\s*[:=：,，]\s*(-?\d+(?:\.\d+)?)"
+    )
+    for year, month, amount in pattern.findall(text):
+        month_int = int(month)
+        if not 1 <= month_int <= 12:
+            continue
+        rows.append((month_index((int(year), month_int)), float(amount)))
+
+    rows.sort(key=lambda item: item[0])
+    return rows
+
+
+def rate_for_dividend_month(
+    month_idx: int,
+    default_rate: float,
+    schedule: list[tuple[int, float]],
+) -> float:
+    rate = default_rate
+    for effective_month, scheduled_rate in schedule:
+        if effective_month <= month_idx:
+            rate = scheduled_rate
+        else:
+            break
+    return rate
+
+
+def calculate_dividend_totals(r: pd.Series, fx: float | None) -> dict[str, Any]:
+    units = normalize_number(r.get("units", 0), 0)
+    default_rate = normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
+    manual_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    purchase_ym = parse_year_month(r.get("purchase_ym", ""))
+    schedule = parse_dividend_schedule(r.get("dividend_note", ""))
+
+    auto_total_original = 0.0
+    dividend_months = 0
+
+    if purchase_ym and units and fx is not None:
+        start_idx = month_index(purchase_ym)
+        end_idx = month_index(current_year_month()) - 1
+        if end_idx >= start_idx:
+            for ym_idx in range(start_idx, min(end_idx, start_idx + 240) + 1):
+                rate = rate_for_dividend_month(ym_idx, default_rate, schedule)
+                auto_total_original += units * rate
+                dividend_months += 1
+
+    auto_total_twd = auto_total_original * fx if fx is not None else None
+    chosen_total = manual_total if manual_total > 0 else auto_total_twd
+    if chosen_total is None:
+        chosen_total = 0.0
+
+    return {
+        "已領配息輸入": manual_total,
+        "自動累計配息": auto_total_twd,
+        "累計已領配息": chosen_total,
+        "配息月份數": dividend_months,
+    }
+
+
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
     """
     通用算法：
-    1. 成本：優先採用 total_cost_input；沒有總投入成本時，用 original_units * avg_cost。
+    1. 成本：優先採用成本股數 original_units × 成本金額 avg_cost。
+       若沒有成本股數或成本金額，才使用 total_cost_input。
     2. 市值：一律採用目前持有 units * 最新價格/淨值 * 匯率。
     3. 不再用總投入成本反推現在股數，避免被 Supabase 舊資料或 0 值弄亂。
     """
@@ -709,7 +896,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     avg_cost = normalize_number(r.get("avg_cost", 0), 0)
     total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
 
-    cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
+    lot_cost = original_units * avg_cost
+    cost_original_currency = lot_cost if lot_cost > 0 else total_cost_input
     value_original_currency = units * latest_price if latest_price is not None else None
 
     twd_cost = cost_original_currency * fx if fx is not None else None
@@ -718,7 +906,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
 
-    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    dividend_calc = calculate_dividend_totals(r, fx)
+    dividend_received_total = dividend_calc["累計已領配息"]
     total_pnl_with_dividend = (
         pnl + dividend_received_total
         if pnl is not None
@@ -737,7 +926,7 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
         "台幣市值": twd_value,
         "價差損益": pnl,
         "價差損益率": pnl_rate,
-        "累計已領配息": dividend_received_total,
+        **dividend_calc,
         "含息總損益": total_pnl_with_dividend,
         "含息總損益率": total_pnl_rate_with_dividend,
         # 保留舊欄位名稱給既有總覽相容：損益 = 含息總損益
@@ -831,7 +1020,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             "每月配息": monthly_div_twd,
             "狀態":
                 "✓"
-                if p_status == "ok" and fx_status == "ok"
+                if price is not None and fx is not None
                 else f"價格:{p_status} 匯率:{fx_status}",
         })
 
@@ -847,7 +1036,19 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         if c in out:
             out[c] = out[c].apply(lambda x: money(x, 4))
 
-    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "價差損益", "累計已領配息", "含息總損益", "損益", "每月配息"]:
+    for c in [
+        "成本原幣",
+        "市值原幣",
+        "台幣成本",
+        "台幣市值",
+        "價差損益",
+        "已領配息輸入",
+        "自動累計配息",
+        "累計已領配息",
+        "含息總損益",
+        "損益",
+        "每月配息",
+    ]:
         if c in out:
             out[c] = out[c].apply(money)
 
@@ -866,13 +1067,15 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         "currency": "幣別",
         "original_units": "成本股數",
         "units": "現在股數",
-        "avg_cost": "平均成本",
-        "total_cost_input": "總投入成本",
+        "avg_cost": "成本金額/單位",
+        "total_cost_input": "總投入成本(備用)",
         "monthly_dividend_per_unit": "每單位月配息預估",
         "purchase_ym": "購買年月",
         "dividend_received_total": "累計已領配息輸入",
         "dividend_note": "配息備註",
         "corporate_action": "股數調整備註",
+        "配息月份數": "已計配息月數",
+        "批次數": "批次數",
         "note": "備註",
     }
 
@@ -885,8 +1088,12 @@ def seed_presets() -> None:
         return
 
     sort_order = 1
+    seen_tw: set[str] = set()
 
     for name in TW_STOCK_NAMES_DUPLICATE:
+        if name in seen_tw:
+            continue
+        seen_tw.add(name)
         add_position({
             "sort_order": sort_order,
             "platform": "台股",
@@ -909,7 +1116,12 @@ def seed_presets() -> None:
         })
         sort_order += 1
 
+    seen_items: set[tuple[str, str, str, str, str, str, str]] = set()
     for platform, currency, asset_type, name, ticker, fund_code, fund_pattern in INVESTMENT_ITEMS_DUPLICATE:
+        key = (platform, currency, asset_type, name, ticker, fund_code, fund_pattern)
+        if key in seen_items:
+            continue
+        seen_items.add(key)
         add_position({
             "sort_order": sort_order,
             "platform": platform,
@@ -1424,7 +1636,10 @@ def upload_batch_section(current_positions: pd.DataFrame) -> None:
 
 def editable_platform_table(platform_name: str, current_positions: pd.DataFrame, editor_key: str) -> None:
     st.markdown("#### ✏️ 編輯 / 新增")
-    st.caption("新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
+    st.caption(
+        "每列是一筆買入批次：成本 = 成本股數 × 平均成本；市值 = 現在股數 × 即時價。"
+        " 配息備註可填 2026-04:0.035; 2026-06:0.032 記錄調整。"
+    )
 
     cols = [
         "sort_order",
@@ -1583,6 +1798,61 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
 
 
 
+def summarize_by_instrument(enriched: pd.DataFrame) -> pd.DataFrame:
+    if enriched.empty:
+        return pd.DataFrame()
+
+    df = ensure_columns(enriched).copy()
+    group_cols = ["platform", "asset_type", "name", "ticker", "fund_code", "currency"]
+    for col in group_cols:
+        if col not in df:
+            df[col] = ""
+
+    agg_map = {
+        "sort_order": "min",
+        "id": "count",
+        "original_units": "sum",
+        "units": "sum",
+        "avg_cost": "mean",
+        "total_cost_input": "sum",
+        "即時價格/淨值": "first",
+        "匯率": "first",
+        "成本原幣": "sum",
+        "市值原幣": "sum",
+        "台幣成本": "sum",
+        "台幣市值": "sum",
+        "價差損益": "sum",
+        "已領配息輸入": "sum",
+        "自動累計配息": "sum",
+        "累計已領配息": "sum",
+        "含息總損益": "sum",
+        "每月配息": "sum",
+        "配息月份數": "max",
+        "狀態": lambda s: "✓" if (s.astype(str) == "✓").all() else "；".join(sorted(set(s.astype(str)))[:3]),
+    }
+
+    available_agg = {col: func for col, func in agg_map.items() if col in df.columns}
+    summary = (
+        df.groupby(group_cols, dropna=False)
+        .agg(available_agg)
+        .reset_index()
+        .rename(columns={"id": "批次數"})
+    )
+
+    if "含息總損益" in summary and "台幣成本" in summary:
+        summary["含息總損益率"] = summary.apply(
+            lambda r: r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None,
+            axis=1,
+        )
+    if "價差損益" in summary and "台幣成本" in summary:
+        summary["價差損益率"] = summary.apply(
+            lambda r: r["價差損益"] / r["台幣成本"] if r["台幣成本"] else None,
+            axis=1,
+        )
+
+    return summary.sort_values(["sort_order", "platform", "name"], na_position="last")
+
+
 def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     """
     總覽上方卡片：
@@ -1673,8 +1943,20 @@ def render_fx_overview_cards() -> None:
 st.title("📈 Jenny 投資即時市值系統")
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
-with st.expander("資料庫欄位提醒：第一次使用 v15 請先確認 Supabase 欄位"):
+with st.expander("資料庫欄位提醒：請確認 Supabase positions 欄位"):
     st.code("""
+alter table positions
+add column if not exists sort_order numeric default 0;
+
+alter table positions
+add column if not exists original_units numeric default 0;
+
+alter table positions
+add column if not exists total_cost_input numeric default 0;
+
+alter table positions
+add column if not exists corporate_action text default '';
+
 alter table positions
 add column if not exists purchase_ym text default '';
 
@@ -1684,7 +1966,10 @@ add column if not exists dividend_received_total numeric default 0;
 alter table positions
 add column if not exists dividend_note text default '';
 """, language="sql")
-    st.caption("purchase_ym = 購買年月；dividend_received_total = 已實際入帳配息累計台幣；dividend_note = 配息月份 / 入帳月份備註。")
+    st.caption(
+        "purchase_ym = 購買年月；monthly_dividend_per_unit = 每單位月配息；"
+        "dividend_note 可記調整，如 2026-04:0.035; 2026-06:0.032。"
+    )
 
 try:
     positions = load_positions()
@@ -1749,12 +2034,45 @@ show_cols = [
     "台幣市值",
     "價差損益",
     "價差損益率",
+    "已領配息輸入",
+    "自動累計配息",
     "累計已領配息",
+    "配息月份數",
     "含息總損益",
     "含息總損益率",
     "每月配息",
     "dividend_note",
     "corporate_action",
+    "狀態",
+]
+
+summary_show_cols = [
+    "sort_order",
+    "platform",
+    "asset_type",
+    "name",
+    "ticker",
+    "fund_code",
+    "currency",
+    "批次數",
+    "total_cost_input",
+    "original_units",
+    "units",
+    "avg_cost",
+    "即時價格/淨值",
+    "匯率",
+    "成本原幣",
+    "市值原幣",
+    "台幣成本",
+    "台幣市值",
+    "價差損益",
+    "價差損益率",
+    "已領配息輸入",
+    "自動累計配息",
+    "累計已領配息",
+    "含息總損益",
+    "含息總損益率",
+    "每月配息",
     "狀態",
 ]
 
@@ -1772,13 +2090,22 @@ with tabs[0]:
         )
         st.bar_chart(chart_summary.set_index("platform")[["台幣市值"]], height=320)
 
-        st.markdown("### 📋 全部投資產品")
+        instrument_summary = summarize_by_instrument(enriched)
+        st.markdown("### 📋 投資商品彙總")
         st.dataframe(
-            format_df(enriched[show_cols]),
+            format_df(instrument_summary[[c for c in summary_show_cols if c in instrument_summary.columns]]),
             use_container_width=True,
             hide_index=True,
             height=560,
         )
+
+        with st.expander("批次明細（保留成本股數 / 現在股數輸入列）"):
+            st.dataframe(
+                format_df(enriched[show_cols]),
+                use_container_width=True,
+                hide_index=True,
+                height=560,
+            )
     else:
         st.info("目前沒有資料。")
 
@@ -1798,9 +2125,18 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m3.metric("損益", signed_money(view["損益"].dropna().sum()))
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
 
-            st.markdown("#### 即時計算結果")
+            st.markdown("#### 商品彙總")
             st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜含息總損益 = 台幣市值 - 台幣成本 + 累計已領配息")
-            st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
+            platform_summary = summarize_by_instrument(view)
+            st.dataframe(
+                format_df(platform_summary[[c for c in summary_show_cols if c in platform_summary.columns]]),
+                use_container_width=True,
+                hide_index=True,
+                height=300,
+            )
+
+            with st.expander("批次明細"):
+                st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
 
         editable_platform_table(platform, positions, f"editor_{platform}")
 
@@ -1840,17 +2176,17 @@ with tabs[8]:
         )
         st.dataframe(export_df.head(100), use_container_width=True, hide_index=True)
 
-    st.markdown("#### 手動建立預設清單")
-    st.caption("只有在 positions 完全空白，而且你確定要重建預設清單時才按。")
+    st.markdown("#### 手動建立精簡預設清單")
+    st.caption("只建立每個商品一列；之後用複製品項新增不同成本 / 股數批次，避免一開始就產生過多空白重複列。")
 
-    confirm_seed = st.checkbox("我確認 positions 是空的，且我要建立預設清單", key="confirm_manual_seed")
-    if st.button("手動建立預設清單", key="manual_seed_button", disabled=not confirm_seed):
+    confirm_seed = st.checkbox("我確認 positions 是空的，且我要建立精簡預設清單", key="confirm_manual_seed")
+    if st.button("手動建立精簡預設清單", key="manual_seed_button", disabled=not confirm_seed):
         latest = load_positions()
         if not latest.empty:
             st.error("positions 不是空的，已取消建立，避免覆蓋或混入資料。")
         else:
             seed_presets()
-            st.success("已手動建立預設清單。")
+            st.success("已手動建立精簡預設清單。")
             st.rerun()
 
 
@@ -2170,13 +2506,19 @@ def price_test_section() -> None:
             })
 
     with c2:
-        st.markdown("#### MoneyDJ 基金")
+        st.markdown("#### 基金")
         fund_pattern = st.text_input("fund_pattern", value="yp010000", key="test_fund_pattern")
         fund_code = st.text_input("fund_code", value="acft94", key="test_fund_code")
-        if st.button("測試 MoneyDJ 淨值", key="test_moneydj_nav"):
+        st.caption("MoneyDJ 用 acft94 + yp010000；鉅亨用 A45089 + anue。")
+        if st.button("測試基金淨值", key="test_moneydj_nav"):
             nav, status = fetch_fund_nav(fund_code, fund_pattern)
+            fund_url = (
+                f"https://www.anuefund.com/fund/detail/{fund_code}"
+                if fund_pattern.lower() == "anue" or re.fullmatch(r"[A-Z]\d{5}", fund_code.upper())
+                else f"https://www.moneydj.com/funddj/ya/{fund_pattern}.djhtm?a={fund_code}"
+            )
             st.write({
-                "url": f"https://www.moneydj.com/funddj/ya/{fund_pattern}.djhtm?a={fund_code}",
+                "url": fund_url,
                 "nav": nav,
                 "status": status,
             })

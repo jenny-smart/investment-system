@@ -1,7 +1,4 @@
 streamlit
 requests
 pandas
-yfinance
-beautifulsoup4
-lxml
-supabase
+openpyxl
