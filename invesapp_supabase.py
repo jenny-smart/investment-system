@@ -22,7 +22,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-18-supabase-v14-google-finance-fallback"
+APP_VERSION = "2026-05-18-supabase-v16-overview-channel-cards"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -318,6 +318,9 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "avg_cost": 0.0,
         "total_cost_input": 0.0,
         "monthly_dividend_per_unit": 0.0,
+        "purchase_ym": "",
+        "dividend_received_total": 0.0,
+        "dividend_note": "",
         "note": "",
     }
     out = df.copy()
@@ -360,6 +363,9 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "avg_cost": normalize_number(r.get("avg_cost", 0), 0),
         "total_cost_input": normalize_number(r.get("total_cost_input", 0), 0),
         "monthly_dividend_per_unit": normalize_number(r.get("monthly_dividend_per_unit", 0), 0),
+        "purchase_ym": normalize_text(r.get("purchase_ym", ""), ""),
+        "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
+        "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
     }
 
@@ -712,13 +718,31 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
 
+    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    total_pnl_with_dividend = (
+        pnl + dividend_received_total
+        if pnl is not None
+        else None
+    )
+    total_pnl_rate_with_dividend = (
+        total_pnl_with_dividend / twd_cost
+        if total_pnl_with_dividend is not None and twd_cost
+        else None
+    )
+
     return {
         "成本原幣": cost_original_currency,
         "市值原幣": value_original_currency,
         "台幣成本": twd_cost,
         "台幣市值": twd_value,
-        "損益": pnl,
-        "損益率": pnl_rate,
+        "價差損益": pnl,
+        "價差損益率": pnl_rate,
+        "累計已領配息": dividend_received_total,
+        "含息總損益": total_pnl_with_dividend,
+        "含息總損益率": total_pnl_rate_with_dividend,
+        # 保留舊欄位名稱給既有總覽相容：損益 = 含息總損益
+        "損益": total_pnl_with_dividend,
+        "損益率": total_pnl_rate_with_dividend,
     }
 
 
@@ -823,12 +847,13 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         if c in out:
             out[c] = out[c].apply(lambda x: money(x, 4))
 
-    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "損益", "每月配息"]:
+    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "價差損益", "累計已領配息", "含息總損益", "損益", "每月配息"]:
         if c in out:
             out[c] = out[c].apply(money)
 
-    if "損益率" in out:
-        out["損益率"] = out["損益率"].apply(pct)
+    for rate_col in ["價差損益率", "含息總損益率", "損益率"]:
+        if rate_col in out:
+            out[rate_col] = out[rate_col].apply(pct)
 
     rename_map = {
         "sort_order": "排序",
@@ -843,7 +868,10 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         "units": "現在股數",
         "avg_cost": "平均成本",
         "total_cost_input": "總投入成本",
-        "monthly_dividend_per_unit": "每單位月配息",
+        "monthly_dividend_per_unit": "每單位月配息預估",
+        "purchase_ym": "購買年月",
+        "dividend_received_total": "累計已領配息輸入",
+        "dividend_note": "配息備註",
         "corporate_action": "股數調整備註",
         "note": "備註",
     }
@@ -874,6 +902,9 @@ def seed_presets() -> None:
             "avg_cost": 0,
             "total_cost_input": 0,
             "monthly_dividend_per_unit": 0,
+            "purchase_ym": "",
+            "dividend_received_total": 0,
+            "dividend_note": "",
             "note": f"預設台股清單：{name}",
         })
         sort_order += 1
@@ -894,6 +925,9 @@ def seed_presets() -> None:
             "avg_cost": 0,
             "total_cost_input": 0,
             "monthly_dividend_per_unit": 0,
+            "purchase_ym": "",
+            "dividend_received_total": 0,
+            "dividend_note": "",
             "note": "預設投資清單",
         })
         sort_order += 1
@@ -909,6 +943,9 @@ def build_upload_template(positions: pd.DataFrame) -> pd.DataFrame:
         "original_units",
         "units",
         "monthly_dividend_per_unit",
+        "purchase_ym",
+        "dividend_received_total",
+        "dividend_note",
         "corporate_action",
     ]
     if positions.empty:
@@ -1405,6 +1442,9 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         "avg_cost",
         "total_cost_input",
         "monthly_dividend_per_unit",
+        "purchase_ym",
+        "dividend_received_total",
+        "dividend_note",
         "note",
     ]
 
@@ -1439,6 +1479,9 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         "avg_cost": 0.0,
         "total_cost_input": 0.0,
         "monthly_dividend_per_unit": 0.0,
+        "purchase_ym": "",
+        "dividend_received_total": 0.0,
+        "dividend_note": "",
         "note": "",
     }
 
@@ -1463,7 +1506,10 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             "units",
             "avg_cost",
             "total_cost_input",
+            "purchase_ym",
+            "dividend_received_total",
             "monthly_dividend_per_unit",
+            "dividend_note",
             "corporate_action",
             "note",
         ],
@@ -1535,8 +1581,110 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             st.rerun()
 
 
+
+
+def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
+    """
+    總覽上方卡片：
+    顯示每個投資管道的台幣市值、台幣成本、含息損益、損益率。
+    """
+    st.markdown("### 💎 所有投資管道總覽")
+
+    if enriched.empty:
+        st.info("目前沒有資料。")
+        return
+
+    summary = (
+        enriched.groupby("platform", dropna=False)
+        .agg(
+            台幣成本=("台幣成本", "sum"),
+            台幣市值=("台幣市值", "sum"),
+            含息總損益=("含息總損益", "sum"),
+            累計已領配息=("累計已領配息", "sum"),
+            筆數=("id", "count"),
+        )
+        .reset_index()
+    )
+
+    summary["含息總損益率"] = summary.apply(
+        lambda r: r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None,
+        axis=1,
+    )
+
+    order = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
+    summary["_order"] = summary["platform"].apply(
+        lambda x: order.index(x) if x in order else 999
+    )
+    summary = summary.sort_values(["_order", "platform"])
+
+    card_cols = st.columns(5)
+
+    icons = {
+        "台股": "📈",
+        "美股": "🇺🇸",
+        "基富通": "🟧",
+        "渣打基金": "🏦",
+        "台新基金": "🟥",
+    }
+
+    for i, (_, r) in enumerate(summary.iterrows()):
+        platform = r["platform"]
+        value = r["台幣市值"] or 0
+        cost = r["台幣成本"] or 0
+        pnl = r["含息總損益"] or 0
+        rate = r["含息總損益率"]
+
+        with card_cols[i % 5]:
+            st.metric(
+                f"{icons.get(platform, '💼')} {platform}",
+                money(value),
+                delta=f"{signed_money(pnl)} / {pct(rate)}",
+            )
+            st.caption(
+                f"成本 {money(cost)}｜已領息 {money(r['累計已領配息'])}｜{int(r['筆數'])} 筆"
+            )
+
+    st.markdown("#### 📊 投資管道明細")
+    display = summary.drop(columns=["_order"])
+    st.dataframe(
+        format_df(display),
+        use_container_width=True,
+        hide_index=True,
+        height=260,
+    )
+
+
+def render_fx_overview_cards() -> None:
+    st.markdown("### 💱 匯率總覽")
+
+    fx_cols = st.columns(len(CURRENCIES))
+
+    for i, cur in enumerate(CURRENCIES):
+        rate, status = fetch_fx(cur)
+
+        with fx_cols[i]:
+            st.metric(
+                cur,
+                money(rate, 4),
+                delta="ok" if status == "ok" else status,
+            )
+
+
 st.title("📈 Jenny 投資即時市值系統")
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
+
+with st.expander("資料庫欄位提醒：第一次使用 v15 請先確認 Supabase 欄位"):
+    st.code("""
+alter table positions
+add column if not exists purchase_ym text default '';
+
+alter table positions
+add column if not exists dividend_received_total numeric default 0;
+
+alter table positions
+add column if not exists dividend_note text default '';
+""", language="sql")
+    st.caption("purchase_ym = 購買年月；dividend_received_total = 已實際入帳配息累計台幣；dividend_note = 配息月份 / 入帳月份備註。")
 
 try:
     positions = load_positions()
@@ -1554,9 +1702,9 @@ total_rate = total_pnl / total_cost if total_cost else None
 with st.container():
     st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總台幣市值", money(total_value), delta=f"{signed_money(total_pnl)} / {pct(total_rate)}")
+    c1.metric("總台幣市值", money(total_value), delta=f"含息損益 {signed_money(total_pnl)} / {pct(total_rate)}")
     c2.metric("總台幣成本", money(total_cost))
-    c3.metric("每月配息", money(total_div))
+    c3.metric("預估每月配息", money(total_div))
     c4.metric("投資筆數", f"{len(positions):,}")
     if c5.button("🔄 更新即時價"):
         st.cache_data.clear()
@@ -1592,51 +1740,45 @@ show_cols = [
     "original_units",
     "units",
     "avg_cost",
+    "purchase_ym",
     "即時價格/淨值",
     "匯率",
     "成本原幣",
     "市值原幣",
     "台幣成本",
     "台幣市值",
-    "損益",
-    "損益率",
+    "價差損益",
+    "價差損益率",
+    "累計已領配息",
+    "含息總損益",
+    "含息總損益率",
     "每月配息",
+    "dividend_note",
     "corporate_action",
     "狀態",
 ]
 
 
 with tabs[0]:
-    st.subheader("資產配置")
+    render_channel_overview_cards(enriched)
+    render_fx_overview_cards()
 
+    st.markdown("### 📈 資產配置圖")
     if not enriched.empty:
-        summary = (
+        chart_summary = (
             enriched.groupby("platform", dropna=False)
-            .agg(
-                台幣成本=("台幣成本", "sum"),
-                台幣市值=("台幣市值", "sum"),
-                損益=("損益", "sum"),
-                每月配息=("每月配息", "sum"),
-                筆數=("id", "count"),
-            )
+            .agg(台幣市值=("台幣市值", "sum"))
             .reset_index()
         )
+        st.bar_chart(chart_summary.set_index("platform")[["台幣市值"]], height=320)
 
-        summary["損益率"] = summary.apply(
-            lambda r: r["損益"] / r["台幣成本"] if r["台幣成本"] else None,
-            axis=1,
+        st.markdown("### 📋 全部投資產品")
+        st.dataframe(
+            format_df(enriched[show_cols]),
+            use_container_width=True,
+            hide_index=True,
+            height=560,
         )
-
-        left, right = st.columns([1, 1.7])
-
-        with left:
-            st.bar_chart(summary.set_index("platform")[["台幣市值"]], height=330)
-
-        with right:
-            st.dataframe(format_df(summary), use_container_width=True, hide_index=True, height=330)
-
-        st.subheader("全部投資產品")
-        st.dataframe(format_df(enriched[show_cols]), use_container_width=True, hide_index=True, height=560)
     else:
         st.info("目前沒有資料。")
 
@@ -1657,7 +1799,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
 
             st.markdown("#### 即時計算結果")
-            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜南非幣自動使用 ZAR/TWD")
+            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜含息總損益 = 台幣市值 - 台幣成本 + 累計已領配息")
             st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
 
         editable_platform_table(platform, positions, f"editor_{platform}")
@@ -1793,6 +1935,9 @@ def infer_asset_from_pasted(raw_platform: str, raw_currency: str, name: str) -> 
         "avg_cost": 0,
         "total_cost_input": 0,
         "monthly_dividend_per_unit": 0,
+        "purchase_ym": "",
+        "dividend_received_total": 0,
+        "dividend_note": "",
         "note": f"依原始清單重建：{raw_platform} / {raw_currency}",
     }
 
@@ -1827,6 +1972,9 @@ def build_reset_seed_df_from_pasted(pasted_text: str) -> pd.DataFrame:
         "units",
         "avg_cost",
         "monthly_dividend_per_unit",
+        "purchase_ym",
+        "dividend_received_total",
+        "dividend_note",
         "corporate_action",
         "note",
     ]
@@ -1870,6 +2018,9 @@ def rebuild_positions_from_seed_df(seed_df: pd.DataFrame) -> int:
         "avg_cost",
         "total_cost_input",
         "monthly_dividend_per_unit",
+        "purchase_ym",
+        "dividend_received_total",
+        "dividend_note",
         "note",
     ]
 
@@ -1904,6 +2055,8 @@ def force_zero_all_positions() -> int:
         "avg_cost": 0,
         "total_cost_input": 0,
         "monthly_dividend_per_unit": 0,
+        "dividend_received_total": 0,
+        "dividend_note": "",
         "corporate_action": "",
     }
 
