@@ -130,6 +130,10 @@ FUND_PRESETS = {
     "ANZH2": ("高盛新興市場債券Y南非幣對沖（月配）","yp010001","ZAR","台新基金"),
 }
 
+ANUE_FUND_CODE_MAP = {
+    "acft94": "A45089",
+}
+
 INVESTMENT_ITEMS_DUPLICATE = [
     ('基富通', 'TWD', '基金', '富蘭克林華美新興國家固定收益基金B-新臺幣', '', 'acft94', 'yp010000'),
     ('基富通', 'TWD', '基金', '富蘭克林華美新興國家固定收益基金B-新臺幣', '', 'acft94', 'yp010000'),
@@ -698,16 +702,14 @@ def fetch_anue_fund_nav(code: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
-    """
-    基金淨值：
-    1. 鉅亨買基金代碼如 A45089 走 Anue API
-    2. 其餘走 MoneyDJ
-    URL 範例：
-    https://www.anuefund.com/fund/detail/A45089
-    https://www.moneydj.com/funddj/ya/yp010000.djhtm?a=acft94
-    """
     code = normalize_text(code)
     pattern = normalize_text(pattern)
+
+    anue_code = ANUE_FUND_CODE_MAP.get(code.lower())
+    if anue_code:
+        price, status = fetch_anue_fund_nav(anue_code)
+        if price is not None:
+            return price, "Anue"
 
     if re.fullmatch(r"[A-Z]\d{5}", code.upper()) or pattern.lower() == "anue":
         return fetch_anue_fund_nav(code)
@@ -743,7 +745,7 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
             for txt in cells:
                 val = to_float(txt)
                 if val is not None and 0 < val < 10000:
-                    return val, "ok"
+                    return val, "MoneyDJ"
 
         candidates: list[float] = []
 
@@ -763,7 +765,7 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
         ]
 
         if decimal_candidates:
-            return float(decimal_candidates[0]), "ok"
+            return float(decimal_candidates[0]), "MoneyDJ"
 
         text = soup.get_text(" ", strip=True).replace(",", "")
         nums = re.findall(r"(?<!\d)(\d+\.\d+)(?!\d)", text)
@@ -771,7 +773,7 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
         for n in nums:
             val = float(n)
             if 0 < val < 10000:
-                return val, "ok"
+                return val, "MoneyDJ"
 
         return None, f"MoneyDJ 找不到淨值:{code}"
 
