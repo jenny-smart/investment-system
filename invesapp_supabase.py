@@ -326,6 +326,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "dividend_received_total": 0.0,
         "dividend_note": "",
         "note": "",
+        "manual_nav": 0.0,
     }
     out = df.copy()
     for col, default in defaults.items():
@@ -421,6 +422,7 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
         "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
+        "manual_nav": normalize_number(r.get("manual_nav", 0), 0),
     }
 
 
@@ -944,6 +946,11 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
                 fund_code,
                 fund_pattern,
             )
+            manual_nav = normalize_number(r.get("manual_nav", 0), 0)
+
+            if (price is None or price <= 0) and manual_nav > 0:
+                price = manual_nav
+                p_status = "手動淨值"
 
         fx, fx_status = fetch_fx(currency)
 
