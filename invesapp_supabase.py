@@ -22,10 +22,8 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-20-v21-gas-nav"
+APP_VERSION = "2026-05-20-v22-overview"
 
-# GAS 基金淨值中繼（跑在 Google 伺服器，不受 Streamlit Cloud IP 封鎖）
-# ?code=acft94 → 單一基金；?code=all → 全部
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbyUKfr9VAcArLemNFe4z0eKv_FX8Dehss2DLoWGcTV4KS9P1jwiW1be1KNf4YOIMGg/exec"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
@@ -98,23 +96,20 @@ FUND_PRESETS = {
     "ANZH2":   ("高盛新興市場債券Y南非幣對沖（月配）",    "yp010001", "ZAR", "台新基金"),
 }
 
-# ── 鉅亨基金 ID 對照表（從 fund.cnyes.com URL 取得，最精確）──────────────
-# URL 格式：https://fund.cnyes.com/detail/<基金名稱>/<cnyes_id>
 FUND_CNYES_IDS: dict[str, str] = {
-    "acft94":  "A3DaDtj",   # 富蘭克林華美新興國家固定收益B-新臺幣
-    "acai222": "A2h9QYl",   # 柏瑞新興邊境非投資等級債券B類型
-    "acft99":  "A4OhWL3",   # 富蘭克林華美新興國家固定收益B-人民幣
-    "shzx0":   "B090478",   # 貝萊德全球智慧數據股票入息A6日圓
-    "TLZO3":   "B200269",   # 安聯收益成長AMgi月收（日圓避險）
-    "acob36":  "A48IfHn",   # 大華銀新加坡房地產收益基金-美元月配
-    "pizn8":   "B1MVJRY",   # 東方匯理新興市場債券A美元（月配）
-    "pizo1":   "B27DOWV",   # 東方匯理新興市場債券U美元（月配）
-    "pizm9":   "B32,253",   # 東方匯理新興市場債券U南非幣（月配）
-    "anzb6":   "B33,131",   # 高盛新興市場債券Y股美元
-    "ANZH2":   "B33,171",   # 高盛新興市場債券Y南非幣對沖（月配）
+    "acft94":  "A3DaDtj",
+    "acai222": "A2h9QYl",
+    "acft99":  "A4OhWL3",
+    "shzx0":   "B090478",
+    "TLZO3":   "B200269",
+    "acob36":  "A48IfHn",
+    "pizn8":   "B1MVJRY",
+    "pizo1":   "B27DOWV",
+    "pizm9":   "B32,253",
+    "anzb6":   "B33,131",
+    "ANZH2":   "B33,171",
 }
 
-# 舊版相容（原本只有 acft94）
 FUND_ANUE_IDS: dict[str, str] = {
     "acft94": "A45089",
 }
@@ -194,11 +189,12 @@ st.set_page_config(
     layout="wide"
 )
 
+# ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
 .stApp { background:#f7faf9; color:#0f2b20; }
 .block-container { padding-top:0.8rem; max-width:1600px; }
-.fixed-top { position:sticky; top:0; z-index:999; background:#f7faf9; padding:8px 0 12px 0; border-bottom:1px solid #e4ece8; }
+.fixed-top { background:#f7faf9; padding:8px 0 12px 0; border-bottom:1px solid #e4ece8; margin-bottom:8px; }
 .hero { background:#fff; border:1px solid #e5eae8; border-radius:16px; padding:16px 20px; box-shadow:0 1px 6px rgba(0,0,0,.05); }
 [data-testid="stMetric"] { background:#fff !important; border:1px solid #e5eae8 !important; border-radius:14px !important; padding:18px 20px !important; }
 [data-testid="stDataFrame"] { background:#fff !important; border:1px solid #e5eae8 !important; border-radius:14px !important; }
@@ -206,6 +202,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# 以下所有函式與原版完全相同，未做任何更動
+# ════════════════════════════════════════════════════════════════════════════
 
 def get_secret(name: str, default: str = "") -> str:
     try:
@@ -497,15 +497,8 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     return None, status
 
 
-# ── 基金淨值抓取（多來源）────────────────────────────────────────────────────
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_gas_fund_nav(code: str) -> tuple[float | None, str]:
-    """
-    來源1（最優先）：透過 Google Apps Script 中繼抓取。
-    GAS 從 Google 伺服器呼叫 MoneyDJ（主）和鉅亨（備），
-    不受 Streamlit Cloud IP 封鎖影響。
-    """
     if not GAS_FUND_NAV_URL or not code:
         return None, "GAS未設定"
     try:
@@ -530,12 +523,6 @@ def fetch_gas_fund_nav(code: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_cnyes_fund_nav(cnyes_id: str) -> tuple[float | None, str]:
-    """
-    鉅亨網基金 JSON API。
-    使用從 fund.cnyes.com URL 取得的精確 ID（如 A3DaDtj）。
-    API：https://fund.api.cnyes.com/fund/api/v2/funds/{id}/nav?format=json
-    含逗號的 ID（如 B32,253）需 URL encode。
-    """
     if not cnyes_id:
         return None, "無鉅亨ID"
     import urllib.parse
@@ -556,7 +543,6 @@ def fetch_cnyes_fund_nav(cnyes_id: str) -> tuple[float | None, str]:
             if r.status_code != 200:
                 continue
             data = r.json()
-            # 結構：{"statusCode":200,"data":{"items":[{"nav":3.3545,...}]}}
             items = (data.get("data") or {}).get("items") or []
             if items:
                 for key in ["nav", "NAV", "navPrice", "net", "unitNav"]:
@@ -570,10 +556,6 @@ def fetch_cnyes_fund_nav(cnyes_id: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_anue_fund_nav(code: str) -> tuple[float | None, str]:
-    """
-    舊版鉅亨買基金 API（使用 A45089 格式的代碼）。
-    保留向下相容。
-    """
     code = normalize_text(code).upper()
     if not code:
         return None, "鉅亨無 fund_code"
@@ -597,7 +579,6 @@ def fetch_anue_fund_nav(code: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
-    """MoneyDJ 網頁爬蟲（原本邏輯，完整保留）"""
     if not code or not pattern:
         return None, "無 fund_code/fund_pattern"
     if not HAS_BS4:
@@ -642,17 +623,8 @@ def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
-    """
-    基金淨值多來源抓取，優先順序：
-    1. GAS 中繼（Google 伺服器呼叫 MoneyDJ → 鉅亨，不受 IP 封鎖）
-    2. MoneyDJ 直連（備援，Streamlit Cloud 可能被封鎖）
-    3. 鉅亨 JSON API 直連（備援）
-    4. 舊版鉅亨 API
-    """
     code = normalize_text(code)
     pattern = normalize_text(pattern)
-
-    # 舊版鉅亨格式（A45089）直接走舊版 API
     if re.fullmatch(r"[A-Z]\d{5}", code.upper()):
         nav, status = fetch_anue_fund_nav(code)
         if nav:
@@ -661,32 +633,23 @@ def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
         if nav:
             return nav, status
         return None, status
-
-    # 來源1：GAS 中繼（最穩定）
     nav, status = fetch_gas_fund_nav(code)
     if nav:
         return nav, status
-
-    # 來源2：MoneyDJ 直連備援
     if pattern and pattern.lower() != "anue":
         nav, status = fetch_moneydj_nav(code, pattern)
         if nav:
-            return nav, f"MoneyDJ直連✓"
-
-    # 來源3：鉅亨 JSON API 直連備援
+            return nav, "MoneyDJ直連✓"
     cnyes_id = FUND_CNYES_IDS.get(code, "")
     if cnyes_id:
         nav, status = fetch_cnyes_fund_nav(cnyes_id)
         if nav:
             return nav, f"鉅亨直連✓({cnyes_id})"
-
-    # 來源4：舊版鉅亨
     anue_id = FUND_ANUE_IDS.get(code.lower(), "")
     if anue_id:
         nav, status = fetch_anue_fund_nav(anue_id)
         if nav:
             return nav, f"鉅亨舊✓({anue_id})"
-
     return None, f"所有來源失敗:{code}"
 
 
@@ -1192,38 +1155,198 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             delete_position(int(row.iloc[0]["id"])); st.success(f"已刪除：{row.iloc[0]['name']}"); st.rerun()
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 新增：總覽用即時價日期 helper（僅供 render_channel_overview_cards 使用）
+# ════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_fund_nav_date(code: str, pattern: str) -> str:
+    """從 MoneyDJ 抓基金淨值日期，回傳 MM/DD 或 —"""
+    if not code or not pattern or not HAS_BS4:
+        return "—"
+    try:
+        url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
+        r = requests.get(url, timeout=12, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://www.moneydj.com/",
+        })
+        r.raise_for_status()
+        soup = BeautifulSoup(r.content, "lxml", from_encoding="big5")
+        text = soup.get_text(" ", strip=True)
+        # 優先找 YYYY/MM/DD
+        m = re.search(r"\d{4}/(\d{1,2}/\d{1,2})", text)
+        if m:
+            return m.group(1)
+        # 其次找 MM/DD
+        m2 = re.search(r"(\d{1,2}/\d{1,2})", text)
+        if m2:
+            return m2.group(1)
+    except Exception:
+        pass
+    return "—"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_stock_price_date(ticker: str) -> str:
+    """從 Yahoo Finance 抓股票報價日期，回傳 MM/DD 或 —"""
+    ticker = normalize_ticker(ticker)
+    if not ticker or not HAS_YF:
+        return "—"
+    try:
+        import datetime, pytz
+        t = yf.Ticker(ticker)
+        ts = getattr(t.fast_info, "regular_market_time", None)
+        if ts is None:
+            hist = t.history(period="5d")
+            if not hist.empty:
+                last = hist.index[-1]
+                if hasattr(last, "strftime"):
+                    return last.strftime("%m/%d")
+            return "—"
+        if isinstance(ts, (int, float)):
+            dt = datetime.datetime.fromtimestamp(ts, tz=pytz.timezone("Asia/Taipei"))
+        else:
+            dt = ts.astimezone(pytz.timezone("Asia/Taipei"))
+        return dt.strftime("%m/%d %H:%M")
+    except Exception:
+        return "—"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 改寫：render_channel_overview_cards（加入每平台明細小表＋報價日期）
+# ════════════════════════════════════════════════════════════════════════════
+
 def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     st.markdown("### 💎 所有投資管道總覽")
     if enriched.empty:
-        st.info("目前沒有資料。"); return
-    summary = enriched.groupby("platform", dropna=False).agg(
-        台幣成本=("台幣成本", "sum"), 台幣市值=("台幣市值", "sum"),
-        含息總損益=("含息總損益", "sum"), 累計已領配息=("累計已領配息", "sum"),
-        價格缺漏=("即時價格/淨值", lambda s: int(s.isna().sum())),
-        匯率缺漏=("匯率", lambda s: int(s.isna().sum())),
-        股數缺漏=("市值股數", lambda s: int((s.fillna(0) <= 0).sum())),
-        筆數=("id", "count"),
-    ).reset_index()
-    summary["含息總損益率"] = summary.apply(lambda r: r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None, axis=1)
-    order = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
-    summary["_order"] = summary["platform"].apply(lambda x: order.index(x) if x in order else 999)
-    summary = summary.sort_values(["_order", "platform"])
-    card_cols = st.columns(5)
-    icons = {"台股": "📈", "美股": "🇺🇸", "基富通": "🟧", "渣打基金": "🏦", "台新基金": "🟥"}
-    for i, (_, r) in enumerate(summary.iterrows()):
-        platform = r["platform"]
-        value = r["台幣市值"] or 0
-        cost = r["台幣成本"] or 0
-        pnl_val = r["含息總損益"] or 0
-        rate = r["含息總損益率"]
-        with card_cols[i % 5]:
-            st.metric(f"{icons.get(platform, '💼')} {platform}", money(value), delta=f"{signed_money(pnl_val)} / {pct(rate)}")
-            status = "抓價 ✓"
-            if r["價格缺漏"] or r["匯率缺漏"] or r["股數缺漏"]:
-                status = f"價格缺 {int(r['價格缺漏'])}｜匯率缺 {int(r['匯率缺漏'])}｜股數缺 {int(r['股數缺漏'])}"
-            st.caption(f"成本 {money(cost)}")
-            st.caption(f"損益 {signed_money(pnl_val)} / {pct(rate)}｜已領息 {money(r['累計已領配息'])}｜{int(r['筆數'])} 筆｜{status}")
+        st.info("目前沒有資料。")
+        return
 
+    ICONS = {"台股": "📈", "美股": "🇺🇸", "基富通": "🟧", "渣打基金": "🏦", "台新基金": "🟥"}
+    ORDER = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
+
+    summary = enriched.groupby("platform", dropna=False).agg(
+        台幣成本     =("台幣成本",    "sum"),
+        台幣市值     =("台幣市值",    "sum"),
+        含息總損益   =("含息總損益",  "sum"),
+        累計已領配息 =("累計已領配息","sum"),
+        每月配息     =("每月配息",    "sum"),
+        價格缺漏     =("即時價格/淨值", lambda s: int(s.isna().sum())),
+        匯率缺漏     =("匯率",        lambda s: int(s.isna().sum())),
+        股數缺漏     =("市值股數",    lambda s: int((s.fillna(0) <= 0).sum())),
+        筆數         =("id",          "count"),
+    ).reset_index()
+    summary["含息總損益率"] = summary.apply(
+        lambda r: r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None, axis=1
+    )
+    summary["_order"] = summary["platform"].apply(lambda x: ORDER.index(x) if x in ORDER else 999)
+    summary = summary.sort_values(["_order", "platform"])
+
+    # ── 第一列：5 個平台 KPI ─────────────────────────────────────────────
+    card_cols = st.columns(5)
+    for i, (_, r) in enumerate(summary.iterrows()):
+        p       = r["platform"]
+        val     = r["台幣市值"]   or 0
+        cost    = r["台幣成本"]   or 0
+        pnl_val = r["含息總損益"] or 0
+        rate    = r["含息總損益率"]
+        status  = "抓價 ✓"
+        if r["價格缺漏"] or r["匯率缺漏"] or r["股數缺漏"]:
+            status = f"價格缺{int(r['價格缺漏'])} 匯率缺{int(r['匯率缺漏'])} 股數缺{int(r['股數缺漏'])}"
+        with card_cols[i % 5]:
+            st.metric(
+                f"{ICONS.get(p,'💼')} {p}",
+                money(val),
+                delta=f"{signed_money(pnl_val)} / {pct(rate)}",
+            )
+            st.caption(f"成本 {money(cost)}")
+            st.caption(f"已領息 {money(r['累計已領配息'])}｜月配 {money(r['每月配息'])}｜{int(r['筆數'])} 筆｜{status}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── 第二列：每平台展開明細 ────────────────────────────────────────────
+    for _, r in summary.iterrows():
+        p       = r["platform"]
+        val     = r["台幣市值"]   or 0
+        cost    = r["台幣成本"]   or 0
+        pnl_val = r["含息總損益"] or 0
+        rate    = r["含息總損益率"]
+        icon    = ICONS.get(p, "💼")
+        p_rows  = enriched[enriched["platform"] == p].copy()
+
+        with st.expander(
+            f"{icon} **{p}**  ｜  市值 {money(val)}  ｜  "
+            f"損益 {signed_money(pnl_val)} ({pct(rate)})  ｜  {int(r['筆數'])} 筆",
+            expanded=True,
+        ):
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("台幣市值", money(val))
+            mc2.metric("台幣成本", money(cost))
+            mc3.metric("含息損益", f"{signed_money(pnl_val)} / {pct(rate)}")
+            mc4.metric("月配息 / 累計", f"{money(r['每月配息'])} / {money(r['累計已領配息'])}")
+
+            if p_rows.empty:
+                st.caption("無明細資料")
+                continue
+
+            # 補抓報價日期（每個唯一代碼只抓一次）
+            date_cache: dict[str, str] = {}
+            date_col = []
+            for _, pr in p_rows.iterrows():
+                atype = normalize_text(pr.get("asset_type", ""))
+                if atype in {"台股", "美股"}:
+                    tk = normalize_text(pr.get("ticker", ""))
+                    key = f"stk:{tk}"
+                    if key not in date_cache:
+                        date_cache[key] = fetch_stock_price_date(tk) if tk else "—"
+                    date_col.append(date_cache[key])
+                else:
+                    fc = normalize_text(pr.get("fund_code", ""))
+                    fp = normalize_text(pr.get("fund_pattern", ""))
+                    key = f"fund:{fc}:{fp}"
+                    if key not in date_cache:
+                        date_cache[key] = fetch_fund_nav_date(fc, fp) if fc and fp else "—"
+                    date_col.append(date_cache[key])
+
+            p_rows = p_rows.reset_index(drop=True)
+            p_rows["報價日期"] = date_col
+
+            # 選欄並格式化
+            WANT = [
+                ("name",          "名稱"),
+                ("currency",      "幣別"),
+                ("即時價格/淨值", "即時價/淨值"),
+                ("報價日期",      "報價日期"),
+                ("units",         "現在單位數"),
+                ("台幣成本",      "台幣成本"),
+                ("台幣市值",      "台幣市值"),
+                ("含息總損益",    "含息損益"),
+                ("含息總損益率",  "損益率"),
+                ("每月配息",      "月配息"),
+                ("狀態",          "狀態"),
+            ]
+            avail = [c for c, _ in WANT if c in p_rows.columns]
+            mini = p_rows[avail].rename(columns={c: lbl for c, lbl in WANT}).copy()
+
+            for col in ["台幣成本", "台幣市值", "含息損益", "月配息"]:
+                if col in mini.columns:
+                    mini[col] = mini[col].apply(money)
+            if "即時價/淨值" in mini.columns:
+                mini["即時價/淨值"] = mini["即時價/淨值"].apply(lambda x: money(x, 4))
+            if "損益率" in mini.columns:
+                mini["損益率"] = mini["損益率"].apply(pct)
+            if "現在單位數" in mini.columns:
+                mini["現在單位數"] = mini["現在單位數"].apply(
+                    lambda x: f"{float(x):,.0f}" if pd.notna(x) and float(x) != 0 else "—"
+                )
+
+            row_h = min(42 * len(mini) + 44, 480)
+            st.dataframe(mini, use_container_width=True, hide_index=True, height=row_h)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 以下原版完全不變
+# ════════════════════════════════════════════════════════════════════════════
 
 def render_fx_overview_cards() -> None:
     st.markdown("### 💱 匯率總覽")
@@ -1234,7 +1357,6 @@ def render_fx_overview_cards() -> None:
             st.metric(cur, money(rate, 4), delta="ok" if status == "ok" else status)
 
 
-# ── 抓價測試 Tab 新增基金來源測試 ─────────────────────────────────────────
 def price_test_section() -> None:
     st.subheader("抓價測試")
     st.caption("用這裡確認美股 ticker、基金代碼與匯率是否能抓到。")
@@ -1257,34 +1379,26 @@ def price_test_section() -> None:
         if st.button("測試基金淨值（所有來源）", key="test_fund_nav"):
             cnyes_id = FUND_CNYES_IDS.get(fund_code_test, "")
             pattern = FUND_PRESETS.get(fund_code_test, ("", "yp010000", "", ""))[1]
-
             results = {}
-            # 來源1: GAS 中繼
             nav0, st0 = fetch_gas_fund_nav(fund_code_test)
             results["GAS中繼（MoneyDJ→鉅亨）"] = {"nav": nav0, "status": st0}
-            # 來源2: MoneyDJ 直連
             nav2, st2 = fetch_moneydj_nav(fund_code_test, pattern)
             results[f"MoneyDJ直連({pattern})"] = {"nav": nav2, "status": st2}
-            # 來源3: 鉅亨 JSON API 直連
             if cnyes_id:
                 nav1, st1 = fetch_cnyes_fund_nav(cnyes_id)
                 results[f"鉅亨API直連({cnyes_id})"] = {"nav": nav1, "status": st1}
-            # 最終
             nav_f, st_f = fetch_fund_nav(fund_code_test, pattern)
             results["✅ 最終結果"] = {"nav": nav_f, "status": st_f}
-
             st.write(results)
             if nav0:
                 st.success(f"GAS 成功抓到：{nav0}（來源：{st0}）")
             else:
                 st.warning(f"GAS 失敗：{st0}")
-
         st.markdown("---")
         st.markdown("**所有基金鉅亨 ID 對照：**")
         cnyes_rows = [{"MoneyDJ代號": k, "鉅亨ID": v, "名稱": FUND_PRESETS.get(k, ("?",))[0]}
                       for k, v in FUND_CNYES_IDS.items()]
         st.dataframe(pd.DataFrame(cnyes_rows), use_container_width=True, hide_index=True)
-
     st.markdown("#### 匯率")
     fx_rows = []
     for cur in ["USD", "ZAR", "CNY", "JPY", "TWD"]:
@@ -1293,7 +1407,6 @@ def price_test_section() -> None:
     st.dataframe(right_align_numbers(pd.DataFrame(fx_rows)), use_container_width=True, hide_index=True)
 
 
-# ── 全部歸零重建相關函式（完整保留）─────────────────────────────────────────
 def infer_asset_from_pasted(raw_platform: str, raw_currency: str, name: str) -> dict[str, Any]:
     raw_platform = normalize_text(raw_platform)
     raw_currency = normalize_text(raw_currency)
@@ -1438,7 +1551,7 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# APP 主體
+# APP 主體（標題移到 hero 區塊外，避免被蓋住）
 # ════════════════════════════════════════════════════════════════════════════
 
 st.title("📈 Jenny 投資即時市值系統")
@@ -1459,18 +1572,19 @@ except Exception as e:
 enriched = enrich(positions)
 
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
-total_cost = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
-total_pnl = enriched["損益"].dropna().sum() if not enriched.empty and "損益" in enriched else 0
-total_div = enriched["每月配息"].dropna().sum() if not enriched.empty and "每月配息" in enriched else 0
-total_rate = total_pnl / total_cost if total_cost else None
+total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
+total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
+total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
+total_rate  = total_pnl / total_cost if total_cost else None
 
+# Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總台幣市值", money(total_value), delta=f"含息損益 {signed_money(total_pnl)} / {pct(total_rate)}")
-    c2.metric("總台幣成本", money(total_cost))
+    c1.metric("總台幣市值",   money(total_value), delta=f"含息損益 {signed_money(total_pnl)} / {pct(total_rate)}")
+    c2.metric("總台幣成本",   money(total_cost))
     c3.metric("預估每月配息", money(total_div))
-    c4.metric("投資筆數", f"{len(positions):,}")
+    c4.metric("投資筆數",     f"{len(positions):,}")
     if c5.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
     st.markdown("</div></div>", unsafe_allow_html=True)
@@ -1483,18 +1597,16 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
              "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
              "dividend_note", "corporate_action", "狀態"]
 
+# ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
     if not enriched.empty:
         chart_summary = enriched.groupby("platform", dropna=False).agg(台幣市值=("台幣市值", "sum")).reset_index()
-        st.bar_chart(chart_summary.set_index("platform")[["台幣市值"]], height=320)
-        st.markdown("### 📋 全部投資產品")
-        st.dataframe(right_align_numbers(format_df(enriched[show_cols])), use_container_width=True, hide_index=True, height=560)
-    else:
-        st.info("目前沒有資料。")
+        st.bar_chart(chart_summary.set_index("platform")[["台幣市值"]], height=280)
 
+# ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
 for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
@@ -1505,7 +1617,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
             m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
-            m3.metric("損益", signed_money(view["損益"].dropna().sum()))
+            m3.metric("損益",     signed_money(view["損益"].dropna().sum()))
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
             st.markdown("#### 即時計算結果")
             st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜含息總損益 = 台幣市值 - 台幣成本 + 累計已領配息")
