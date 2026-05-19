@@ -2,7 +2,3 @@ streamlit
 requests
 pandas
 openpyxl
-supabase
-yfinance
-beautifulsoup4
-lxml
