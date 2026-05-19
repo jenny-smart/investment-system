@@ -966,6 +966,14 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             currency = "JPY"
 
         asset_type = normalize_text(r.get("asset_type", ""))
+        platform = normalize_text(r.get("platform", ""))
+
+        if platform == "美股":
+            asset_type = "美股"
+        elif platform == "台股":
+            asset_type = "台股"
+        elif platform in ["基富通", "渣打基金", "台新基金"]:
+            asset_type = "基金"
 
         # 美股 / 台股
         if asset_type in {"台股", "美股"}:
