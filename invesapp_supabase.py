@@ -22,7 +22,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-19-supabase-v17-market-price"
+APP_VERSION = "2026-05-19-supabase-v18-market-value-units"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -330,6 +330,54 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def infer_fund_fields(
+    name: Any,
+    fund_code: Any = "",
+    fund_pattern: Any = "",
+) -> tuple[str, str]:
+    code = normalize_text(fund_code)
+    pattern = normalize_text(fund_pattern)
+
+    if re.fullmatch(r"[A-Z]\d{5}", code.upper()):
+        return code.upper(), pattern or "anue"
+
+    for preset_code, (_, preset_pattern, _, _) in FUND_PRESETS.items():
+        if code and preset_code.lower() == code.lower():
+            return preset_code, pattern or preset_pattern
+
+    if code and pattern:
+        return code, pattern
+
+    clean_name = normalize_text(name)
+
+    rules = [
+        ("acft94", "yp010000", ["富蘭克林華美新興國家固定收益"], ["新臺幣", "新台幣"]),
+        ("acai222", "yp010000", ["柏瑞新興邊境非投資等級債券"], []),
+        ("acft99", "yp010000", ["富蘭克林華美新興國家固定收益"], ["人民幣"]),
+        ("shzx0", "yp010001", ["貝萊德全球智慧數據股票入息"], []),
+        ("TLZO3", "yp010001", ["安聯收益成長"], []),
+        ("acob36", "yp010000", ["大華銀新加坡房地產收益"], []),
+        ("pizn8", "yp010001", ["東方匯理", "新興市場債券A美元"], []),
+        ("pizo1", "yp010001", ["東方匯理"], ["新興市場債券U 美元", "新興市場債券Ｕ 美元", "新興市場債券U美元"]),
+        ("pizm9", "yp010001", ["東方匯理", "南非幣"], []),
+        ("anzb6", "yp010001", ["高盛新興市場債券基金Y股美元"], []),
+        ("ANZH2", "yp010001", ["高盛新興市場債券基金Ｙ", "南非幣"], []),
+    ]
+
+    for preset_code, preset_pattern, must_terms, any_terms in rules:
+        if not all(term in clean_name for term in must_terms):
+            continue
+        if any_terms and not any(term in clean_name for term in any_terms):
+            continue
+        return code or preset_code, pattern or preset_pattern
+
+    for preset_code, (preset_name, preset_pattern, _, _) in FUND_PRESETS.items():
+        if preset_name and (preset_name in clean_name or clean_name in preset_name):
+            return code or preset_code, pattern or preset_pattern
+
+    return code, pattern
+
+
 def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     platform = normalize_text(r.get("platform", "台股"), "台股")
     asset_type = normalize_text(r.get("asset_type", ""), "")
@@ -344,8 +392,8 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     ticker = normalize_text(r.get("ticker", ""), "")
     fund_code = normalize_text(r.get("fund_code", ""), "")
     fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
-    if re.fullmatch(r"[A-Z]\d{5}", fund_code.upper()) and not fund_pattern:
-        fund_pattern = "anue"
+    if asset_type == "基金" or platform in ["基富通", "渣打基金", "台新基金"]:
+        fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
 
     if platform == "台股" and not ticker and name in TW_PRESETS:
         ticker = TW_PRESETS.get(name, "")
@@ -783,16 +831,20 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     """
     通用算法：
     1. 成本：優先採用 total_cost_input；沒有總投入成本時，用 original_units * avg_cost。
-    2. 市值：一律採用目前持有 units * 最新價格/淨值 * 匯率。
+    2. 市值：優先採用目前持有 units * 最新價格/淨值 * 匯率。
+       若 units 尚未填但 original_units 有值，且不是已賣出/結清，先用 original_units 避免現值整欄為 0。
     3. 不再用總投入成本反推現在股數，避免被 Supabase 舊資料或 0 值弄亂。
     """
     original_units = normalize_number(r.get("original_units", 0), 0)
     units = normalize_number(r.get("units", 0), 0)
     avg_cost = normalize_number(r.get("avg_cost", 0), 0)
     total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
+    note = normalize_text(r.get("note", ""))
+    is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
+    market_units = units if units > 0 or is_closed else original_units
 
     cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
-    value_original_currency = units * latest_price if latest_price is not None else None
+    value_original_currency = market_units * latest_price if latest_price is not None else None
 
     twd_cost = cost_original_currency * fx if fx is not None else None
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
@@ -822,6 +874,7 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
         "累計已領配息": dividend_received_total,
         "含息總損益": total_pnl_with_dividend,
         "含息總損益率": total_pnl_rate_with_dividend,
+        "市值股數": market_units,
         # 保留舊欄位名稱給既有總覽相容：損益 = 含息總損益
         "損益": total_pnl_with_dividend,
         "損益率": total_pnl_rate_with_dividend,
@@ -875,6 +928,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
             fund_code = normalize_text(r.get("fund_code", ""))
             fund_pattern = normalize_text(r.get("fund_pattern", ""))
+            fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
 
             price, p_status = fetch_fund_nav(
                 fund_code,
@@ -904,6 +958,9 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         out = dict(r)
 
         out["currency"] = currency
+        if asset_type == "基金":
+            out["fund_code"] = fund_code
+            out["fund_pattern"] = fund_pattern
 
         out.update(calc)
 
@@ -948,6 +1005,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         "currency": "幣別",
         "original_units": "成本股數",
         "units": "現在股數",
+        "市值股數": "市值股數",
         "avg_cost": "平均成本",
         "total_cost_input": "總投入成本",
         "monthly_dividend_per_unit": "每單位月配息預估",
@@ -959,6 +1017,45 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     return out.rename(columns=rename_map)
+
+
+def right_align_numbers(df: pd.DataFrame) -> Any:
+    if df.empty:
+        return df
+
+    numeric_cols: list[str] = []
+    numeric_name_keywords = [
+        "排序",
+        "成本",
+        "股數",
+        "投入",
+        "價格",
+        "淨值",
+        "匯率",
+        "市值",
+        "損益",
+        "配息",
+        "筆數",
+        "rate",
+        "率",
+    ]
+
+    for col in df.columns:
+        if any(key in str(col) for key in numeric_name_keywords):
+            numeric_cols.append(col)
+            continue
+
+        sample = df[col].dropna().astype(str).head(20)
+        if sample.empty:
+            continue
+        matches = sample.str.match(r"^\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?%?\s*$|^\s*-\s*$")
+        if matches.mean() >= 0.8:
+            numeric_cols.append(col)
+
+    if not numeric_cols:
+        return df
+
+    return df.style.set_properties(subset=numeric_cols, **{"text-align": "right"})
 
 
 def seed_presets() -> None:
@@ -1413,7 +1510,7 @@ def pasted_order_repair_section(current_positions: pd.DataFrame) -> None:
         st.error("無法建立預覽，請確認貼上的文字至少有三欄。")
         return
 
-    st.dataframe(preview, use_container_width=True, hide_index=True, height=520)
+    st.dataframe(right_align_numbers(preview), use_container_width=True, hide_index=True, height=520)
 
     not_matched_count = int(preview["修復狀態"].astype(str).str.contains("未配對").sum())
     if not_matched_count:
@@ -1454,7 +1551,7 @@ def sort_repair_section(current_positions: pd.DataFrame) -> None:
     preview = build_sort_repair_preview(current_positions)
 
     st.caption("預覽：系統會依預設清單順序重排。重複名稱用 id 由小到大對應。")
-    st.dataframe(preview, use_container_width=True, hide_index=True, height=520)
+    st.dataframe(right_align_numbers(preview), use_container_width=True, hide_index=True, height=520)
 
     csv = preview.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
     st.download_button(
@@ -1491,7 +1588,7 @@ def upload_batch_section(current_positions: pd.DataFrame) -> None:
     if uploaded is not None:
         try:
             upload_df = read_uploaded_table(uploaded)
-            st.dataframe(upload_df.head(50), use_container_width=True, hide_index=True)
+            st.dataframe(right_align_numbers(upload_df.head(50)), use_container_width=True, hide_index=True)
 
             if st.button("✅ 執行批次更新", key="run_batch_update"):
                 updated, inserted, skipped = apply_batch_update(upload_df, current_positions)
@@ -1682,6 +1779,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             累計已領配息=("累計已領配息", "sum"),
             價格缺漏=("即時價格/淨值", lambda s: int(s.isna().sum())),
             匯率缺漏=("匯率", lambda s: int(s.isna().sum())),
+            股數缺漏=("市值股數", lambda s: int((s.fillna(0) <= 0).sum())),
             筆數=("id", "count"),
         )
         .reset_index()
@@ -1718,14 +1816,21 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         with card_cols[i % 5]:
             st.metric(
                 f"{icons.get(platform, '💼')} {platform}",
-                f"{money(value)} / {money(cost)}",
+                money(value),
                 delta=f"{signed_money(pnl)} / {pct(rate)}",
             )
             status = "抓價 ✓"
-            if r["價格缺漏"] or r["匯率缺漏"]:
-                status = f"價格缺 {int(r['價格缺漏'])}｜匯率缺 {int(r['匯率缺漏'])}"
+            if r["價格缺漏"] or r["匯率缺漏"] or r["股數缺漏"]:
+                status = (
+                    f"價格缺 {int(r['價格缺漏'])}｜"
+                    f"匯率缺 {int(r['匯率缺漏'])}｜"
+                    f"股數缺 {int(r['股數缺漏'])}"
+                )
             st.caption(
-                f"現值 / 成本｜損益 / 淨利率｜已領息 {money(r['累計已領配息'])}｜{int(r['筆數'])} 筆｜{status}"
+                f"成本 {money(cost)}"
+            )
+            st.caption(
+                f"損益 / 淨利率 {signed_money(pnl)} / {pct(rate)}｜已領息 {money(r['累計已領配息'])}｜{int(r['筆數'])} 筆｜{status}"
             )
 
 
@@ -1814,6 +1919,7 @@ show_cols = [
     "total_cost_input",
     "original_units",
     "units",
+    "市值股數",
     "avg_cost",
     "purchase_ym",
     "即時價格/淨值",
@@ -1849,7 +1955,7 @@ with tabs[0]:
 
         st.markdown("### 📋 全部投資產品")
         st.dataframe(
-            format_df(enriched[show_cols]),
+            right_align_numbers(format_df(enriched[show_cols])),
             use_container_width=True,
             hide_index=True,
             height=560,
@@ -1875,7 +1981,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
 
             st.markdown("#### 即時計算結果")
             st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜含息總損益 = 台幣市值 - 台幣成本 + 累計已領配息")
-            st.dataframe(format_df(view[show_cols]), use_container_width=True, hide_index=True, height=360)
+            st.dataframe(right_align_numbers(format_df(view[show_cols])), use_container_width=True, hide_index=True, height=360)
 
         editable_platform_table(platform, positions, f"editor_{platform}")
 
@@ -1890,7 +1996,7 @@ with tabs[6]:
             "對台幣匯率": money(rate, 4),
             "狀態": "✓" if status == "ok" else f"⚠ {status}",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(right_align_numbers(pd.DataFrame(rows)), use_container_width=True, hide_index=True)
 
 
 with tabs[7]:
@@ -1913,7 +2019,7 @@ with tabs[8]:
             mime="text/csv",
             key="download_positions_backup_safe",
         )
-        st.dataframe(export_df.head(100), use_container_width=True, hide_index=True)
+        st.dataframe(right_align_numbers(export_df.head(100)), use_container_width=True, hide_index=True)
 
     st.markdown("#### 手動建立預設清單")
     st.caption("只有在 positions 完全空白，而且你確定要重建預設清單時才按。")
@@ -2178,7 +2284,7 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 
     if not seed_df.empty:
         st.success(f"已解析 {len(seed_df)} 筆，將以這些資料重建。")
-        st.dataframe(seed_df, use_container_width=True, hide_index=True, height=520)
+        st.dataframe(right_align_numbers(seed_df), use_container_width=True, hide_index=True, height=520)
 
         st.download_button(
             "⬇️ 下載即將重建的乾淨清單 CSV",
@@ -2267,7 +2373,7 @@ def price_test_section() -> None:
     for cur in ["USD", "ZAR", "CNY", "JPY", "TWD"]:
         rate, status = fetch_fx(cur)
         fx_rows.append({"currency": cur, "rate": rate, "status": status})
-    st.dataframe(pd.DataFrame(fx_rows), use_container_width=True, hide_index=True)
+    st.dataframe(right_align_numbers(pd.DataFrame(fx_rows)), use_container_width=True, hide_index=True)
 
 
 with tabs[12]:
