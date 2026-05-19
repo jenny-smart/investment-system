@@ -966,6 +966,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         out = dict(r)
 
         out["currency"] = currency
+        out["asset_type"] = asset_type
         if asset_type == "基金":
             out["fund_code"] = fund_code
             out["fund_pattern"] = fund_pattern
