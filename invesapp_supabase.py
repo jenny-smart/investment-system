@@ -1176,11 +1176,11 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
 
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 總覽：仿 Google Sheet 格式  v25
-# 順序：美股 → 基富通 → 渣打基金 → 台新基金 → 台股（最後）
+# 順序：台股 → 美股 → 基富通 → 渣打基金 → 台新基金
 # 修正：xyz 消失 / 台股 TypeError / 日期顯示 / 欄位對齊
 # ════════════════════════════════════════════════════════════════════════════
 
-OVERVIEW_ORDER = ["美股", "基富通", "渣打基金", "台新基金", "台股"]
+OVERVIEW_ORDER = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
 PLATFORM_ICONS = {"台股": "📈", "美股": "🇺🇸", "基富通": "🟧", "渣打基金": "🏦", "台新基金": "🟥"}
 
 # 子平台群組定義（sub_label, currency_filter）
@@ -1491,6 +1491,33 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     if enriched.empty:
         st.info("目前沒有資料。")
         return
+
+    # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
+    # 即時計算，不寫回 Supabase，只用於顯示
+    if not enriched.empty:
+        est_monthly_div = 0.0
+        fx_cache_local: dict[str, float] = {}
+        fund_mdiv_done: set[str] = set()
+        for _, fr in enriched.iterrows():
+            if normalize_text(fr.get("asset_type","")) != "基金":
+                continue
+            fc    = normalize_text(fr.get("fund_code",""))
+            units = normalize_number(fr.get("units", 0), 0)
+            cur   = normalize_text(fr.get("currency","TWD")).upper()
+            if not fc or units <= 0:
+                continue
+            # 取 GAS 配息金額（有快取）
+            mdiv_per_unit = _get_gas_monthly_div(fc)
+            if not mdiv_per_unit:
+                continue
+            # 取匯率
+            if cur not in fx_cache_local:
+                fx_val, _ = fetch_fx(cur)
+                fx_cache_local[cur] = fx_val or 1.0
+            fx_val = fx_cache_local[cur]
+            est_monthly_div += units * mdiv_per_unit * fx_val
+        if est_monthly_div > 0:
+            st.info(f"💰 預估每月配息（基金）：**{money(est_monthly_div)}** 台幣（各基金單位數 × 前月配息金額 × 即時匯率）")
 
     # ── 自動把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
     # （只更新 monthly_dividend_per_unit == 0 且有 fund_code 的列）
