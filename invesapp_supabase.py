@@ -509,12 +509,11 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     price, status = fetch_yahoo_price(ticker)
     if price is not None:
         return price, "Yahoo"
-    if asset_type == "美股" or ticker in US_STOCK_EXCHANGES:
-        g_price, g_status = fetch_google_finance_price(ticker, US_STOCK_EXCHANGES.get(ticker))
-        if g_price is not None:
-            return g_price, "Google"
-        return None, f"{status}; {g_status}"
-    return None, status
+    # Yahoo 失敗時，所有股票都試 Google Finance
+    g_price, g_status = fetch_google_finance_price(ticker, None)
+    if g_price is not None:
+        return g_price, "Google"
+    return None, f"{status}; {g_status}"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
