@@ -1156,7 +1156,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# ★ 總覽：仿 Google Sheet 格式  v24
+# ★ 總覽：仿 Google Sheet 格式  v25
 # 順序：美股 → 基富通 → 渣打基金 → 台新基金 → 台股（最後）
 # 修正：xyz 消失 / 台股 TypeError / 日期顯示 / 欄位對齊
 # ════════════════════════════════════════════════════════════════════════════
@@ -1173,32 +1173,61 @@ SUB_GROUPS: dict[str, list[tuple[str, str]]] = {
     "台股":    [("台股",       "TWD")],
 }
 
-# GAS 日期快取（同 session 只抓一次）
-_gas_date_cache: dict[str, str] = {}
+# GAS 快取（同 session 只抓一次，避免重複 HTTP 請求）
+# 結構：{fund_code: {"date": "5/18", "monthly_div": 0.044}}
+_gas_cache: dict[str, dict] = {}
+
+GAS_FUND_NAV_URL_V2 = "https://script.google.com/macros/s/AKfycbxazSRUsuQJPnGXaecPhBVuihlpF-vApEsLbTf1dXbY9w-TzUOU2x_Oer9F9I5p-fBB/exec"
+
+
+def _get_gas_data(fund_code: str) -> dict:
+    """
+    從 GAS v2 取得基金完整資料：
+    回傳 {"date": "5/18", "monthly_div": 0.044}
+    使用新 URL，同 session 快取。
+    """
+    global _gas_cache
+    if fund_code in _gas_cache:
+        return _gas_cache[fund_code]
+
+    gas_url = GAS_FUND_NAV_URL_V2 or GAS_FUND_NAV_URL
+    if not gas_url or not fund_code:
+        _gas_cache[fund_code] = {"date": "—", "monthly_div": None}
+        return _gas_cache[fund_code]
+
+    try:
+        r = requests.get(gas_url, params={"code": fund_code},
+                         timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("ok"):
+                raw = data.get("date", "")          # YYYY/MM/DD
+                parts = raw.split("/")
+                date_str = f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
+                mdiv = data.get("monthly_div")
+                result = {
+                    "date":        date_str,
+                    "monthly_div": float(mdiv) if mdiv is not None else None,
+                }
+            else:
+                result = {"date": "—", "monthly_div": None}
+        else:
+            result = {"date": "—", "monthly_div": None}
+    except Exception:
+        result = {"date": "—", "monthly_div": None}
+
+    _gas_cache[fund_code] = result
+    return result
 
 
 def _get_gas_date(fund_code: str) -> str:
-    """從 GAS 取得基金報價日期，回傳 M/DD"""
-    global _gas_date_cache
-    if fund_code in _gas_date_cache:
-        return _gas_date_cache[fund_code]
-    if not GAS_FUND_NAV_URL or not fund_code:
-        _gas_date_cache[fund_code] = "—"
-        return "—"
-    try:
-        r = requests.get(GAS_FUND_NAV_URL, params={"code": fund_code},
-                         timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 200:
-            data = r.json()
-            raw = data.get("date", "")   # YYYY/MM/DD
-            parts = raw.split("/")
-            result = f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
-        else:
-            result = "—"
-    except Exception:
-        result = "—"
-    _gas_date_cache[fund_code] = result
-    return result
+    """取得基金報價日期（M/DD），供顯示用"""
+    return _get_gas_data(fund_code).get("date", "—")
+
+
+def _get_gas_monthly_div(fund_code: str) -> float | None:
+    """取得基金最新每月配息金額（原幣）"""
+    return _get_gas_data(fund_code).get("monthly_div")
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -1443,6 +1472,33 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     if enriched.empty:
         st.info("目前沒有資料。")
         return
+
+    # ── 自動把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
+    # （只更新 monthly_dividend_per_unit == 0 且有 fund_code 的列）
+    if not enriched.empty:
+        fund_rows = enriched[
+            (enriched["asset_type"] == "基金") &
+            (enriched["fund_code"].fillna("") != "") &
+            (enriched["monthly_dividend_per_unit"].fillna(0) == 0)
+        ]
+        if not fund_rows.empty:
+            sb       = supabase_client()
+            updated  = 0
+            done_codes: set[str] = set()
+            for _, fr in fund_rows.iterrows():
+                fc = normalize_text(fr.get("fund_code", ""))
+                if not fc or fc in done_codes:
+                    continue
+                mdiv = _get_gas_monthly_div(fc)
+                if mdiv and mdiv > 0:
+                    # 更新 Supabase 裡所有相同 fund_code 的列
+                    sb.table("positions").update(
+                        {"monthly_dividend_per_unit": mdiv}
+                    ).eq("fund_code", fc).execute()
+                    done_codes.add(fc)
+                    updated += 1
+            if updated:
+                st.toast(f"✅ 已自動更新 {updated} 檔基金每月配息金額（從 MoneyDJ）", icon="💰")
 
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
