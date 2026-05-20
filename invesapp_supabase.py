@@ -45,6 +45,17 @@ US_STOCK_EXCHANGES = {
     "XYZ": "NYSE",
 }
 
+# 台股 Google Finance 交易所對照
+# TPE = 上市（TWSE）, TAI = 上櫃（OTC/TWO）
+TW_STOCK_EXCHANGES = {
+    "5471.TWO":   "TAI",    # 松翰（上櫃）
+    "00740B.TW":  "TPE",    # 富邦全球投等債 ETF
+    "4401.TWO":   "TAI",    # 東隆興
+    "5478.TWO":   "TAI",    # 智冠
+    "6261.TWO":   "TAI",    # 久元
+    "9802.TW":    "TPE",    # 鈺齊-KY
+}
+
 TW_PRESETS = {
     "儒鴻": "1476.TW", "大魯閣": "1432.TW", "中砂": "1560.TW", "中鴻": "2014.TW",
     "凱美": "2375.TW", "華碩": "2357.TW", "日勝生": "2547.TW", "晶華": "2707.TW",
@@ -440,7 +451,16 @@ def fetch_google_finance_price(ticker: str, exchange: str | None = None) -> tupl
     ticker = normalize_ticker(ticker)
     if not ticker:
         return None, "Google 無 ticker"
-    exchange = exchange or US_STOCK_EXCHANGES.get(ticker, "NASDAQ")
+    # 優先用傳入的 exchange，其次查台股對照，再次查美股對照，最後預設 TPE
+    if not exchange:
+        if ticker in TW_STOCK_EXCHANGES:
+            exchange = TW_STOCK_EXCHANGES[ticker]
+        elif ticker in US_STOCK_EXCHANGES:
+            exchange = US_STOCK_EXCHANGES[ticker]
+        elif ticker.endswith(".TW") or ticker.endswith(".TWO"):
+            exchange = "TAI" if ticker.endswith(".TWO") else "TPE"
+        else:
+            exchange = "NASDAQ"
     url = f"https://www.google.com/finance/quote/{ticker}:{exchange}"
     try:
         r = requests.get(url, timeout=20, headers={
