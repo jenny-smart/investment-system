@@ -1158,17 +1158,41 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 總覽：仿 Google Sheet 格式
 # 順序：美股 → 基富通 → 渣打基金 → 台新基金 → 台股（最後）
+# 明細合併：同 fund_code+currency 或 ticker 合併成一行
 # ════════════════════════════════════════════════════════════════════════════
- 
+
 OVERVIEW_ORDER = ["美股", "基富通", "渣打基金", "台新基金", "台股"]
 PLATFORM_ICONS = {"台股": "📈", "美股": "🇺🇸", "基富通": "🟧", "渣打基金": "🏦", "台新基金": "🟥"}
- 
-# GAS 日期快取（同一 session 只抓一次，避免重複 HTTP 請求）
+
+# 子平台群組（仿 Google Sheet 藍色子標題行）
+SUB_GROUPS: dict[str, list[tuple[str, str]]] = {
+    "基富通": [
+        ("基富通-台",   "TWD"),
+        ("基富通-人民幣","CNY"),
+        ("基富通-日",   "JPY"),
+    ],
+    "渣打基金": [
+        ("渣打-美金",   "USD"),
+        ("渣打-南非",   "ZAR"),
+    ],
+    "台新基金": [
+        ("台新-美金",   "USD"),
+        ("台新-南非",   "ZAR"),
+    ],
+    "美股": [
+        ("美股", "USD"),
+    ],
+    "台股": [
+        ("台股", "TWD"),
+    ],
+}
+
+# GAS 日期快取
 _gas_date_cache: dict[str, str] = {}
- 
- 
+
+
 def _get_gas_date(fund_code: str) -> str:
-    """從 GAS 取得基金報價日期，回傳 M/DD 格式"""
+    """從 GAS 取得基金報價日期，回傳 M/DD"""
     global _gas_date_cache
     if fund_code in _gas_date_cache:
         return _gas_date_cache[fund_code]
@@ -1176,15 +1200,11 @@ def _get_gas_date(fund_code: str) -> str:
         _gas_date_cache[fund_code] = "—"
         return "—"
     try:
-        r = requests.get(
-            GAS_FUND_NAV_URL,
-            params={"code": fund_code},
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
+        r = requests.get(GAS_FUND_NAV_URL, params={"code": fund_code},
+                         timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         if r.status_code == 200:
             data = r.json()
-            raw = data.get("date", "")          # YYYY/MM/DD
+            raw = data.get("date", "")
             parts = raw.split("/")
             result = f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
         else:
@@ -1193,8 +1213,8 @@ def _get_gas_date(fund_code: str) -> str:
         result = "—"
     _gas_date_cache[fund_code] = result
     return result
- 
- 
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_date(ticker: str) -> str:
     """Yahoo Finance 最新報價日期，回傳 M/DD"""
@@ -1211,18 +1231,137 @@ def fetch_stock_date(ticker: str) -> str:
     except Exception:
         pass
     return "—"
- 
- 
+
+
+def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
+    """
+    合併同一檔股票/基金的多筆持倉（不同購買批次）→ 一行顯示。
+    合併鍵：基金用 fund_code+currency，股票用 ticker。
+    數值加總：台幣成本、台幣市值、含息總損益、累計已領配息、每月配息、單位數。
+    取第一筆的：名稱、即時價格/淨值、匯率、currency、fund_code、ticker。
+    """
+    if p_rows.empty:
+        return p_rows
+
+    if asset_type in {"台股", "美股"}:
+        key_col = "ticker"
+    else:
+        key_col = "fund_code"
+
+    sum_cols = ["台幣成本", "台幣市值", "含息總損益", "累計已領配息", "每月配息",
+                "units", "original_units", "total_cost_input", "dividend_received_total"]
+    first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
+                  "即時價格/淨值", "匯率", "含息總損益率", "損益率", "platform", "asset_type"]
+
+    merged_rows = []
+    for key_val, grp in p_rows.groupby(key_col, dropna=False):
+        row: dict = {}
+        for c in first_cols:
+            if c in grp.columns:
+                row[c] = grp[c].iloc[0]
+        for c in sum_cols:
+            if c in grp.columns:
+                row[c] = grp[c].fillna(0).sum()
+        # 重算損益率
+        cost = row.get("台幣成本", 0)
+        pnl  = row.get("含息總損益", 0)
+        row["含息總損益率"] = pnl / cost if cost else None
+        row["損益率"] = row["含息總損益率"]
+        row["id"] = grp["id"].iloc[0]  # 留一個 id 給手動補價用
+        merged_rows.append(row)
+
+    return pd.DataFrame(merged_rows)
+
+
+def render_sub_group(
+    sub_label: str,
+    sub_rows: pd.DataFrame,
+    no_price_ids: list,
+) -> None:
+    """
+    單一子平台區塊（仿 Google Sheet 藍色子標題行 + 白色明細行）。
+    sub_label: 如「基富通-台」、「渣打-美金」
+    sub_rows: 已合併後的明細（每檔一行）
+    """
+    if sub_rows.empty:
+        return
+
+    total_val  = sub_rows["台幣市值"].fillna(0).sum()
+    total_pnl  = sub_rows["含息總損益"].fillna(0).sum()
+    total_cost = sub_rows["台幣成本"].fillna(0).sum()
+    total_div  = sub_rows["累計已領配息"].fillna(0).sum()
+    total_mdiv = sub_rows["每月配息"].fillna(0).sum()
+    total_rate = total_pnl / total_cost if total_cost else None
+    pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
+
+    # 子平台藍色標題列（比主平台淺一點）
+    st.markdown(f"""
+<div style="background:#1a4a35;color:#fff;padding:7px 16px;border-radius:6px;
+            display:flex;flex-wrap:wrap;align-items:center;gap:16px;
+            margin:6px 0 1px 16px;font-size:13px;font-weight:700;font-family:monospace;">
+  <span style="font-family:sans-serif;font-size:13px">{sub_label}</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">日期 </span>—</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">現值 </span>—</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">損益 </span>
+        <span style="color:{pnl_color}">{signed_money(total_pnl)}</span></span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">台幣成本 </span>{money(total_cost)}</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">台幣市值 </span>{money(total_val)}</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">累積配息 </span>{money(total_div)}</span>
+  <span><span style="opacity:.55;font-family:sans-serif;font-size:11px">月配息 </span>{money(total_mdiv)}</span>
+</div>
+""", unsafe_allow_html=True)
+
+    # 白色子項目明細
+    rows_disp = []
+    for _, pr in sub_rows.iterrows():
+        atype     = normalize_text(pr.get("asset_type", ""))
+        price_val = pr.get("即時價格/淨值")
+        units_val = normalize_number(pr.get("units", 0), 0)
+        pnl_val   = pr.get("含息總損益")
+        cost_val  = pr.get("台幣成本")
+        rate_val  = pr.get("含息總損益率")
+
+        # 配息率 = 月配息 / 台幣成本 * 12（年化）
+        mdiv = pr.get("每月配息") or 0
+        ann_div_rate = (mdiv * 12 / cost_val) if cost_val and mdiv else None
+
+        if atype in {"台股", "美股"}:
+            tk       = normalize_text(pr.get("ticker", ""))
+            date_str = fetch_stock_date(tk) if tk else "—"
+        else:
+            fc       = normalize_text(pr.get("fund_code", ""))
+            date_str = _get_gas_date(fc) if fc else "—"
+
+        if price_val is None:
+            date_str = "❌"
+
+        rows_disp.append({
+            "名稱":     normalize_text(pr.get("name", "")),
+            "日期":     date_str,
+            "現值":     money(price_val, 4) if price_val is not None else "—",
+            "損益":     signed_money(pnl_val),
+            "台幣成本": money(cost_val),
+            "台幣市值": money(pr.get("台幣市值")),
+            "累積配息": money(pr.get("累計已領配息")),
+            "月配息":   money(mdiv if mdiv else None),
+            "配息率":   pct(ann_div_rate) if ann_div_rate else "—",
+            "損益率":   pct(rate_val),
+        })
+
+    if rows_disp:
+        df_disp = pd.DataFrame(rows_disp)
+        st.dataframe(df_disp, use_container_width=True, hide_index=True,
+                     height=min(42 * len(df_disp) + 44, 480))
+
+
 def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     """
-    單平台區塊：
-    - 深色群組標題列（市值 / 成本 / 損益 / 累積配息 / 月配息）
-    - 子項目明細表（名稱 / 幣別 / 日期 / 現值 / 單位數 / 各金額）
-    - 未更新持倉紅色提示 + 手動補價表單
+    主平台群組：深色大標題 + 子平台（各有藍色子標題 + 明細）
+    + 未更新提示 + 手動補價
     """
     if p_rows.empty:
         return
- 
+
     total_val  = p_rows["台幣市值"].fillna(0).sum()
     total_pnl  = p_rows["含息總損益"].fillna(0).sum()
     total_cost = p_rows["台幣成本"].fillna(0).sum()
@@ -1231,13 +1370,14 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     total_rate = total_pnl / total_cost if total_cost else None
     icon       = PLATFORM_ICONS.get(platform, "💼")
     pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
- 
-    # ── 深色群組標題 ──
+
+    # 主平台深色標題
     st.markdown(f"""
-<div style="background:#1e3a2f;color:#fff;padding:9px 18px;border-radius:8px;
+<div style="background:#0f2b20;color:#fff;padding:10px 18px;border-radius:8px;
             display:flex;flex-wrap:wrap;align-items:center;gap:20px;
-            margin:14px 0 2px 0;font-size:14px;font-weight:700;font-family:monospace;">
-  <span style="font-size:15px;font-family:sans-serif">{icon} {platform}</span>
+            margin:18px 0 3px 0;font-size:14px;font-weight:800;font-family:monospace;
+            border-left:4px solid #10b981;">
+  <span style="font-size:16px;font-family:sans-serif">{icon} {platform}</span>
   <span><span style="opacity:.55;font-family:sans-serif;font-size:12px">市值 </span>{money(total_val)}</span>
   <span><span style="opacity:.55;font-family:sans-serif;font-size:12px">成本 </span>{money(total_cost)}</span>
   <span><span style="opacity:.55;font-family:sans-serif;font-size:12px">損益 </span>
@@ -1247,61 +1387,46 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
   <span><span style="opacity:.55;font-family:sans-serif;font-size:12px">月配息 </span>{money(total_mdiv)}</span>
 </div>
 """, unsafe_allow_html=True)
- 
-    # ── 未更新持倉偵測 ──
+
+    # 未更新持倉偵測
     has_pos  = p_rows[p_rows["units"].fillna(0) > 0]
     no_price = has_pos[has_pos["即時價格/淨值"].isna()]
     if not no_price.empty:
-        names = "、".join(no_price["name"].astype(str).tolist())
-        st.error(f"❌ **{platform}** {len(no_price)} 檔未取得即時報價：**{names}**")
- 
-    # ── 子項目明細表 ──
-    rows_disp = []
-    for _, pr in p_rows.iterrows():
-        atype     = normalize_text(pr.get("asset_type", ""))
-        price_val = pr.get("即時價格/淨值")
-        units_val = normalize_number(pr.get("units", 0), 0)
- 
-        if atype in {"台股", "美股"}:
-            tk       = normalize_text(pr.get("ticker", ""))
-            date_str = fetch_stock_date(tk) if tk else "—"
+        names = "、".join(no_price["name"].unique().tolist())
+        st.error(f"❌ {platform} {len(no_price.groupby('fund_code' if platform not in ['台股','美股'] else 'ticker').ngroups)} 檔缺報價：**{names}**")
+
+    # 子平台群組
+    sub_defs = SUB_GROUPS.get(platform, [(platform, None)])
+    for sub_label, currency_filter in sub_defs:
+        # 篩選子平台
+        if currency_filter:
+            sub = p_rows[p_rows["currency"] == currency_filter].copy()
         else:
-            fc       = normalize_text(pr.get("fund_code", ""))
-            date_str = _get_gas_date(fc) if fc else "—"
- 
-        if price_val is None:
-            date_str = "❌"
- 
-        rows_disp.append({
-            "名稱":     normalize_text(pr.get("name", "")),
-            "幣別":     normalize_text(pr.get("currency", "")),
-            "日期":     date_str,
-            "現值":     money(price_val, 4) if price_val is not None else "—",
-            "單位數":   f"{units_val:,.0f}" if units_val > 0 else "—",
-            "台幣成本": money(pr.get("台幣成本")),
-            "台幣市值": money(pr.get("台幣市值")),
-            "損益":     signed_money(pr.get("含息總損益")),
-            "損益率":   pct(pr.get("含息總損益率")),
-            "累積配息": money(pr.get("累計已領配息")),
-            "月配息":   money(pr.get("每月配息")),
-        })
- 
-    if rows_disp:
-        df_disp = pd.DataFrame(rows_disp)
-        st.dataframe(
-            df_disp,
-            use_container_width=True,
-            hide_index=True,
-            height=min(42 * len(df_disp) + 44, 560),
-        )
- 
-    # ── 手動補價（只在有未更新持倉時顯示）──
+            sub = p_rows.copy()
+
+        if sub.empty:
+            continue
+
+        # 合併同一檔的多筆持倉
+        atype = normalize_text(sub["asset_type"].iloc[0]) if not sub.empty else ""
+        merged = _merge_positions(sub, atype)
+
+        # 台股特殊：直接顯示，不做子群組標題
+        if platform == "台股":
+            render_sub_group("台股", merged, [])
+        else:
+            render_sub_group(sub_label, merged, [])
+
+    # 手動補價入口
     if not no_price.empty:
-        with st.expander(f"🔧 {platform}：手動補填即時價（臨時）"):
-            st.caption("自動抓取失敗時，手動填入現值（原幣）。儲存後按頂端「🔄 更新即時價」重算。")
+        # 取唯一基金代碼
+        key_col  = "fund_code" if platform not in ["台股", "美股"] else "ticker"
+        no_uniq  = no_price.drop_duplicates(subset=[key_col])
+        with st.expander(f"🔧 {platform}：手動補填即時價"):
+            st.caption("自動抓取失敗時，手動填入現值（原幣）。儲存後按「🔄 更新即時價」重算。")
             with st.form(f"manual_price_form_{platform}"):
                 manual_vals: dict[int, float] = {}
-                for _, row in no_price.iterrows():
+                for _, row in no_uniq.iterrows():
                     ca, cb = st.columns([3, 1])
                     ca.markdown(
                         f"**{row['name']}**　"
@@ -1309,11 +1434,8 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
                         f"幣別：{row.get('currency', '')}"
                     )
                     manual_vals[int(row["id"])] = cb.number_input(
-                        "現值（原幣）",
-                        value=0.0,
-                        step=0.0001,
-                        format="%.4f",
-                        key=f"mp_{platform}_{int(row['id'])}",
+                        "現值（原幣）", value=0.0, step=0.0001, format="%.4f",
+                        key=f"mp_{platform}_{int(row['id'])}"
                     )
                 if st.form_submit_button("💾 儲存"):
                     sb  = supabase_client()
@@ -1325,15 +1447,15 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
                     if cnt:
                         st.success(f"已儲存 {cnt} 筆，請按頂端「🔄 更新即時價」重新計算。")
                         st.cache_data.clear()
- 
- 
+
+
 def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     """總覽主函式：KPI + 各平台群組（美股→基富通→渣打→台新→台股）"""
     st.markdown("### 💎 所有投資管道總覽")
     if enriched.empty:
         st.info("目前沒有資料。")
         return
- 
+
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
         台幣成本     =("台幣成本",      "sum"),
@@ -1351,7 +1473,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         lambda x: OVERVIEW_ORDER.index(x) if x in OVERVIEW_ORDER else 999
     )
     summary = summary.sort_values("_order")
- 
+
     card_cols = st.columns(5)
     for i, (_, r) in enumerate(summary.iterrows()):
         p    = r["platform"]
@@ -1364,9 +1486,22 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
                 delta=f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}",
             )
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
- 
+
     st.markdown("---")
- 
+
+    # ── 匯率列 ──
+    st.markdown("#### 💱 匯率")
+    fx_cols = st.columns(len(CURRENCIES))
+    for i, cur in enumerate(CURRENCIES):
+        rate, status = fetch_fx(cur)
+        fx_cols[i].metric(
+            cur,
+            money(rate, 4),
+            delta="✓" if status == "ok" else f"⚠ {status}",
+        )
+
+    st.markdown("---")
+
     # ── 各平台群組（依 OVERVIEW_ORDER 順序，台股最後）──
     for platform in OVERVIEW_ORDER:
         p_rows = enriched[enriched["platform"] == platform].copy().reset_index(drop=True)
