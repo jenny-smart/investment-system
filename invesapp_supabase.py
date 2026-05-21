@@ -1301,6 +1301,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
             "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
             "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
+            "is_reinvest": st.column_config.CheckboxColumn("配息再投入"),
         }, key=editor_key,
     )
     c1, c2, c3, c4 = st.columns([1, 1.4, 1.4, 1.4])
