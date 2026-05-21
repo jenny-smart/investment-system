@@ -1333,7 +1333,6 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         else:
             delete_position(int(row.iloc[0]["id"])); st.success(f"已刪除：{row.iloc[0]['name']}"); st.rerun()
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 總覽：仿 Google Sheet 格式  v25
 # 順序：台股 → 美股 → 基富通 → 渣打基金 → 台新基金
@@ -1523,9 +1522,13 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     rows_disp = []
     for _, pr in sub_rows.iterrows():
         atype     = normalize_text(pr.get("asset_type", ""))
-        price_val = pr.get("即時價格/淨值")
-        cost_val  = pr.get("台幣成本") or 0
-        mdiv      = pr.get("每月配息") or 0
+        price_val = to_float(pr.get("即時價格/淨值"))
+        cost_val  = to_float(pr.get("台幣成本")) or 0.0
+        mval      = to_float(pr.get("台幣市值")) or 0.0
+        pnl_val   = to_float(pr.get("含息總損益"))
+        div_val   = to_float(pr.get("累計已領配息")) or 0.0
+        mdiv      = to_float(pr.get("每月配息")) or 0.0
+        rate_val  = to_float(pr.get("含息總損益率"))
         ann_rate  = (mdiv * 12 / cost_val) if cost_val and mdiv else None
 
         # 取報價日期
@@ -1540,36 +1543,35 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             date_str = "❌"
 
         rows_disp.append({
-            "名稱":     normalize_text(pr.get("name", "")),
-            "日期":     date_str,
-            "現值":     money(price_val, 4) if price_val is not None else "—",
-            "損益":     signed_money(pr.get("含息總損益")),
-            "台幣成本": money(cost_val or None),
-            "台幣市值": money(pr.get("台幣市值")),
-            "累積配息": money(pr.get("累計已領配息")),
-            "月配息":   money(mdiv or None),
-            "配息率":   pct(ann_rate) if ann_rate else "—",
-            "損益率":   pct(pr.get("含息總損益率")),
+            "名稱":   normalize_text(pr.get("name", "")),
+            "日期":   date_str,
+            "現值":   round(price_val, 2) if price_val is not None else None,
+            "損益":   round(pnl_val, 0)   if pnl_val  is not None else None,
+            "台幣成本": round(cost_val, 0) if cost_val else None,
+            "台幣市值": round(mval, 0)     if mval     else None,
+            "累積配息": round(div_val, 0)  if div_val  else None,
+            "月配息":   round(mdiv, 0)     if mdiv     else None,
+            "配息率":   round(ann_rate * 100, 2) if ann_rate else None,
+            "損益率":   round(rate_val * 100, 2) if rate_val is not None else None,
         })
 
     if rows_disp:
         df_disp = pd.DataFrame(rows_disp)
-        # 固定欄寬讓對齊整齊
         col_cfg = {
-            "名稱":     st.column_config.TextColumn("名稱",     width="large"),
-            "日期":     st.column_config.TextColumn("日期",     width="small"),
-            "現值":     st.column_config.TextColumn("現值",     width="small"),
-            "損益":     st.column_config.TextColumn("損益",     width="medium"),
-            "台幣成本": st.column_config.TextColumn("台幣成本", width="medium"),
-            "台幣市值": st.column_config.TextColumn("台幣市值", width="medium"),
-            "累積配息": st.column_config.TextColumn("累積配息", width="medium"),
-            "月配息":   st.column_config.TextColumn("月配息",   width="small"),
-            "配息率":   st.column_config.TextColumn("配息率",   width="small"),
-            "損益率":   st.column_config.TextColumn("損益率",   width="small"),
+            "名稱":     st.column_config.TextColumn("名稱",       width="large"),
+            "日期":     st.column_config.TextColumn("日期",       width="small"),
+            "現值":     st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
+            "損益":     st.column_config.NumberColumn("損益",     width="medium", format="%,.0f"),
+            "台幣成本": st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
+            "台幣市值": st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
+            "累積配息": st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
+            "月配息":   st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
+            "配息率":   st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
+            "損益率":   st.column_config.NumberColumn("損益率%",  width="small",  format="%.2f"),
         }
-        # 台股列數多，固定2列高度可上下滾動；基金類較少，自適應
+        # 台股/美股列數多，固定2列高度可上下滾動；基金類自適應
         if sub_label in {"台股", "美股"}:
-            tbl_height = 42 * 2 + 44   # 固定顯示2列，其餘捲動
+            tbl_height = 42 * 2 + 44
         else:
             tbl_height = min(42 * len(df_disp) + 44, 480)
         st.dataframe(df_disp, use_container_width=True, hide_index=True,
