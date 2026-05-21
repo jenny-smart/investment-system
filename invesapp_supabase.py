@@ -2574,8 +2574,38 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             m3.metric("損益",     signed_money(view["損益"].dropna().sum()))
             m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
             st.markdown("#### 即時計算結果")
-            st.caption("市值 = 現在股數 / 單位數 × 即時價格 / 淨值 × 匯率｜含息總損益 = 台幣市值 - 台幣成本 + 累計已領配息")
-            st.dataframe(right_align_numbers(format_df(view[show_cols])), use_container_width=True, hide_index=True, height=360)
+            # 數值欄位直接用原始數值 + NumberColumn，靠右對齊、可排序
+            num_cols = {
+                "total_cost_input": st.column_config.NumberColumn("總投入成本", format="%,.0f"),
+                "original_units":   st.column_config.NumberColumn("成本股數",   format="%,.4f"),
+                "units":            st.column_config.NumberColumn("現在股數",   format="%,.4f"),
+                "市值股數":         st.column_config.NumberColumn("市值股數",   format="%,.4f"),
+                "avg_cost":         st.column_config.NumberColumn("平均成本",   format="%,.4f"),
+                "即時價格/淨值":    st.column_config.NumberColumn("即時價格/淨值", format="%,.4f"),
+                "匯率":             st.column_config.NumberColumn("匯率",       format="%,.4f"),
+                "成本原幣":         st.column_config.NumberColumn("成本原幣",   format="%,.0f"),
+                "市值原幣":         st.column_config.NumberColumn("市值原幣",   format="%,.0f"),
+                "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%,.0f"),
+                "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%,.0f"),
+                "價差損益":         st.column_config.NumberColumn("市值損益",   format="%,.0f"),
+                "累計已領配息":     st.column_config.NumberColumn("累積配息",   format="%,.0f"),
+                "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
+                "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
+                "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
+                "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
+            }
+            view_disp = view[show_cols].copy()
+            # 把百分比欄位從小數轉成百分比數值
+            for col in ["價差損益率", "含息總損益率"]:
+                if col in view_disp.columns:
+                    view_disp[col] = view_disp[col].apply(lambda x: x * 100 if x is not None and str(x) not in ["-", "—", "nan"] else None)
+            st.dataframe(
+                view_disp,
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config=num_cols,
+            )
         editable_platform_table(platform, positions, f"editor_{platform}")
 
 with tabs[6]:
