@@ -2194,8 +2194,19 @@ total_rate  = total_pnl / total_cost if total_cost else None
 with st.container():
     st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總台幣市值", money_short(total_value),
-              delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
+    # 顯示缺報價的台股名稱
+    tw_missing = []
+    if not enriched.empty:
+        tw_no_price = enriched[
+            (enriched["platform"] == "台股") &
+            (enriched["units"].fillna(0) > 0) &
+            (enriched["即時價格/淨值"].isna())
+        ]
+        tw_missing = tw_no_price["name"].dropna().unique().tolist()
+    if tw_missing:
+        st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
+    pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
+    c1.metric("總台幣市值", money_short(total_value), delta=pnl_delta)
     c2.metric("總台幣成本",   money(total_cost))
     c3.metric("預估每月配息", money(total_div))
     c4.metric("投資筆數",     f"{len(positions):,}")
