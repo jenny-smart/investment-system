@@ -407,6 +407,15 @@ def pct(v: Any) -> str:
     return "-" if n is None else f"{n:.2%}"
 
 
+def money_short(v: Any) -> str:
+    n = to_float(v)
+    if n is None: return "-"
+    a = abs(n)
+    if a >= 100_000_000: return f"{n/100_000_000:.2f}億"
+    if a >= 10_000: return f"{n/10_000:.1f}萬"
+    return f"{n:,.0f}"
+
+
 def normalize_ticker(ticker: str) -> str:
     t = normalize_text(ticker).strip()
     if not t:
