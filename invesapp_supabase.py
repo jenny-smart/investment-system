@@ -2770,10 +2770,19 @@ with tabs[0]:
 for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
+        # ── 第一排：全局KPI ──
+        g1, g2, g3, g4, g5 = st.columns(5)
+        g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
+        g2.metric("總台幣成本", money(total_cost))
+        g3.metric("預估每月配息", money(total_div))
+        g4.metric("投資筆數", f"{len(positions):,}")
+        if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
+            st.cache_data.clear(); st.rerun()
         view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
         if view.empty:
             st.info(f"尚無 {platform} 資料")
         else:
+            # ── 第二排：平台KPI ──
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
             m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
