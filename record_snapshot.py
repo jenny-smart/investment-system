@@ -164,11 +164,13 @@ def sync_dividend_log():
         try:
             client.table("dividend_log").insert({
                 "fund_code":    d.get("fund_code"),
+                "fund_name":    d.get("fund_name"),
                 "platform":     d.get("platform"),
                 "currency":     d.get("currency"),
                 "ex_date":      d.get("ex_date"),
                 "pay_date":     d.get("pay_date"),
                 "div_amount":   d.get("div_amount"),
+                "actual_div_amount": d.get("actual_div_amount") or d.get("div_amount"),
                 "units_at_ex":  d.get("units_at_ex"),
                 "fx_rate":      d.get("fx_rate"),
                 "twd_total":    d.get("twd_total"),
