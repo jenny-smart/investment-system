@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import io
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,9 +24,16 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-21-v26-gas-div"
+APP_VERSION = "2026-05-22-v27-div-online-sheets"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbwS8AUn4M4Qx9qHxcRkNv2GqTTKAIYgXmNRoYsOKFNfSv9yLFz1sEu5EKY2Tqvnf_Ok/exec"
+
+MAIN_GOOGLE_SHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
+ONLINE_SHEET_SOURCES = {
+    "2026細帳": "1862868285",
+    "每月收入": "1804324921",
+    "資產總覽": "151289982",
+}
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -300,6 +308,23 @@ def normalize_text(v: Any, default: str = "") -> str:
     return str(v).strip()
 
 
+def normalize_bool(v: Any, default: bool = False) -> bool:
+    if v is None:
+        return default
+    try:
+        if pd.isna(v):
+            return default
+    except Exception:
+        pass
+    if isinstance(v, str):
+        text = v.strip().lower()
+        if text in {"true", "1", "yes", "y", "是"}:
+            return True
+        if text in {"false", "0", "no", "n", "否", ""}:
+            return False
+    return bool(v)
+
+
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     defaults = {
         "id": None, "sort_order": 0, "platform": "台股", "asset_type": "台股",
@@ -383,6 +408,7 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
         "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
+        "is_reinvest": normalize_bool(r.get("is_reinvest", False), False),
     }
 
 
@@ -946,14 +972,16 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             price, p_status = fetch_fund_nav(fund_code, fund_pattern)
         fx, fx_status = fetch_fx(currency)
         calc = calculate_cost_and_value(r, price, fx)
-        units = normalize_number(r.get("units", 0), 0)
+        units = normalize_number(calc.get("市值股數", r.get("units", 0)), 0)
         if asset_type == "基金":
             _fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(normalize_text(r.get("name","")),normalize_text(r.get("fund_code","")),normalize_text(r.get("fund_pattern","")))[0]
             _gas_div = _fetch_gas_div_for_enrich(_fc) if _fc else None
             div_per_unit = _gas_div or normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
+            div_source = "GAS" if _gas_div else "手動"
         else:
             div_per_unit = normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
-        monthly_div = units * normalize_number(r.get("monthly_dividend_per_unit", 0), 0) 
+            div_source = "手動"
+        monthly_div = units * div_per_unit
         monthly_div_twd = monthly_div * fx if fx is not None else None
         out = dict(r)
         out["currency"] = currency
@@ -964,7 +992,9 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
+            "每單位月配息估算": div_per_unit,
             "每月配息": monthly_div_twd,
+            "月配息來源": div_source if div_per_unit else "",
             "狀態": "✓" if price is not None and fx is not None else f"價格:{p_status} 匯率:{fx_status}",
         })
         rows.append(out)
@@ -1015,6 +1045,212 @@ def right_align_numbers(df: pd.DataFrame) -> Any:
     if not numeric_cols:
         return df
     return df.style.set_properties(subset=numeric_cols, **{"text-align": "right"})
+
+
+def parse_sheet_number(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text in {"-", "—", "nan", "None", "FALSE", "TRUE"}:
+        return None
+    if text.startswith("#"):
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    text = text.strip("()").replace(",", "").replace("$", "").replace("NT", "").strip()
+    is_percent = text.endswith("%")
+    text = text[:-1].strip() if is_percent else text
+    try:
+        number = float(text)
+    except Exception:
+        return None
+    if negative:
+        number = -number
+    return number / 100 if is_percent else number
+
+
+def normalize_sheet_month_label(label: Any) -> str:
+    text = str(label).strip()
+    match = re.fullmatch(r"(20\d{2})[-/](\d{1,2})(?:[-/]\d{1,2})?", text)
+    if not match:
+        return ""
+    return f"{match.group(1)}-{int(match.group(2)):02d}"
+
+
+def online_sheet_url(gid: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/export?format=csv&gid={gid}"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_online_sheet_csv(gid: str) -> pd.DataFrame:
+    response = requests.get(online_sheet_url(gid), timeout=30)
+    response.raise_for_status()
+    if "<html" in response.text[:200].lower():
+        raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
+    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+    df = df.dropna(axis=1, how="all")
+    empty_cols = [c for c in df.columns if str(c).startswith("Unnamed") and df[c].astype(str).str.strip().eq("").all()]
+    if empty_cols:
+        df = df.drop(columns=empty_cols)
+    return df
+
+
+def month_columns(df: pd.DataFrame) -> list[str]:
+    return [col for col in df.columns if normalize_sheet_month_label(col)]
+
+
+def extract_monthly_total(df: pd.DataFrame, row_label: str = "合計") -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["月份", "金額"])
+    label_col = df.columns[0]
+    target = df[df[label_col].astype(str).str.strip() == row_label]
+    if target.empty:
+        target = df.head(1)
+    row = target.iloc[0]
+    records = []
+    for col in month_columns(df):
+        month = normalize_sheet_month_label(col)
+        amount = parse_sheet_number(row.get(col))
+        if amount is None:
+            continue
+        records.append({"月份": month, "金額": amount})
+    return pd.DataFrame(records)
+
+
+def build_monthly_long_entries(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=["月份", "項目", "金額"])
+    label_col = df.columns[0]
+    records = []
+    for _, row in df.iterrows():
+        item = normalize_text(row.get(label_col, ""))
+        if not item or item in {"合計", "總計"}:
+            continue
+        for col in month_columns(df):
+            amount = parse_sheet_number(row.get(col))
+            if amount is None or amount == 0:
+                continue
+            records.append({
+                "月份": normalize_sheet_month_label(col),
+                "項目": item,
+                "金額": amount,
+            })
+    return pd.DataFrame(records)
+
+
+def sheet_health_rows(loaded: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    rows = []
+    error_pattern = re.compile(r"#(?:REF!|DIV/0!|N/A|VALUE!|NAME\\?|ERROR!)")
+    for name, df in loaded.items():
+        values = df.astype(str)
+        error_count = int(values.apply(lambda col: col.str.contains(error_pattern, regex=True, na=False)).sum().sum())
+        non_empty = int(values.apply(lambda col: col.str.strip().ne("")).sum().sum())
+        rows.append({
+            "資料表": name,
+            "列數": len(df),
+            "欄數": len(df.columns),
+            "非空白儲存格": non_empty,
+            "公式錯誤格": error_count,
+            "CSV": online_sheet_url(ONLINE_SHEET_SOURCES[name]),
+        })
+    return pd.DataFrame(rows)
+
+
+def render_online_sheets_tab() -> None:
+    st.subheader("📒 線上總表")
+
+    loaded: dict[str, pd.DataFrame] = {}
+    failures: list[dict[str, str]] = []
+    for name, gid in ONLINE_SHEET_SOURCES.items():
+        try:
+            loaded[name] = load_online_sheet_csv(gid)
+        except Exception as exc:
+            failures.append({"資料表": name, "狀態": str(exc)})
+
+    if failures:
+        st.error("部分 Google Sheet 無法讀取。")
+        st.dataframe(pd.DataFrame(failures), use_container_width=True, hide_index=True)
+
+    if not loaded:
+        return
+
+    sheet_tabs = st.tabs(["每月收入", "2026細帳", "資產總覽", "資料健康"])
+
+    with sheet_tabs[0]:
+        income = loaded.get("每月收入", pd.DataFrame())
+        monthly = extract_monthly_total(income, "合計")
+        if monthly.empty:
+            st.info("沒有讀到每月收入合計列。")
+        else:
+            current_year = monthly[monthly["月份"].astype(str).str.startswith("2026-")]
+            nonzero = current_year[current_year["金額"] != 0]
+            latest = nonzero.iloc[-1] if not nonzero.empty else current_year.iloc[-1] if not current_year.empty else monthly.iloc[-1]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("2026 已估/已入帳收入", money(current_year["金額"].sum()))
+            c2.metric("最近月份", latest["月份"])
+            c3.metric("最近月份金額", money(latest["金額"]))
+            st.bar_chart(monthly.set_index("月份")[["金額"]], height=320)
+            st.dataframe(
+                monthly,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+            )
+
+    with sheet_tabs[1]:
+        ledger = loaded.get("2026細帳", pd.DataFrame())
+        long_entries = build_monthly_long_entries(ledger)
+        if long_entries.empty:
+            st.info("沒有讀到 2026 細帳月份資料。")
+        else:
+            monthly_sum = long_entries.groupby("月份", as_index=False)["金額"].sum()
+            category_sum = (
+                long_entries.groupby("項目", as_index=False)["金額"]
+                .sum()
+                .assign(abs_sum=lambda d: d["金額"].abs())
+                .sort_values("abs_sum", ascending=False)
+                .drop(columns=["abs_sum"])
+                .head(30)
+            )
+            c1, c2, c3 = st.columns(3)
+            c1.metric("線上細帳筆數", f"{len(long_entries):,}")
+            c2.metric("月份數", f"{long_entries['月份'].nunique():,}")
+            c3.metric("非零項目數", f"{long_entries['項目'].nunique():,}")
+            st.bar_chart(monthly_sum.set_index("月份")[["金額"]], height=300)
+            st.markdown("#### 金額最大的項目")
+            st.dataframe(
+                category_sum,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+            )
+            st.markdown("#### 明細")
+            st.dataframe(
+                long_entries.sort_values(["月份", "項目"]),
+                use_container_width=True,
+                hide_index=True,
+                height=520,
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+            )
+
+    with sheet_tabs[2]:
+        overview = loaded.get("資產總覽", pd.DataFrame())
+        if overview.empty:
+            st.info("沒有讀到資產總覽資料。")
+        else:
+            st.dataframe(overview.head(80), use_container_width=True, hide_index=True, height=560)
+
+    with sheet_tabs[3]:
+        health = sheet_health_rows(loaded)
+        st.dataframe(
+            health,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "非空白儲存格": st.column_config.NumberColumn("非空白儲存格", format="%,.0f"),
+                "公式錯誤格": st.column_config.NumberColumn("公式錯誤格", format="%,.0f"),
+                "CSV": st.column_config.LinkColumn("CSV"),
+            },
+        )
 
 
 def seed_presets() -> None:
@@ -1937,17 +2173,16 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     if not enriched.empty:
         est_monthly_div = 0.0
         fx_cache_local: dict[str, float] = {}
-        fund_mdiv_done: set[str] = set()
         for _, fr in enriched.iterrows():
             if normalize_text(fr.get("asset_type","")) != "基金":
                 continue
             fc    = normalize_text(fr.get("fund_code",""))
-            units = normalize_number(fr.get("units", 0), 0)
+            units = normalize_number(fr.get("市值股數", fr.get("units", 0)), 0)
             cur   = normalize_text(fr.get("currency","TWD")).upper()
             if not fc or units <= 0:
                 continue
             # 取 GAS 配息金額（有快取）
-            mdiv_per_unit = _get_gas_monthly_div(fc)
+            mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
             if not mdiv_per_unit:
                 continue
             # 取匯率
@@ -2528,6 +2763,8 @@ with st.expander("資料庫欄位提醒：第一次使用 v15 請先確認 Supab
 alter table positions add column if not exists purchase_ym text default '';
 alter table positions add column if not exists dividend_received_total numeric default 0;
 alter table positions add column if not exists dividend_note text default '';
+alter table positions add column if not exists dividend_pay_date text default '';
+alter table positions add column if not exists is_reinvest boolean default false;
 """, language="sql")
 
 try:
@@ -2570,13 +2807,13 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "匯率", "批次更新", "資料安全", "修復排序", "貼上清單修復", "全部歸零重建", "抓價測試", "📊 歷史市值", "💰 配息記錄"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "匯率", "批次更新", "資料安全", "修復排序", "貼上清單修復", "全部歸零重建", "抓價測試", "📊 歷史市值", "💰 配息記錄", "📒 線上總表"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
              "即時價格/淨值", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
              "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
-             "dividend_note", "corporate_action", "狀態"]
+             "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
@@ -2627,6 +2864,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
                 "累計已領配息":     st.column_config.NumberColumn("累積配息",   format="%,.0f"),
                 "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
                 "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
+                "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%,.4f"),
                 "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
                 "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
             }
@@ -2695,3 +2933,6 @@ with tabs[13]:
 
 with tabs[14]:
     render_dividend_log_tab()
+
+with tabs[15]:
+    render_online_sheets_tab()
