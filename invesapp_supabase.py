@@ -2392,7 +2392,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div></div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "匯率", "批次更新", "資料安全", "修復排序", "貼上清單修復", "全部歸零重建", "抓價測試"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "匯率", "批次更新", "資料安全", "修復排序", "貼上清單修復", "全部歸零重建", "抓價測試", "📊 歷史市值", "💰 配息記錄"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
