@@ -953,7 +953,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             div_per_unit = _gas_div or normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
         else:
             div_per_unit = normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
-        monthly_div = units * div_per_unit
+        monthly_div = units * normalize_number(r.get("monthly_dividend_per_unit", 0), 0) 
         monthly_div_twd = monthly_div * fx if fx is not None else None
         out = dict(r)
         out["currency"] = currency
