@@ -49,16 +49,21 @@ def fetch_fx(cur: str) -> float:
 
 def fetch_yahoo(ticker: str) -> float | None:
     if not HAS_YF or not ticker: return None
-    try:
-        t = yf.Ticker(ticker)
-        p = getattr(t.fast_info, "last_price", None)
-        if p is None:
-            hist = t.history(period="5d", auto_adjust=False)
-            if not hist.empty:
-                p = hist["Close"].dropna().iloc[-1]
-        return float(p) if p else None
-    except Exception:
-        return None
+    for attempt in range(2):
+        try:
+            t = yf.Ticker(ticker)
+            p = getattr(t.fast_info, "last_price", None)
+            if p is None or float(p) <= 0:
+                hist = t.history(period="5d", auto_adjust=False)
+                if not hist.empty and "Close" in hist:
+                    close = hist["Close"].dropna()
+                    if not close.empty:
+                        p = close.iloc[-1]
+            if p and float(p) > 0:
+                return float(p)
+        except Exception as e:
+            print(f"  Yahoo {ticker} attempt {attempt+1} 失敗: {e}")
+    return None
 
 def fetch_gas(fund_code: str) -> dict:
     try:
@@ -139,7 +144,8 @@ def calc_portfolio() -> dict:
         "taishin":   round(platform_val["台新基金"], 0),
         "total_cost": round(total_cost, 0),
         "total_pnl":  round(total_pnl, 0),
-        "note": f"{'晚間' if IS_EVENING else '早間'}快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')}"
+        "note": f"{'晚間' if IS_EVENING else '早間'}快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')}",
+        "trigger": "schedule",
     }
 
 def sync_dividend_log():
