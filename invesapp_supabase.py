@@ -23,7 +23,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-21-v25-twse-realtime"
+APP_VERSION = "2026-05-21-v26-gas-div"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbyUKfr9VAcArLemNFe4z0eKv_FX8Dehss2DLoWGcTV4KS9P1jwiW1be1KNf4YOIMGg/exec"
 
