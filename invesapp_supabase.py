@@ -26,7 +26,7 @@ except Exception:
 
 APP_VERSION = "2026-05-22-v28-div-records"
 
-GAS_FUND_NAV_URL_V3 = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
+GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
 MAIN_GOOGLE_SHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
 ONLINE_SHEET_SOURCES = {
