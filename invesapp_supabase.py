@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -22,7 +23,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-20-v22-overview"
+APP_VERSION = "2026-05-21-v24-two-row-scroll"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbyUKfr9VAcArLemNFe4z0eKv_FX8Dehss2DLoWGcTV4KS9P1jwiW1be1KNf4YOIMGg/exec"
 
@@ -503,9 +504,46 @@ def fetch_yahoo_price(ticker: str) -> tuple[float | None, str]:
         return None, f"Yahoo 錯誤:{str(e)[:40]}"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+def is_tw_stock_ticker(ticker: str) -> bool:
+    """判斷是否為台股 / 台股 ETF ticker。"""
+    ticker = normalize_ticker(ticker)
+    return ticker.endswith(".TW") or ticker.endswith(".TWO") or ticker in TW_STOCK_EXCHANGES
+
+
+def tw_now() -> datetime:
+    """台灣時間。Streamlit Cloud / GitHub Actions 常是 UTC，這裡固定轉 UTC+8。"""
+    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+
+
+def fmt_md(dt: datetime) -> str:
+    """顯示 M/DD。"""
+    return f"{dt.month}/{dt.day:02d}"
+
+
+def is_tw_market_session(dt: datetime | None = None) -> bool:
+    """台股一般交易時段附近：週一到週五 09:00 後到 13:40。"""
+    dt = dt or tw_now()
+    if dt.weekday() >= 5:
+        return False
+    minutes = dt.hour * 60 + dt.minute
+    return 9 * 60 <= minutes <= 13 * 60 + 40
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
     ticker = normalize_ticker(ticker)
+    is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
+
+    # 台股盤中優先用 Google Finance；Yahoo/yfinance 的 history 常在開盤後仍停在前一交易日。
+    if is_tw:
+        g_price, g_status = fetch_google_finance_price(ticker, None)
+        if g_price is not None:
+            return g_price, "Google即時"
+        y_price, y_status = fetch_yahoo_price(ticker)
+        if y_price is not None:
+            return y_price, "Yahoo備援"
+        return None, f"{g_status}; {y_status}"
+
     price, status = fetch_yahoo_price(ticker)
     if price is not None:
         return price, "Yahoo"
@@ -1249,25 +1287,61 @@ def _get_gas_monthly_div(fund_code: str) -> float | None:
     return _get_gas_data(fund_code).get("monthly_div")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_stock_date(ticker: str) -> str:
-    """Yahoo Finance 最新報價日期，回傳 M/DD"""
+    """
+    股票報價日期，回傳 M/DD。
+
+    台股修正重點：
+    - 不再只用 yfinance history 的最後一根日 K。history 在台股開盤後常延遲到前一交易日。
+    - 台股盤中若 Google/Yahoo 已可抓到價格，日期直接顯示台灣今天日期。
+    - 非盤中或無法判斷時，才退回 Yahoo regularMarketTime / history。
+    """
     ticker = normalize_ticker(ticker)
-    if not ticker or not HAS_YF:
+    if not ticker:
         return "—"
-    try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="5d")
-        if not hist.empty:
-            last = hist.index[-1]
-            if hasattr(last, "strftime"):
-                # %-m 去掉前導零（Linux）；Windows 用 %#m
-                try:
-                    return last.strftime("%-m/%d")
-                except ValueError:
-                    return last.strftime("%m/%d").lstrip("0").replace("/0", "/")
-    except Exception:
-        pass
+
+    is_tw = is_tw_stock_ticker(ticker)
+    now_tw = tw_now()
+
+    if is_tw:
+        price, _status = fetch_stock_price(ticker, "台股")
+        if price is not None and is_tw_market_session(now_tw):
+            return fmt_md(now_tw)
+
+    if HAS_YF:
+        try:
+            t = yf.Ticker(ticker)
+            info = {}
+            try:
+                info = t.info or {}
+            except Exception:
+                info = {}
+            ts = info.get("regularMarketTime") or info.get("postMarketTime") or info.get("preMarketTime")
+            if ts:
+                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(timezone(timedelta(hours=8)) if is_tw else timezone.utc)
+                return fmt_md(dt)
+        except Exception:
+            pass
+
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="5d")
+            if not hist.empty:
+                last = hist.index[-1]
+                if hasattr(last, "to_pydatetime"):
+                    last = last.to_pydatetime()
+                if hasattr(last, "strftime"):
+                    return fmt_md(last)
+        except Exception:
+            pass
+
+    if is_tw:
+        # 若台股已開盤且可從 Google 抓到價格，但 Yahoo 日期失敗，仍顯示今天，避免誤判為未更新。
+        g_price, _ = fetch_google_finance_price(ticker, None)
+        if g_price is not None and is_tw_market_session(now_tw):
+            return fmt_md(now_tw)
+
     return "—"
 
 
@@ -1394,8 +1468,11 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "配息率":   st.column_config.TextColumn("配息率",   width="small"),
             "損益率":   st.column_config.TextColumn("損益率",   width="small"),
         }
+        # 明細表預設只顯示約 2 列，保留表格內上下捲動查看其他檔
+        DETAIL_TABLE_VISIBLE_ROWS = 2
+        DETAIL_TABLE_HEIGHT = 42 * DETAIL_TABLE_VISIBLE_ROWS + 44
         st.dataframe(df_disp, use_container_width=True, hide_index=True,
-                     height=min(42 * len(df_disp) + 44, 480),
+                     height=DETAIL_TABLE_HEIGHT,
                      column_config=col_cfg)
 
 
