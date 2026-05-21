@@ -201,6 +201,12 @@ flowchart LR
 
 我的建議是：先做 Streamlit + SQLite 的只讀版，跑穩後再把輸入功能搬進系統。
 
+## 2026-05-22 更新：月配息估算與線上總表
+
+- `invesapp_supabase.py` 已修正預估每月配息：基金會優先使用 GAS/MoneyDJ 抓到的每單位配息，若尚未填現在股數，會用市值股數估算。
+- 新增 `📒 線上總表` tab，直接讀取主帳本的 `2026細帳`、`每月收入`、`資產總覽` 三個 Google Sheet gid，先用唯讀方式把銀行現金與統整表搬到線上查看。
+- `supabase_schema.sql` 補上 `is_reinvest`、`dividend_pay_date`、`fund_dividends`、`dividend_log`、`portfolio_snapshots`，讓目前 app 會用到的表結構可一次建立。
+
 美股與基金現值更新說明
 主檔：invesapp_supabase.py
 
