@@ -1324,27 +1324,34 @@ SUB_GROUPS: dict[str, list[tuple[str, str]]] = {
     "台股":    [("台股",       "TWD")],
 }
 
-# GAS 快取（同 session 只抓一次，避免重複 HTTP 請求）
-# 結構：{fund_code: {"date": "5/18", "monthly_div": 0.044}}
+# GAS 快取（同 session 只抓一次）
+# 結構：{fund_code: {"date":"5/19","monthly_div":0.044,"ex_date":"2026/05/05","pay_date":"2026/05/13"}}
 _gas_cache: dict[str, dict] = {}
 
-GAS_FUND_NAV_URL_V2 = "https://script.google.com/macros/s/AKfycbxazSRUsuQJPnGXaecPhBVuihlpF-vApEsLbTf1dXbY9w-TzUOU2x_Oer9F9I5p-fBB/exec"
+GAS_FUND_NAV_URL_V3 = "https://script.google.com/macros/s/AKfycbwS8AUn4M4Qx9qHxcRkNv2GqTTKAIYgXmNRoYsOKFNfSv9yLFz1sEu5EKY2Tqvnf_Ok/exec"
+
+
+def _parse_date_str(raw: str) -> str:
+    """YYYY/MM/DD → M/DD，供顯示用"""
+    parts = raw.split("/")
+    return f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
 
 
 def _get_gas_data(fund_code: str) -> dict:
     """
-    從 GAS v2 取得基金完整資料：
-    回傳 {"date": "5/18", "monthly_div": 0.044}
-    使用新 URL，同 session 快取。
+    從 GAS v3 取得基金完整資料：
+    {"date":"5/19","monthly_div":0.044,"ex_date":"2026/05/05","pay_date":"2026/05/13"}
+    同 session 快取，避免重複 HTTP。
     """
     global _gas_cache
     if fund_code in _gas_cache:
         return _gas_cache[fund_code]
 
-    gas_url = GAS_FUND_NAV_URL_V2 or GAS_FUND_NAV_URL
+    gas_url = GAS_FUND_NAV_URL_V3
+    empty = {"date": "—", "monthly_div": None, "ex_date": None, "pay_date": None}
     if not gas_url or not fund_code:
-        _gas_cache[fund_code] = {"date": "—", "monthly_div": None}
-        return _gas_cache[fund_code]
+        _gas_cache[fund_code] = empty
+        return empty
 
     try:
         r = requests.get(gas_url, params={"code": fund_code},
@@ -1352,77 +1359,60 @@ def _get_gas_data(fund_code: str) -> dict:
         if r.status_code == 200:
             data = r.json()
             if data.get("ok"):
-                raw = data.get("date", "")          # YYYY/MM/DD
-                parts = raw.split("/")
-                date_str = f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
-                mdiv = data.get("monthly_div")
                 result = {
-                    "date":        date_str,
-                    "monthly_div": float(mdiv) if mdiv is not None else None,
+                    "date":        _parse_date_str(data.get("date", "")),
+                    "monthly_div": float(data["monthly_div"]) if data.get("monthly_div") else None,
+                    "ex_date":     data.get("ex_date"),    # YYYY/MM/DD
+                    "pay_date":    data.get("pay_date"),   # YYYY/MM/DD
                 }
             else:
-                result = {"date": "—", "monthly_div": None}
+                result = empty
         else:
-            result = {"date": "—", "monthly_div": None}
+            result = empty
     except Exception:
-        result = {"date": "—", "monthly_div": None}
+        result = empty
 
     _gas_cache[fund_code] = result
     return result
 
 
 def _get_gas_date(fund_code: str) -> str:
-    """取得基金報價日期（M/DD），供顯示用"""
     return _get_gas_data(fund_code).get("date", "—")
 
 
 def _get_gas_monthly_div(fund_code: str) -> float | None:
-    """取得基金最新每月配息金額（原幣）"""
     return _get_gas_data(fund_code).get("monthly_div")
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+def _get_gas_ex_date(fund_code: str) -> str | None:
+    """除息日 YYYY/MM/DD，用於單位數快照判斷"""
+    return _get_gas_data(fund_code).get("ex_date")
+
+
+def _get_gas_pay_date(fund_code: str) -> str | None:
+    """發放日 YYYY/MM/DD，用於累計配息認列"""
+    return _get_gas_data(fund_code).get("pay_date")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_stock_date(ticker: str) -> str:
-    """股票報價日期，回傳 M/DD。台股優先讀 TWSE MIS 的 d/t。"""
+    """Yahoo Finance 最新報價日期，回傳 M/DD"""
     ticker = normalize_ticker(ticker)
-    if not ticker:
+    if not ticker or not HAS_YF:
         return "—"
-
-    is_tw = is_tw_stock_ticker(ticker)
-    if is_tw:
-        tw_quote = fetch_twse_realtime_quote(ticker)
-        date_str = normalize_text(tw_quote.get("date", "—"), "—")
-        if date_str != "—" and tw_quote.get("price") is not None:
-            return date_str
-
-    if HAS_YF:
-        try:
-            t = yf.Ticker(ticker)
-            info = {}
-            try:
-                info = t.info or {}
-            except Exception:
-                info = {}
-            ts = info.get("regularMarketTime") or info.get("postMarketTime") or info.get("preMarketTime")
-            if ts:
-                tz = timezone(timedelta(hours=8)) if is_tw else timezone.utc
-                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(tz)
-                return fmt_md(dt)
-        except Exception:
-            pass
-
-        try:
-            t = yf.Ticker(ticker)
-            hist = t.history(period="5d")
-            if not hist.empty:
-                last = hist.index[-1]
-                if hasattr(last, "to_pydatetime"):
-                    last = last.to_pydatetime()
-                if hasattr(last, "strftime"):
-                    return fmt_md(last)
-        except Exception:
-            pass
-
+    try:
+        t = yf.Ticker(ticker)
+        hist = t.history(period="5d")
+        if not hist.empty:
+            last = hist.index[-1]
+            if hasattr(last, "strftime"):
+                # %-m 去掉前導零（Linux）；Windows 用 %#m
+                try:
+                    return last.strftime("%-m/%d")
+                except ValueError:
+                    return last.strftime("%m/%d").lstrip("0").replace("/0", "/")
+    except Exception:
+        pass
     return "—"
 
 
@@ -1510,15 +1500,8 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         mdiv      = pr.get("每月配息") or 0
         ann_rate  = (mdiv * 12 / cost_val) if cost_val and mdiv else None
 
-        # 取報價日期；台股使用 TWSE 即時報價日期，盤中可看到今天日期
-        if atype == "台股":
-            tk = normalize_text(pr.get("ticker", ""))
-            if tk:
-                tw_quote = fetch_twse_realtime_quote(tk)
-                date_str = normalize_text(tw_quote.get("date", "—"), "—")
-            else:
-                date_str = "—"
-        elif atype == "美股":
+        # 取報價日期
+        if atype in {"台股", "美股"}:
             tk       = normalize_text(pr.get("ticker", ""))
             date_str = fetch_stock_date(tk) if tk else "—"
         else:
@@ -1556,11 +1539,8 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "配息率":   st.column_config.TextColumn("配息率",   width="small"),
             "損益率":   st.column_config.TextColumn("損益率",   width="small"),
         }
-        # 明細表預設只顯示約 2 列，保留表格內上下捲動查看其他檔
-        DETAIL_TABLE_VISIBLE_ROWS = 2
-        DETAIL_TABLE_HEIGHT = 42 * DETAIL_TABLE_VISIBLE_ROWS + 44
         st.dataframe(df_disp, use_container_width=True, hide_index=True,
-                     height=DETAIL_TABLE_HEIGHT,
+                     height=min(42 * len(df_disp) + 44, 480),
                      column_config=col_cfg)
 
 
@@ -1650,12 +1630,179 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
                         st.cache_data.clear()
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 配息自動化：快照單位數 + 認列累計配息
+# ════════════════════════════════════════════════════════════════════════════
+
+def _date_diff_days(date_str: str) -> int | None:
+    """YYYY/MM/DD 距今幾天（負=過去，正=未來）"""
+    try:
+        from datetime import date
+        parts = date_str.split("/")
+        d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        return (d - date.today()).days
+    except Exception:
+        return None
+
+
+def auto_dividend_update(positions: pd.DataFrame) -> int:
+    """
+    每次頁面載入自動執行：
+    1. 【快照】今天在 [ex_date-1天, ex_date+2天] 且 fund_dividends 還沒有這筆
+       → 加總同基金所有 units → 寫入 fund_dividends
+    2. 【認列】pay_date <= 今天 且 is_paid=False
+       → twd_total = units_at_ex × div_amount × fx_rate
+       → is_paid = True
+       → dividend_received_total += twd_total（只加到 MIN(id) 那筆）
+    回傳：更新筆數
+    """
+    from datetime import date as dt_date
+    today_str = dt_date.today().strftime("%Y/%m/%d")
+    today = dt_date.today()
+
+    if positions.empty:
+        return 0
+
+    sb = supabase_client()
+    updated = 0
+
+    # 取得所有已有記錄的 fund_dividends
+    try:
+        existing_rows = sb.table("fund_dividends").select("fund_code,platform,currency,ex_date,pay_date,is_paid,units_at_ex,div_amount,fx_rate,twd_total,id").execute()
+        existing = {
+            (r["fund_code"], r["platform"], r["currency"], r["ex_date"]): r
+            for r in (existing_rows.data or [])
+        }
+    except Exception:
+        existing = {}
+
+    # 按基金分組處理
+    fund_groups: dict[tuple, pd.DataFrame] = {}
+    for _, r in positions.iterrows():
+        if normalize_text(r.get("asset_type","")) != "基金":
+            continue
+        fc  = normalize_text(r.get("fund_code",""))
+        plt = normalize_text(r.get("platform",""))
+        cur = normalize_text(r.get("currency","TWD"))
+        if not fc:
+            continue
+        key = (fc, plt, cur)
+        fund_groups.setdefault(key, []).append(r)
+
+    for (fc, plt, cur), rows in fund_groups.items():
+        gas = _get_gas_data(fc)
+        ex_date  = gas.get("ex_date")   # YYYY/MM/DD
+        pay_date = gas.get("pay_date")  # YYYY/MM/DD
+        div_amt  = gas.get("monthly_div")
+
+        if not ex_date or not div_amt:
+            continue
+
+        # 取即時匯率
+        fx_val, _ = fetch_fx(cur)
+        fx_val = fx_val or 1.0
+
+        exist_key = (fc, plt, cur, ex_date)
+        exist_row = existing.get(exist_key)
+
+        # ── Step 1：快照（除息日前後3天內，且還沒有記錄）──
+        diff = _date_diff_days(ex_date)
+        if diff is not None and -1 <= diff <= 2 and not exist_row:
+            # 加總這個基金所有持倉的單位數
+            total_units = sum(
+                normalize_number(r.get("units", 0), 0) for r in rows
+            )
+            if total_units > 0:
+                try:
+                    sb.table("fund_dividends").insert({
+                        "fund_code":   fc,
+                        "platform":    plt,
+                        "currency":    cur,
+                        "ex_date":     ex_date,
+                        "pay_date":    pay_date,
+                        "div_amount":  float(div_amt),
+                        "units_at_ex": float(total_units),
+                        "fx_rate":     float(fx_val),
+                        "twd_total":   None,
+                        "is_paid":     False,
+                    }).execute()
+                    exist_row = {
+                        "fund_code": fc, "platform": plt, "currency": cur,
+                        "ex_date": ex_date, "pay_date": pay_date,
+                        "div_amount": div_amt, "units_at_ex": total_units,
+                        "fx_rate": fx_val, "is_paid": False,
+                    }
+                    updated += 1
+                except Exception:
+                    pass  # 唯一鍵衝突表示已存在
+
+        # ── Step 2：認列（發放日已到，且 is_paid=False）──
+        if not exist_row:
+            continue
+        if exist_row.get("is_paid"):
+            continue
+        if not pay_date:
+            continue
+
+        diff_pay = _date_diff_days(pay_date)
+        if diff_pay is None or diff_pay > 0:
+            continue  # 發放日還沒到
+
+        # 計算台幣配息總額
+        units_at_ex = float(exist_row.get("units_at_ex") or 0)
+        fx_at_ex    = float(exist_row.get("fx_rate") or fx_val)
+        div_amount  = float(exist_row.get("div_amount") or div_amt)
+        twd_total   = units_at_ex * div_amount * fx_at_ex
+
+        if twd_total <= 0:
+            continue
+
+        # 更新 fund_dividends
+        try:
+            row_id = exist_row.get("id")
+            if row_id:
+                sb.table("fund_dividends").update({
+                    "is_paid":   True,
+                    "twd_total": twd_total,
+                    "fx_rate":   fx_at_ex,
+                    "updated_at": "now()",
+                }).eq("id", int(row_id)).execute()
+
+            # 加到 positions 的 dividend_received_total（只加 MIN(id) 那筆）
+            pos_rows = sorted(rows, key=lambda r: normalize_number(r.get("id", 999999), 999999))
+            min_id = int(float(pos_rows[0].get("id")))
+            cur_total = normalize_number(pos_rows[0].get("dividend_received_total", 0), 0)
+            sb.table("positions").update({
+                "dividend_received_total": cur_total + twd_total,
+                "dividend_pay_date": pay_date,
+            }).eq("id", min_id).execute()
+
+            updated += 1
+        except Exception:
+            pass
+
+    return updated
+
+
 def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     """總覽主函式：KPI + 匯率 + 各平台群組（美股→基富通→渣打→台新→台股）"""
     st.markdown("### 💎 所有投資管道總覽")
     if enriched.empty:
         st.info("目前沒有資料。")
         return
+
+    # ── 自動配息更新（快照 + 認列）──
+    # 每次頁面載入執行，有更新才會顯示通知
+    if "dividend_auto_done" not in st.session_state:
+        try:
+            n = auto_dividend_update(
+                supabase_client().table("positions").select("*").execute().data or []
+            )
+            if n > 0:
+                st.toast(f"💰 配息自動更新 {n} 筆", icon="✅")
+        except Exception:
+            pass
+        st.session_state["dividend_auto_done"] = True
 
     # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
     # 即時計算，不寫回 Supabase，只用於顯示
@@ -1681,8 +1828,23 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
                 fx_cache_local[cur] = fx_val or 1.0
             fx_val = fx_cache_local[cur]
             est_monthly_div += units * mdiv_per_unit * fx_val
+        # 本月已認列配息（從 fund_dividends 查）
+        this_month_paid = 0.0
+        try:
+            from datetime import date
+            ym = date.today().strftime("%Y/%m")
+            div_rows = supabase_client().table("fund_dividends").select("twd_total,pay_date,is_paid").execute()
+            for dr in (div_rows.data or []):
+                if dr.get("is_paid") and dr.get("pay_date","").startswith(ym):
+                    this_month_paid += float(dr.get("twd_total") or 0)
+        except Exception:
+            pass
+
+        col_a, col_b = st.columns(2)
         if est_monthly_div > 0:
-            st.info(f"💰 預估每月配息（基金）：**{money(est_monthly_div)}** 台幣（各基金單位數 × 前月配息金額 × 即時匯率）")
+            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次配息金額 × 目前單位數）")
+        if this_month_paid > 0:
+            col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
 
     # ── 自動把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
     # （只更新 monthly_dividend_per_unit == 0 且有 fund_code 的列）
