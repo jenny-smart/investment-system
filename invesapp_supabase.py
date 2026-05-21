@@ -23,7 +23,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-21-v24-two-row-scroll"
+APP_VERSION = "2026-05-21-v25-twse-realtime"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbyUKfr9VAcArLemNFe4z0eKv_FX8Dehss2DLoWGcTV4KS9P1jwiW1be1KNf4YOIMGg/exec"
 
@@ -529,25 +529,114 @@ def is_tw_market_session(dt: datetime | None = None) -> bool:
     return 9 * 60 <= minutes <= 13 * 60 + 40
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+def tw_stock_market_prefix(ticker: str) -> str:
+    """TWSE MIS API 的交易所代碼：上市 tse，上櫃 otc。"""
+    ticker = normalize_ticker(ticker)
+    exchange = TW_STOCK_EXCHANGES.get(ticker, "")
+    if ticker.endswith(".TWO") or exchange == "TAI":
+        return "otc"
+    return "tse"
+
+
+def tw_stock_plain_code(ticker: str) -> str:
+    """把 2330.TW / 5478.TWO 轉成 TWSE MIS 使用的 2330 / 5478。"""
+    ticker = normalize_ticker(ticker)
+    return ticker.replace(".TW", "").replace(".TWO", "")
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
+    """
+    台股即時報價：優先使用證交所 MIS API。
+    回傳欄位：price, date, time, status。
+    
+    說明：
+    - z = 最新成交價；若 z 為 '-'，用 b/a 或昨日收盤 y 備援，但會標示非最新成交。
+    - d = YYYYMMDD，t = HH:MM:SS。
+    - 這比 yfinance history 更適合盤中即時報價。
+    """
+    ticker = normalize_ticker(ticker)
+    code = tw_stock_plain_code(ticker)
+    if not code:
+        return {"price": None, "date": "—", "time": "—", "status": "台股無代碼"}
+
+    prefix = tw_stock_market_prefix(ticker)
+    ex_ch = f"{prefix}_{code}.tw"
+    url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
+    params = {"ex_ch": ex_ch, "json": "1", "delay": "0", "_": str(int(tw_now().timestamp() * 1000))}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+        "Referer": "https://mis.twse.com.tw/stock/fibest.jsp",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=10, headers=headers)
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("msgArray") or []
+        if not items:
+            return {"price": None, "date": "—", "time": "—", "status": f"TWSE無資料:{ex_ch}"}
+        q = items[0]
+
+        def pick_number(*keys: str) -> float | None:
+            for key in keys:
+                raw = normalize_text(q.get(key, ""))
+                if not raw or raw == "-":
+                    continue
+                # b / a 可能是 '12.30_'，取第一個價位
+                raw = raw.split("_")[0].replace(",", "")
+                val = to_float(raw)
+                if val is not None and 0 < val < 100000:
+                    return float(val)
+            return None
+
+        price = pick_number("z")
+        source_note = "TWSE即時"
+        if price is None:
+            price = pick_number("b", "a")
+            source_note = "TWSE買賣價備援"
+        if price is None:
+            price = pick_number("y")
+            source_note = "TWSE昨收備援"
+
+        raw_date = normalize_text(q.get("d", ""))
+        raw_time = normalize_text(q.get("t", ""))
+        date_str = "—"
+        if len(raw_date) == 8 and raw_date.isdigit():
+            date_str = f"{int(raw_date[4:6])}/{int(raw_date[6:8]):02d}"
+
+        if price is None:
+            return {"price": None, "date": date_str, "time": raw_time or "—", "status": f"TWSE無價格:{ex_ch}"}
+
+        return {"price": price, "date": date_str, "time": raw_time or "—", "status": source_note}
+    except Exception as e:
+        return {"price": None, "date": "—", "time": "—", "status": f"TWSE錯誤:{str(e)[:40]}"}
+
+
+@st.cache_data(ttl=20, show_spinner=False)
 def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
     ticker = normalize_ticker(ticker)
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
-    # 台股盤中優先用 Google Finance；Yahoo/yfinance 的 history 常在開盤後仍停在前一交易日。
     if is_tw:
+        tw_quote = fetch_twse_realtime_quote(ticker)
+        if tw_quote.get("price") is not None:
+            return float(tw_quote["price"]), normalize_text(tw_quote.get("status", "TWSE即時"))
+
+        # 台股備援：Google Finance。避免把頁面上的任意小數誤判為股價，仍保留 TWSE 為主。
         g_price, g_status = fetch_google_finance_price(ticker, None)
         if g_price is not None:
-            return g_price, "Google即時"
+            return g_price, "Google備援"
+
         y_price, y_status = fetch_yahoo_price(ticker)
         if y_price is not None:
             return y_price, "Yahoo備援"
-        return None, f"{g_status}; {y_status}"
+        return None, f"{tw_quote.get('status')}; {g_status}; {y_status}"
 
     price, status = fetch_yahoo_price(ticker)
     if price is not None:
         return price, "Yahoo"
-    # Yahoo 失敗時，所有股票都試 Google Finance
     g_price, g_status = fetch_google_finance_price(ticker, None)
     if g_price is not None:
         return g_price, "Google"
@@ -811,6 +900,8 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
 
 def format_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if "sort_order" in out:
+        out["sort_order"] = out["sort_order"].apply(lambda x: "" if pd.isna(x) else str(int(float(x))))
     for c in ["即時價格/淨值", "匯率"]:
         if c in out:
             out[c] = out[c].apply(lambda x: money(x, 4))
@@ -1287,27 +1378,19 @@ def _get_gas_monthly_div(fund_code: str) -> float | None:
     return _get_gas_data(fund_code).get("monthly_div")
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def fetch_stock_date(ticker: str) -> str:
-    """
-    股票報價日期，回傳 M/DD。
-
-    台股修正重點：
-    - 不再只用 yfinance history 的最後一根日 K。history 在台股開盤後常延遲到前一交易日。
-    - 台股盤中若 Google/Yahoo 已可抓到價格，日期直接顯示台灣今天日期。
-    - 非盤中或無法判斷時，才退回 Yahoo regularMarketTime / history。
-    """
+    """股票報價日期，回傳 M/DD。台股優先讀 TWSE MIS 的 d/t。"""
     ticker = normalize_ticker(ticker)
     if not ticker:
         return "—"
 
     is_tw = is_tw_stock_ticker(ticker)
-    now_tw = tw_now()
-
     if is_tw:
-        price, _status = fetch_stock_price(ticker, "台股")
-        if price is not None and is_tw_market_session(now_tw):
-            return fmt_md(now_tw)
+        tw_quote = fetch_twse_realtime_quote(ticker)
+        date_str = normalize_text(tw_quote.get("date", "—"), "—")
+        if date_str != "—" and tw_quote.get("price") is not None:
+            return date_str
 
     if HAS_YF:
         try:
@@ -1319,7 +1402,8 @@ def fetch_stock_date(ticker: str) -> str:
                 info = {}
             ts = info.get("regularMarketTime") or info.get("postMarketTime") or info.get("preMarketTime")
             if ts:
-                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(timezone(timedelta(hours=8)) if is_tw else timezone.utc)
+                tz = timezone(timedelta(hours=8)) if is_tw else timezone.utc
+                dt = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(tz)
                 return fmt_md(dt)
         except Exception:
             pass
@@ -1335,12 +1419,6 @@ def fetch_stock_date(ticker: str) -> str:
                     return fmt_md(last)
         except Exception:
             pass
-
-    if is_tw:
-        # 若台股已開盤且可從 Google 抓到價格，但 Yahoo 日期失敗，仍顯示今天，避免誤判為未更新。
-        g_price, _ = fetch_google_finance_price(ticker, None)
-        if g_price is not None and is_tw_market_session(now_tw):
-            return fmt_md(now_tw)
 
     return "—"
 
@@ -1429,8 +1507,15 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         mdiv      = pr.get("每月配息") or 0
         ann_rate  = (mdiv * 12 / cost_val) if cost_val and mdiv else None
 
-        # 取報價日期
-        if atype in {"台股", "美股"}:
+        # 取報價日期；台股使用 TWSE 即時報價日期，盤中可看到今天日期
+        if atype == "台股":
+            tk = normalize_text(pr.get("ticker", ""))
+            if tk:
+                tw_quote = fetch_twse_realtime_quote(tk)
+                date_str = normalize_text(tw_quote.get("date", "—"), "—")
+            else:
+                date_str = "—"
+        elif atype == "美股":
             tk       = normalize_text(pr.get("ticker", ""))
             date_str = fetch_stock_date(tk) if tk else "—"
         else:
@@ -1697,8 +1782,10 @@ def price_test_section() -> None:
             normalized = normalize_ticker(ticker)
             y_price, y_status = fetch_yahoo_price(normalized)
             g_price, g_status = fetch_google_finance_price(normalized, US_STOCK_EXCHANGES.get(normalized))
-            final_price, final_status = fetch_stock_price(normalized, "美股")
+            tw_quote = fetch_twse_realtime_quote(normalized) if is_tw_stock_ticker(normalized) else {}
+            final_price, final_status = fetch_stock_price(normalized, "台股" if is_tw_stock_ticker(normalized) else "美股")
             st.write({"ticker": normalized, "exchange": US_STOCK_EXCHANGES.get(normalized, "NASDAQ"),
+                      "twse_quote": tw_quote,
                       "yahoo_price": y_price, "yahoo_status": y_status,
                       "google_price": g_price, "google_status": g_status,
                       "final_price": final_price, "final_status": final_status})
