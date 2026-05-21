@@ -863,6 +863,7 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
     total_pnl_with_dividend = pnl + dividend_received_total if pnl is not None else None
     total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
+    is_reinvest = bool(r.get("is_reinvest", False))
     return {
         "成本原幣": cost_original_currency, "市值原幣": value_original_currency,
         "台幣成本": twd_cost, "台幣市值": twd_value,
