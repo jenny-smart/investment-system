@@ -50,7 +50,7 @@ US_STOCK_EXCHANGES = {
 # TPE = 上市（TWSE）, TAI = 上櫃（OTC/TWO）
 TW_STOCK_EXCHANGES = {
     "5471.TW":   "TAI",    # 松翰（上櫃）
-    "00740B.TW":  "TPE",    # 富邦全球投等債 ETF
+    "00740B.TWO":  "TPE",    # 富邦全球投等債 ETF
     "4401.TWO":   "TAI",    # 東隆興
     "5478.TWO":   "TAI",    # 智冠
     "6261.TWO":   "TAI",    # 久元
