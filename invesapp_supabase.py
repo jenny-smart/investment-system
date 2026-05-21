@@ -204,13 +204,17 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
-.stApp { background:#f7faf9; color:#0f2b20; }
-.block-container { padding-top:0.8rem; max-width:1600px; }
-.fixed-top { background:#f7faf9; padding:8px 0 12px 0; border-bottom:1px solid #e4ece8; margin-bottom:8px; }
-.hero { background:#fff; border:1px solid #e5eae8; border-radius:16px; padding:16px 20px; box-shadow:0 1px 6px rgba(0,0,0,.05); }
-[data-testid="stMetric"] { background:#fff !important; border:1px solid #e5eae8 !important; border-radius:14px !important; padding:18px 20px !important; }
-[data-testid="stDataFrame"] { background:#fff !important; border:1px solid #e5eae8 !important; border-radius:14px !important; }
-.stButton > button { background:#10b981 !important; color:#fff !important; border-radius:10px !important; border:0 !important; }
+.stApp { background:#f8fafc; color:#1e293b; }
+.block-container { padding-top:0.6rem; max-width:1600px; }
+.hero { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+[data-testid="stMetric"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:12px !important; padding:16px 18px !important; box-shadow:0 1px 4px rgba(0,0,0,.05) !important; }
+[data-testid="stMetricValue"] { font-size:1.35rem !important; font-weight:700 !important; }
+[data-testid="stDataFrame"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:10px !important; }
+.stButton > button { background:#10b981 !important; color:#fff !important; border-radius:10px !important; border:0 !important; font-weight:600 !important; }
+.stButton > button:hover { background:#059669 !important; }
+.stTabs [data-baseweb="tab"] { font-size:13px !important; font-weight:500 !important; color:#64748b !important; }
+.stTabs [aria-selected="true"] { color:#10b981 !important; font-weight:700 !important; border-bottom-color:#10b981 !important; }
+.stAlert { border-radius:10px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1508,17 +1512,33 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     total_rate = total_pnl / total_cost if total_cost else None
     pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
+    nav_pnl_sub   = total_val - total_cost if total_val and total_cost else 0
+    total_pnl_sub = nav_pnl_sub + total_div
+    nav_color  = "#6ee7b7" if nav_pnl_sub >= 0 else "#fca5a5"
+    tot_color  = "#6ee7b7" if total_pnl_sub >= 0 else "#fca5a5"
+
     st.markdown(f"""
-<div style="background:#1a4a35;color:#fff;padding:7px 16px;border-radius:6px;
-            display:flex;flex-wrap:wrap;align-items:center;gap:16px;
-            margin:6px 0 1px 16px;font-size:13px;font-weight:700;font-family:monospace;">
-  <span style="font-family:sans-serif;font-size:13px;min-width:100px">{sub_label}</span>
-  <span style="min-width:80px"><span style="opacity:.55;font-family:sans-serif;font-size:11px">損益 </span>
-    <span style="color:{pnl_color}">{signed_money(total_pnl)}</span></span>
-  <span style="min-width:120px"><span style="opacity:.55;font-family:sans-serif;font-size:11px">台幣成本 </span>{money(total_cost)}</span>
-  <span style="min-width:120px"><span style="opacity:.55;font-family:sans-serif;font-size:11px">台幣市值 </span>{money(total_val)}</span>
-  <span style="min-width:100px"><span style="opacity:.55;font-family:sans-serif;font-size:11px">累積配息 </span>{money(total_div)}</span>
-  <span style="min-width:80px"><span style="opacity:.55;font-family:sans-serif;font-size:11px">月配息 </span>{money(total_mdiv)}</span>
+<div style="background:#f0fdf4;color:#1a2e22;padding:8px 16px;border-radius:8px;
+            display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+            margin:6px 0 1px 20px;font-size:12px;font-weight:600;
+            border:1px solid #bbf7d0;border-left:3px solid #10b981;">
+  <span style="font-size:12px;font-family:sans-serif;min-width:90px;font-weight:800;color:#065f46">{sub_label}</span>
+  <span style="min-width:100px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">成本 </span>{money(total_cost)}</span>
+  <span style="min-width:100px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">市值 </span>{money(total_val)}</span>
+  <span style="min-width:110px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">市值損益 </span>
+    <span style="color:{'#059669' if nav_pnl_sub>=0 else '#dc2626'};font-weight:700">{signed_money(nav_pnl_sub)}</span></span>
+  <span style="min-width:90px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">配息 </span>
+    <span style="color:#0284c7">{money(total_div)}</span></span>
+  <span style="min-width:110px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">總損益 </span>
+    <span style="color:{'#059669' if total_pnl_sub>=0 else '#dc2626'};font-weight:800">{signed_money(total_pnl_sub)}</span></span>
+  <span style="min-width:80px;font-family:monospace">
+    <span style="color:#9ca3af;font-size:10px">月配息 </span>
+    <span style="color:#7c3aed">{money(total_mdiv)}</span></span>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1545,32 +1565,42 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         if price_val is None:
             date_str = "❌"
 
+        # 市值損益 = 台幣市值 - 台幣成本（不含配息）
+        nav_pnl = (mval - cost_val) if mval and cost_val else None
+        nav_pnl_rate = (nav_pnl / cost_val * 100) if nav_pnl is not None and cost_val else None
+        total_pnl_val = (nav_pnl + div_val) if nav_pnl is not None else None
+        total_pnl_rate = (total_pnl_val / cost_val * 100) if total_pnl_val is not None and cost_val else None
+
         rows_disp.append({
-            "名稱":   normalize_text(pr.get("name", "")),
-            "日期":   date_str,
-            "現值":   round(price_val, 2) if price_val is not None else None,
-            "損益":   round(pnl_val, 0)   if pnl_val  is not None else None,
-            "台幣成本": round(cost_val, 0) if cost_val else None,
-            "台幣市值": round(mval, 0)     if mval     else None,
-            "累積配息": round(div_val, 0)  if div_val  else None,
-            "月配息":   round(mdiv, 0)     if mdiv     else None,
-            "配息率":   round(ann_rate * 100, 2) if ann_rate else None,
-            "損益率":   round(rate_val * 100, 2) if rate_val is not None else None,
+            "名稱":     normalize_text(pr.get("name", "")),
+            "日期":     date_str,
+            "現值":     round(price_val, 2)      if price_val is not None else None,
+            "台幣成本": round(cost_val, 0)        if cost_val else None,
+            "台幣市值": round(mval, 0)            if mval     else None,
+            "市值損益": round(nav_pnl, 0)         if nav_pnl  is not None else None,
+            "累積配息": round(div_val, 0)         if div_val  else None,
+            "總損益":   round(total_pnl_val, 0)   if total_pnl_val is not None else None,
+            "市值損益率%": round(nav_pnl_rate, 2) if nav_pnl_rate is not None else None,
+            "總損益率%":  round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
+            "月配息":   round(mdiv, 0)            if mdiv     else None,
+            "配息率%":  round(ann_rate * 100, 2)  if ann_rate else None,
         })
 
     if rows_disp:
         df_disp = pd.DataFrame(rows_disp)
         col_cfg = {
-            "名稱":     st.column_config.TextColumn("名稱",       width="large"),
-            "日期":     st.column_config.TextColumn("日期",       width="small"),
-            "現值":     st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
-            "損益":     st.column_config.NumberColumn("損益",     width="medium", format="%,.0f"),
-            "台幣成本": st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
-            "台幣市值": st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
-            "累積配息": st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
-            "月配息":   st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
-            "配息率":   st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
-            "損益率":   st.column_config.NumberColumn("損益率%",  width="small",  format="%.2f"),
+            "名稱":       st.column_config.TextColumn("名稱",       width="large"),
+            "日期":       st.column_config.TextColumn("日期",       width="small"),
+            "現值":       st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
+            "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
+            "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
+            "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
+            "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
+            "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%,.0f"),
+            "市值損益率%":st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
+            "總損益率%":  st.column_config.NumberColumn("總損益率%",  width="small", format="%.2f"),
+            "月配息":     st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
+            "配息率%":    st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
         }
         # 台股/美股列數多，固定2列高度可上下滾動；基金類自適應
         if sub_label in {"台股", "美股"}:
@@ -1596,19 +1626,43 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     icon       = PLATFORM_ICONS.get(platform, "💼")
     pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
+    nav_pnl_plt   = total_val - total_cost if total_val and total_cost else 0
+    total_pnl_plt = nav_pnl_plt + total_div
+    nav_color_plt = "#6ee7b7" if nav_pnl_plt >= 0 else "#fca5a5"
+    tot_color_plt = "#6ee7b7" if total_pnl_plt >= 0 else "#fca5a5"
+    tot_rate_plt  = total_pnl_plt / total_cost if total_cost else None
+
     st.markdown(f"""
-<div style="background:#0f2b20;color:#fff;padding:10px 18px;border-radius:8px;
-            display:flex;flex-wrap:wrap;align-items:center;gap:20px;
-            margin:20px 0 3px 0;font-size:14px;font-weight:800;font-family:monospace;
-            border-left:4px solid #10b981;">
-  <span style="font-size:16px;font-family:sans-serif;min-width:80px">{icon} {platform}</span>
-  <span style="min-width:120px"><span style="opacity:.55;font-family:sans-serif;font-size:12px">市值 </span>{money(total_val)}</span>
-  <span style="min-width:120px"><span style="opacity:.55;font-family:sans-serif;font-size:12px">成本 </span>{money(total_cost)}</span>
-  <span><span style="opacity:.55;font-family:sans-serif;font-size:12px">損益 </span>
-    <span style="color:{pnl_color}">{signed_money(total_pnl)}</span>
-    <span style="color:{pnl_color};font-size:12px"> ({pct(total_rate)})</span></span>
-  <span style="min-width:100px"><span style="opacity:.55;font-family:sans-serif;font-size:12px">累積配息 </span>{money(total_div)}</span>
-  <span style="min-width:80px"><span style="opacity:.55;font-family:sans-serif;font-size:12px">月配息 </span>{money(total_mdiv)}</span>
+<div style="background:#fff;color:#1a2e22;padding:14px 20px;border-radius:12px;
+            display:flex;flex-wrap:wrap;align-items:center;gap:18px;
+            margin:24px 0 4px 0;font-size:13px;font-weight:700;
+            border:1.5px solid #d1e8dc;border-left:5px solid #10b981;
+            box-shadow:0 2px 10px rgba(16,185,129,.08);">
+  <span style="font-size:16px;font-family:sans-serif;min-width:90px;font-weight:800;color:#10b981">{icon} {platform}</span>
+  <span style="min-width:120px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">成本</div>
+    <div style="font-size:14px;font-weight:700">{money(total_cost)}</div>
+  </span>
+  <span style="min-width:120px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">市值</div>
+    <div style="font-size:14px;font-weight:700">{money(total_val)}</div>
+  </span>
+  <span style="min-width:130px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">市值損益</div>
+    <div style="font-size:14px;font-weight:700;color:{'#059669' if nav_pnl_plt>=0 else '#dc2626'}">{signed_money(nav_pnl_plt)}</div>
+  </span>
+  <span style="min-width:110px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">累積配息</div>
+    <div style="font-size:14px;font-weight:700;color:#0284c7">{money(total_div)}</div>
+  </span>
+  <span style="min-width:140px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">總損益</div>
+    <div style="font-size:14px;font-weight:800;color:{'#059669' if total_pnl_plt>=0 else '#dc2626'}">{signed_money(total_pnl_plt)} <span style="font-size:11px">({pct(tot_rate_plt)})</span></div>
+  </span>
+  <span style="min-width:90px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">月配息</div>
+    <div style="font-size:14px;font-weight:700;color:#7c3aed">{money(total_mdiv)}</div>
+  </span>
 </div>
 """, unsafe_allow_html=True)
 
