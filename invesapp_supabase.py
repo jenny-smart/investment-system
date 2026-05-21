@@ -2137,6 +2137,167 @@ def render_history_tab() -> None:
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 歷史記錄 Tab
+# ════════════════════════════════════════════════════════════════════════════
+
+def _take_snapshot_now(trigger: str = "manual") -> dict:
+    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
+    if enriched is None or enriched.empty:
+        return {}
+
+    platform_val: dict[str, float] = {
+        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
+    }
+    total_cost_sum = 0.0
+    total_div_sum  = 0.0
+
+    for _, r in enriched.iterrows():
+        plt = normalize_text(r.get("platform", ""))
+        val = to_float(r.get("台幣市值"))
+        cost= to_float(r.get("台幣成本"))
+        div = to_float(r.get("累計已領配息"))
+        if plt in platform_val and val:
+            platform_val[plt] += val
+        if cost: total_cost_sum += cost
+        if div:  total_div_sum  += div
+
+    total = sum(platform_val.values())
+    from datetime import datetime, timezone, timedelta
+    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+
+    return {
+        "total_twd":           round(total, 0),
+        "tw_stock":            round(platform_val["台股"], 0),
+        "us_stock":            round(platform_val["美股"], 0),
+        "kifutong":            round(platform_val["基富通"], 0),
+        "scb":                 round(platform_val["渣打基金"], 0),
+        "taishin":             round(platform_val["台新基金"], 0),
+        "total_cost":          round(total_cost_sum, 0),
+        "total_pnl":           round(total - total_cost_sum, 0),
+        "cumulative_dividend": round(total_div_sum, 0),
+        "trigger":             trigger,
+        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+    }
+
+
+def render_history_tab() -> None:
+    """📊 歷史市值"""
+    st.subheader("📊 歷史市值走勢")
+
+    # ── 手動記錄按鈕 ──
+    col_btn, col_info = st.columns([1, 4])
+    if col_btn.button("📸 立即記錄當下市值", key="manual_snapshot_btn"):
+        try:
+            data = _take_snapshot_now("manual")
+            if data:
+                supabase_client().table("portfolio_snapshots").insert(data).execute()
+                st.success(f"✅ 已記錄！總市值：{money(data['total_twd'])}")
+                st.rerun()
+            else:
+                st.error("無法取得市值，請先更新即時價。")
+        except Exception as e:
+            st.error(f"記錄失敗：{e}")
+    col_info.caption("排程：每天 08:00 / 20:00 自動記錄。也可以手動點按鈕立即記錄。")
+
+    st.markdown("---")
+
+    # ── 讀取資料 ──
+    try:
+        rows = supabase_client().table("portfolio_snapshots") \
+            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .order("snapshot_at", desc=True) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取失敗：{e}")
+        return
+
+    if not rows:
+        st.info("還沒有記錄，點上方按鈕立即記錄一筆。")
+        return
+
+    df = pd.DataFrame(rows)
+    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+    df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
+    df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+
+    # ── 日期篩選 ──
+    c1, c2 = st.columns(2)
+    min_d = df["snapshot_at"].min().date()
+    max_d = df["snapshot_at"].max().date()
+    d_from = c1.date_input("起始日期", value=min_d, min_value=min_d, max_value=max_d, key="hist_from")
+    d_to   = c2.date_input("結束日期", value=max_d, min_value=min_d, max_value=max_d, key="hist_to")
+    mask = (df["snapshot_at"].dt.date >= d_from) & (df["snapshot_at"].dt.date <= d_to)
+    df_f = df[mask].copy()
+
+    if df_f.empty:
+        st.warning("選擇的日期範圍內沒有資料。")
+        return
+
+    # ── KPI ──
+    latest = df_f.iloc[0]
+    oldest = df_f.iloc[-1]
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("最新總市值",     money(latest["total_twd"]),
+              delta=f"{latest['total_twd'] - oldest['total_twd']:+,.0f}")
+    k2.metric("最新含息損益",   money(latest["total_pnl"]))
+    k3.metric("累計配息",       money(latest.get("cumulative_dividend") or 0))
+    k4.metric("記錄筆數",       f"{len(df_f)}")
+    k5.metric("記錄天數",
+              f"{(df_f['snapshot_at'].max() - df_f['snapshot_at'].min()).days + 1} 天")
+
+    st.markdown("---")
+
+    # ── 折線圖（時間軸由舊到新）──
+    df_chart = df_f.sort_values("snapshot_at").copy()
+
+    st.markdown("#### 總台幣市值走勢")
+    st.line_chart(df_chart.set_index("時間")[["total_twd"]].rename(columns={"total_twd": "總市值"}), height=220)
+
+    st.markdown("#### 各平台市值走勢")
+    st.line_chart(
+        df_chart.set_index("時間")[["tw_stock", "us_stock", "kifutong", "scb", "taishin"]].rename(columns={
+            "tw_stock": "台股", "us_stock": "美股",
+            "kifutong": "基富通", "scb": "渣打", "taishin": "台新",
+        }), height=250
+    )
+
+    st.markdown("---")
+
+    # ── 明細表（愈新愈上）──
+    st.markdown("#### 歷史記錄明細")
+    df_show = df_f[[
+        "時間", "total_twd", "tw_stock", "us_stock",
+        "kifutong", "scb", "taishin",
+        "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
+    ]].copy()
+    df_show.columns = [
+        "時間", "總市值", "台股", "美股",
+        "基富通", "渣打", "台新",
+        "總成本", "市值損益", "累計配息", "觸發方式", "備註"
+    ]
+
+    col_cfg = {
+        "總市值":   st.column_config.NumberColumn("總市值",   format="%,.0f", width="medium"),
+        "台股":     st.column_config.NumberColumn("台股",     format="%,.0f", width="medium"),
+        "美股":     st.column_config.NumberColumn("美股",     format="%,.0f", width="medium"),
+        "基富通":   st.column_config.NumberColumn("基富通",   format="%,.0f", width="medium"),
+        "渣打":     st.column_config.NumberColumn("渣打",     format="%,.0f", width="medium"),
+        "台新":     st.column_config.NumberColumn("台新",     format="%,.0f", width="medium"),
+        "總成本":   st.column_config.NumberColumn("總成本",   format="%,.0f", width="medium"),
+        "市值損益": st.column_config.NumberColumn("市值損益", format="%,.0f", width="medium"),
+        "累計配息": st.column_config.NumberColumn("累計配息", format="%,.0f", width="medium"),
+        "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
+        "時間":     st.column_config.TextColumn("時間",       width="small"),
+        "備註":     st.column_config.TextColumn("備註",       width="medium"),
+    }
+    st.dataframe(
+        df_show, use_container_width=True, hide_index=True,
+        height=min(42 * len(df_show) + 44, 520),
+        column_config=col_cfg
+    )
+
+
 def render_dividend_log_tab() -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
