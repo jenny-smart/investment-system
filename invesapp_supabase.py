@@ -2389,50 +2389,6 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
     }
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# ★ 歷史記錄 Tab
-# ════════════════════════════════════════════════════════════════════════════
-
-def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
-    if enriched is None or enriched.empty:
-        return {}
-
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
-    total_cost_sum = 0.0
-    total_div_sum  = 0.0
-
-    for _, r in enriched.iterrows():
-        plt = normalize_text(r.get("platform", ""))
-        val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
-        if plt in platform_val and val:
-            platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
-
-    total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-
-    return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
-        "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
-    }
-
-
 def render_history_tab() -> None:
     """📊 歷史市值"""
     st.subheader("📊 歷史市值走勢")
@@ -2503,264 +2459,189 @@ def render_history_tab() -> None:
     )
 
 
-DIVIDEND_RECORD_COLUMNS = [
-    "平台",
-    "基金名稱",
-    "幣別",
-    "單位數",
-    "預估配息（除息日配息金額）",
-    "實際配息（發放日配息金額）",
-    "總配息金額",
-]
-
-
-def _fund_name_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str, str, str], str]:
-    lookup: dict[tuple[str, str, str], str] = {}
-    if enriched_df is None or enriched_df.empty:
-        return lookup
-    funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
-    for _, row in funds.iterrows():
-        fc = normalize_text(row.get("fund_code", ""))
-        platform = normalize_text(row.get("platform", ""))
-        currency = normalize_text(row.get("currency", ""))
-        name = normalize_text(row.get("name", ""))
-        if not name:
-            continue
-        lookup[(fc, platform, currency)] = name
-        lookup[(fc, "", currency)] = name
-        lookup[(fc, "", "")] = name
-    return lookup
-
-
-def _first_positive(values: list[Any]) -> float:
-    for value in values:
-        number = normalize_number(value, 0)
-        if number > 0:
-            return number
-    return 0.0
-
-
-def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
-    if enriched_df is None or enriched_df.empty:
-        return pd.DataFrame(columns=DIVIDEND_RECORD_COLUMNS + ["_總配息台幣"])
-
-    funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
-    if funds.empty:
-        return pd.DataFrame(columns=DIVIDEND_RECORD_COLUMNS + ["_總配息台幣"])
-
-    funds["_dividend_key"] = funds.apply(
-        lambda r: "|".join([
-            normalize_text(r.get("platform", "")),
-            normalize_text(r.get("fund_code", "")) or normalize_text(r.get("name", "")),
-            normalize_text(r.get("currency", "")),
-        ]),
-        axis=1,
-    )
-
-    rows: list[dict[str, Any]] = []
-    for _, grp in funds.groupby("_dividend_key", dropna=False):
-        first = grp.iloc[0]
-        platform = normalize_text(first.get("platform", ""))
-        fund_code = normalize_text(first.get("fund_code", ""))
-        currency = normalize_text(first.get("currency", ""))
-        fund_name = normalize_text(first.get("name", ""))
-        units = sum(normalize_number(r.get("市值股數", r.get("units", 0)), 0) for _, r in grp.iterrows())
-        if units <= 0:
-            continue
-        div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
-        if div_per_unit <= 0:
-            div_per_unit = _first_positive(grp.get("monthly_dividend_per_unit", pd.Series(dtype=float)).tolist())
-        if div_per_unit <= 0 and fund_code:
-            div_per_unit = normalize_number(_get_gas_monthly_div(fund_code), 0)
-        fx = _first_positive(grp.get("匯率", pd.Series(dtype=float)).tolist())
-        if fx <= 0:
-            fx, _ = fetch_fx(currency)
-            fx = fx or 1.0
-        total_amount = units * div_per_unit
-        rows.append({
-            "平台": platform,
-            "基金名稱": fund_name,
-            "幣別": currency,
-            "單位數": units,
-            "預估配息（除息日配息金額）": div_per_unit if div_per_unit > 0 else None,
-            "實際配息（發放日配息金額）": None,
-            "總配息金額": total_amount if div_per_unit > 0 else None,
-            "_總配息台幣": total_amount * fx if div_per_unit > 0 else 0,
-        })
-    return pd.DataFrame(rows, columns=DIVIDEND_RECORD_COLUMNS + ["_總配息台幣"])
-
-
-def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
-    try:
-        return supabase_client().table(table_name).select("*").execute().data or []
-    except Exception:
-        return []
-
-
-def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
-    name_lookup = _fund_name_lookup(enriched_df)
-    records = _fetch_dividend_rows("fund_dividends")
-    log_records = _fetch_dividend_rows("dividend_log")
-    existing_keys = {
-        (
-            normalize_text(r.get("fund_code", "")),
-            normalize_text(r.get("platform", "")),
-            normalize_text(r.get("currency", "")),
-            normalize_text(r.get("ex_date", "")),
-        )
-        for r in records
-    }
-    for record in log_records:
-        key = (
-            normalize_text(record.get("fund_code", "")),
-            normalize_text(record.get("platform", "")),
-            normalize_text(record.get("currency", "")),
-            normalize_text(record.get("ex_date", "")),
-        )
-        if key not in existing_keys:
-            records.append(record)
-
-    rows: list[dict[str, Any]] = []
-    for record in records:
-        fund_code = normalize_text(record.get("fund_code", ""))
-        platform = normalize_text(record.get("platform", ""))
-        currency = normalize_text(record.get("currency", ""))
-        name = (
-            normalize_text(record.get("fund_name", ""))
-            or name_lookup.get((fund_code, platform, currency), "")
-            or name_lookup.get((fund_code, "", currency), "")
-            or name_lookup.get((fund_code, "", ""), "")
-            or fund_code
-        )
-        units = normalize_number(record.get("units_at_ex", 0), 0)
-        estimated_div = normalize_number(record.get("div_amount", 0), 0)
-        is_paid = normalize_bool(record.get("is_paid", False), False)
-        actual_div = normalize_number(record.get("actual_div_amount", 0), 0)
-        if is_paid and actual_div <= 0:
-            actual_div = estimated_div
-        display_actual = actual_div if is_paid and actual_div > 0 else None
-        total_per_unit = actual_div if display_actual is not None else estimated_div
-        total_amount = units * total_per_unit if units > 0 and total_per_unit > 0 else None
-        fx = normalize_number(record.get("fx_rate", 1), 1)
-        twd_total = normalize_number(record.get("twd_total", 0), 0)
-        if twd_total <= 0 and total_amount is not None:
-            twd_total = total_amount * fx
-        rows.append({
-            "平台": platform,
-            "基金名稱": name,
-            "幣別": currency,
-            "單位數": units,
-            "預估配息（除息日配息金額）": estimated_div if estimated_div > 0 else None,
-            "實際配息（發放日配息金額）": display_actual,
-            "總配息金額": total_amount,
-            "_總配息台幣": twd_total,
-            "_已發放": is_paid,
-        })
-    columns = DIVIDEND_RECORD_COLUMNS + ["_總配息台幣", "_已發放"]
-    return pd.DataFrame(rows, columns=columns)
-
-
-def render_dividend_record_table(df: pd.DataFrame, height_cap: int = 520) -> None:
-    if df.empty:
-        st.info("目前沒有資料。")
-        return
-    display_df = df[DIVIDEND_RECORD_COLUMNS].copy()
-    col_cfg = {
-        "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
-        "單位數": st.column_config.NumberColumn("單位數", format="%,.4f"),
-        "預估配息（除息日配息金額）": st.column_config.NumberColumn("預估配息（除息日配息金額）", format="%,.6f"),
-        "實際配息（發放日配息金額）": st.column_config.NumberColumn("實際配息（發放日配息金額）", format="%,.6f"),
-        "總配息金額": st.column_config.NumberColumn("總配息金額", format="%,.2f"),
-    }
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        height=min(42 * len(display_df) + 44, height_cap),
-        column_config=col_cfg,
-    )
-
-
 def render_dividend_log_tab() -> None:
     """💰 配息記錄"""
-    st.subheader("💰 配息記錄")
 
-    source = globals().get("enriched", pd.DataFrame())
-    estimate_df = build_estimated_dividend_table(source)
-    actual_df = build_actual_dividend_table(source)
+    # ══ 上半部：預估配息表 ══
+    st.markdown("### 💰 預估配息表")
+    st.caption("依最近除息日的配息金額 × 目前單位數估算下次配息")
 
-    platforms = sorted(
-        set(estimate_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
-        | set(actual_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
-    )
-    selected_platform = st.selectbox("篩選平台", ["全部"] + platforms, key="div_record_platform")
-    if selected_platform != "全部":
-        estimate_df = estimate_df[estimate_df["平台"] == selected_platform]
-        actual_df = actual_df[actual_df["平台"] == selected_platform]
+    try:
+        pos_rows = supabase_client().table("positions") \
+            .select("platform,name,currency,units,fund_code") \
+            .eq("asset_type", "基金") \
+            .gt("units", 0) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取持倉失敗：{e}")
+        pos_rows = []
 
-    est_twd = estimate_df["_總配息台幣"].fillna(0).sum() if "_總配息台幣" in estimate_df else 0
-    paid_df = actual_df[actual_df["_已發放"] == True] if "_已發放" in actual_df else pd.DataFrame()
-    paid_twd = paid_df["_總配息台幣"].fillna(0).sum() if not paid_df.empty and "_總配息台幣" in paid_df else 0
-    c1, c2, c3 = st.columns(3)
-    c1.metric("今日單位預估配息（折台幣）", money(est_twd))
-    c2.metric("已發放實際配息（折台幣）", money(paid_twd))
-    c3.metric("除息快照筆數", f"{len(actual_df):,}")
+    if pos_rows:
+        from datetime import date as dt_date
+        today = dt_date.today()
 
-    st.markdown("#### 預估配息")
-    st.caption("單位數使用目前累積至今日的持有單位數。")
-    render_dividend_record_table(estimate_df)
+        # 依基金合併單位數
+        fund_map: dict[tuple, dict] = {}
+        for r in pos_rows:
+            fc  = (r.get("fund_code") or "").strip()
+            plt = (r.get("platform") or "").strip()
+            cur = (r.get("currency") or "TWD").strip()
+            nm  = (r.get("name") or "").strip()
+            u   = float(r.get("units") or 0)
+            if not fc: continue
+            key = (plt, fc, cur)
+            if key not in fund_map:
+                fund_map[key] = {"platform": plt, "name": nm, "currency": cur,
+                                 "fund_code": fc, "units": 0}
+            fund_map[key]["units"] += u
 
-    st.markdown("#### 實際配息")
-    st.caption("單位數使用除息日快照；除息日後新增投資不會計入這裡的實際配息。")
-    render_dividend_record_table(actual_df)
+        # 從 GAS 取配息資訊
+        est_rows = []
+        fx_cache: dict[str, float] = {}
+        for (plt, fc, cur), info in fund_map.items():
+            gas = _get_gas_data(fc)
+            ex_date  = gas.get("ex_date")   # YYYY/MM/DD
+            mdiv     = gas.get("monthly_div")
+            units    = info["units"]
+
+            # 取匯率
+            if cur not in fx_cache:
+                fx_val, _ = fetch_fx(cur)
+                fx_cache[cur] = fx_val or 1.0
+            fx = fx_cache[cur]
+
+            est_twd = units * mdiv * fx if mdiv else None
+
+            est_rows.append({
+                "平台":         plt,
+                "基金名稱":     info["name"],
+                "幣別":         cur,
+                "目前單位數":   round(units, 4),
+                "最近除息日":   ex_date or "—",
+                "每單位配息":   mdiv,
+                "預估配息(原幣)": round(units * mdiv, 2) if mdiv else None,
+                "預估配息(台幣)": round(est_twd, 0) if est_twd else None,
+            })
+
+        if est_rows:
+            df_est = pd.DataFrame(est_rows).sort_values(["平台", "基金名稱"])
+            total_est = df_est["預估配息(台幣)"].fillna(0).sum()
+            st.metric("預估下月配息合計（台幣）", money(total_est))
+
+            col_cfg_est = {
+                "目前單位數":     st.column_config.NumberColumn("目前單位數",     format="%,.4f"),
+                "每單位配息":     st.column_config.NumberColumn("每單位配息",     format="%.6f"),
+                "預估配息(原幣)": st.column_config.NumberColumn("預估配息(原幣)", format="%,.2f"),
+                "預估配息(台幣)": st.column_config.NumberColumn("預估配息(台幣)", format="%,.0f"),
+                "最近除息日":     st.column_config.TextColumn("最近除息日",       width="small"),
+                "平台":           st.column_config.TextColumn("平台",             width="small"),
+                "幣別":           st.column_config.TextColumn("幣別",             width="small"),
+            }
+            st.dataframe(df_est, use_container_width=True, hide_index=True,
+                         height=min(42 * len(df_est) + 44, 520),
+                         column_config=col_cfg_est)
 
     st.markdown("---")
 
-    with st.expander("➕ 手動新增配息記錄（補填歷史）"):
-        st.caption("用於補填歷史配息；實際配息留 0 時，已發放記錄會用預估配息代入。")
+    # ══ 下半部：實際配息記錄表 ══
+    st.markdown("### 📋 實際配息記錄")
+    st.caption("發放日已到且已認列的配息記錄（從 fund_dividends 自動累計）")
+
+    try:
+        div_rows = supabase_client().table("fund_dividends") \
+            .select("fund_code,platform,currency,ex_date,pay_date,div_amount,units_at_ex,fx_rate,twd_total,is_paid") \
+            .order("pay_date", desc=True) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取配息記錄失敗：{e}")
+        div_rows = []
+
+    if not div_rows:
+        st.info("還沒有配息記錄。6月除息日前後系統會自動快照並認列。")
+    else:
+        df_div = pd.DataFrame(div_rows)
+
+        # 加基金名稱
+        fc_name_map = {}
+        for r in (pos_rows or []):
+            fc = (r.get("fund_code") or "").strip()
+            nm = (r.get("name") or "").strip()
+            if fc and nm:
+                fc_name_map[fc] = nm
+        df_div["基金名稱"] = df_div["fund_code"].map(fc_name_map).fillna(df_div["fund_code"])
+
+        # 統計
+        total_paid = df_div[df_div["is_paid"] == True]["twd_total"].fillna(0).sum()
+        k1, k2 = st.columns(2)
+        k1.metric("累計已認列配息（台幣）", money(total_paid))
+        k2.metric("記錄筆數", len(df_div))
+
+        # 篩選
+        plats = ["全部"] + sorted(df_div["platform"].dropna().unique().tolist())
+        sel = st.selectbox("篩選平台", plats, key="div_fd_plat")
+        if sel != "全部":
+            df_div = df_div[df_div["platform"] == sel]
+
+        df_show = df_div[[
+            "platform", "基金名稱", "currency",
+            "units_at_ex", "pay_date", "div_amount", "twd_total", "is_paid"
+        ]].copy()
+        df_show.columns = [
+            "平台", "基金名稱", "幣別",
+            "配息單位數", "發放日期", "每單位配息", "實際配息(台幣)", "已認列"
+        ]
+
+        col_cfg_div = {
+            "配息單位數":    st.column_config.NumberColumn("配息單位數",    format="%,.4f"),
+            "每單位配息":    st.column_config.NumberColumn("每單位配息",    format="%.6f"),
+            "實際配息(台幣)":st.column_config.NumberColumn("實際配息(台幣)",format="%,.0f"),
+            "已認列":        st.column_config.CheckboxColumn("已認列"),
+            "平台":          st.column_config.TextColumn("平台",            width="small"),
+            "幣別":          st.column_config.TextColumn("幣別",            width="small"),
+            "發放日期":      st.column_config.TextColumn("發放日期",        width="small"),
+        }
+        st.dataframe(df_show, use_container_width=True, hide_index=True,
+                     height=min(42 * len(df_show) + 44, 480),
+                     column_config=col_cfg_div)
+
+    st.markdown("---")
+
+    # ── 手動新增配息記錄 ──
+    with st.expander("➕ 手動新增配息記錄"):
+        st.caption("補填歷史配息或手動認列")
         with st.form("manual_div_log"):
             c1, c2, c3 = st.columns(3)
-            m_platform  = c1.selectbox("平台", PLATFORMS[2:], key="mdl_platform")
+            m_platform  = c1.selectbox("平台", PLATFORMS[2:],  key="mdl_platform")
             m_currency  = c2.selectbox("幣別", CURRENCIES[1:], key="mdl_currency")
-            m_fund_code = c3.text_input("基金代號", key="mdl_fund_code")
-            m_fund_name = st.text_input("基金名稱", key="mdl_fund_name")
+            m_fund_code = c3.text_input("基金代號",             key="mdl_fund_code")
             c4, c5 = st.columns(2)
             m_ex_date  = c4.text_input("除息日（YYYY/MM/DD）", key="mdl_ex_date")
             m_pay_date = c5.text_input("發放日（YYYY/MM/DD）", key="mdl_pay_date")
-            c6, c7, c8, c9 = st.columns(4)
-            m_est_div = c6.number_input("預估配息", value=0.0, format="%.6f", key="mdl_est_div")
-            m_actual_div = c7.number_input("實際配息", value=0.0, format="%.6f", key="mdl_actual_div")
-            m_units = c8.number_input("單位數", value=0.0, format="%.4f", key="mdl_units")
-            m_fx = c9.number_input("匯率", value=1.0, format="%.4f", key="mdl_fx")
-            per_unit_for_total = m_actual_div if m_actual_div > 0 else m_est_div
-            m_total = m_units * per_unit_for_total
-            st.caption(f"總配息金額：**{money(m_total, 2)} {m_currency}**｜折台幣：**{money(m_total * m_fx)}**")
-            m_is_paid = st.checkbox("已發放（加入實際配息）", key="mdl_is_paid")
-            m_note = st.text_input("備註", key="mdl_note")
+            c6, c7, c8 = st.columns(3)
+            m_div_amt = c6.number_input("每單位配息（原幣）", value=0.0, format="%.6f", key="mdl_div_amt")
+            m_units   = c7.number_input("配息單位數",         value=0.0, format="%.4f", key="mdl_units")
+            m_fx      = c8.number_input("匯率",               value=1.0, format="%.4f", key="mdl_fx")
+            m_twd     = m_div_amt * m_units * m_fx
+            st.caption(f"估算台幣配息：**{money(m_twd)}**")
+            m_is_paid = st.checkbox("已發放（加入累計配息）", key="mdl_is_paid")
 
             if st.form_submit_button("💾 新增"):
                 if not m_fund_code or not m_ex_date:
                     st.error("基金代號和除息日必填")
                 else:
                     try:
-                        actual_div = m_actual_div if m_actual_div > 0 else (m_est_div if m_is_paid else 0)
-                        twd_total = m_units * (actual_div if actual_div > 0 else m_est_div) * m_fx
-                        payload = {
-                            "fund_code": m_fund_code,
-                            "fund_name": m_fund_name,
-                            "platform": m_platform,
-                            "currency": m_currency,
-                            "ex_date": m_ex_date,
-                            "pay_date": m_pay_date,
-                            "div_amount": m_est_div,
-                            "actual_div_amount": actual_div,
+                        supabase_client().table("fund_dividends").insert({
+                            "fund_code":   m_fund_code,
+                            "platform":    m_platform,
+                            "currency":    m_currency,
+                            "ex_date":     m_ex_date,
+                            "pay_date":    m_pay_date or None,
+                            "div_amount":  m_div_amt,
                             "units_at_ex": m_units,
-                            "fx_rate": m_fx,
-                            "twd_total": round(twd_total, 0),
-                            "is_paid": m_is_paid,
-                            "note": m_note or "手動新增",
-                        }
-                        supabase_client().table("dividend_log").insert(payload).execute()
+                            "fx_rate":     m_fx,
+                            "twd_total":   round(m_twd, 0) if m_twd else None,
+                            "is_paid":     m_is_paid,
+                        }).execute()
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
