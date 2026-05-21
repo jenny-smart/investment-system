@@ -25,7 +25,7 @@ except Exception:
 
 APP_VERSION = "2026-05-21-v26-gas-div"
 
-GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbyUKfr9VAcArLemNFe4z0eKv_FX8Dehss2DLoWGcTV4KS9P1jwiW1be1KNf4YOIMGg/exec"
+GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbwS8AUn4M4Qx9qHxcRkNv2GqTTKAIYgXmNRoYsOKFNfSv9yLFz1sEu5EKY2Tqvnf_Ok/exec"
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
