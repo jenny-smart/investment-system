@@ -2387,7 +2387,10 @@ with st.container():
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
     c1.metric("總台幣市值", money_short(total_value), delta=pnl_delta)
-    c2.metric("總台幣成本",   money(total_cost))
+    # 外部投入 = 排除配息再投入的成本
+    external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
+    c2.metric("總台幣成本", money(total_cost),
+              delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("預估每月配息", money(total_div))
     c4.metric("投資筆數",     f"{len(positions):,}")
     if c5.button("🔄 更新即時價"):
