@@ -1295,7 +1295,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         base, use_container_width=True, hide_index=True, height=360, num_rows="dynamic",
         column_order=["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
                       "currency", "original_units", "units", "avg_cost", "total_cost_input", "purchase_ym",
-                      "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note"],
+                      "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
         column_config={
             "sort_order": st.column_config.NumberColumn("排序", step=1),
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
