@@ -620,19 +620,22 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
+        # 台股：先試 Yahoo（最準），再試 TWSE MIS，最後才 Google
+        y_price, y_status = fetch_yahoo_price(ticker)
+        if y_price is not None:
+            return y_price, "Yahoo"
+
         tw_quote = fetch_twse_realtime_quote(ticker)
         if tw_quote.get("price") is not None:
             return float(tw_quote["price"]), normalize_text(tw_quote.get("status", "TWSE即時"))
 
-        # 台股備援：Google Finance。避免把頁面上的任意小數誤判為股價，仍保留 TWSE 為主。
-        g_price, g_status = fetch_google_finance_price(ticker, None)
-        if g_price is not None:
-            return g_price, "Google備援"
+        # Google 台股只在前兩者都失敗時才試，且僅限有明確 exchange 的
+        if ticker in TW_STOCK_EXCHANGES:
+            g_price, g_status = fetch_google_finance_price(ticker, TW_STOCK_EXCHANGES[ticker])
+            if g_price is not None:
+                return g_price, "Google備援"
 
-        y_price, y_status = fetch_yahoo_price(ticker)
-        if y_price is not None:
-            return y_price, "Yahoo備援"
-        return None, f"{tw_quote.get('status')}; {g_status}; {y_status}"
+        return None, f"Yahoo:{y_status}; TWSE:{tw_quote.get('status')}"
 
     price, status = fetch_yahoo_price(ticker)
     if price is not None:
