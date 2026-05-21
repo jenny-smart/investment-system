@@ -2472,3 +2472,9 @@ with tabs[11]:
 
 with tabs[12]:
     price_test_section()
+
+with tabs[13]:
+    render_history_tab()
+
+with tabs[14]:
+    render_dividend_log_tab()
