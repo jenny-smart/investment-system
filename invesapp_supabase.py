@@ -778,6 +778,19 @@ def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
     except Exception as e:
         return None, f"MoneyDJ 錯誤:{str(e)[:40]}"
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_gas_div_for_enrich(fund_code: str) -> float | None:
+    GAS_V3 = "https://script.google.com/macros/s/AKfycbwS8AUn4M4Qx9qHxcRkNv2GqTTKAIYgXmNRoYsOKFNfSv9yLFz1sEu5EKY2Tqvnf_Ok/exec"
+    if not fund_code: return None
+    try:
+        r = requests.get(GAS_V3, params={"code": fund_code}, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code == 200:
+            d = r.json()
+            if d.get("ok"):
+                m = d.get("monthly_div")
+                return float(m) if m else None
+    except Exception: pass
+    return None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
