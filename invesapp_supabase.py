@@ -2000,7 +2000,10 @@ total_rate  = total_pnl / total_cost if total_cost else None
 with st.container():
     st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總台幣市值",   money(total_value), delta=f"含息損益 {signed_money(total_pnl)} / {pct(total_rate)}")
+    c1.metric("總台幣市值",
+              f"{money(total_value)}\n含息損益 {signed_money(total_pnl)} / {pct(total_rate)}",
+              delta=f"{signed_money(total_pnl)}",
+              delta_color="normal")
     c2.metric("總台幣成本",   money(total_cost))
     c3.metric("預估每月配息", money(total_div))
     c4.metric("投資筆數",     f"{len(positions):,}")
