@@ -2738,7 +2738,7 @@ with st.container():
     if tw_missing:
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
-    c1.metric("總台幣市值", money_short(total_value), delta=pnl_delta)
+    c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
     # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
     c2.metric("總台幣成本", money(total_cost),
