@@ -215,6 +215,42 @@ st.markdown("""
 .stTabs [data-baseweb="tab"] { font-size:13px !important; font-weight:500 !important; color:#64748b !important; }
 .stTabs [aria-selected="true"] { color:#10b981 !important; font-weight:700 !important; border-bottom-color:#10b981 !important; }
 .stAlert { border-radius:10px !important; }
+/* ── Tab 質感升級 ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    background: #f1f5f9;
+    padding: 6px 8px;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 36px;
+    padding: 0 16px;
+    border-radius: 8px;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #64748b !important;
+    background: transparent;
+    border: none;
+    white-space: nowrap;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    background: #e2e8f0 !important;
+    color: #334155 !important;
+}
+.stTabs [aria-selected="true"] {
+    background: #fff !important;
+    color: #10b981 !important;
+    font-weight: 700 !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,.1);
+    border-bottom: none !important;
+}
+.stTabs [data-baseweb="tab-highlight"] {
+    display: none;
+}
+.stTabs [data-baseweb="tab-border"] {
+    display: none;
+}
 </style>
 """, unsafe_allow_html=True)
 
