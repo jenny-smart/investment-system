@@ -31,4 +31,4 @@ jobs:
         run: pip install supabase yfinance requests
 
       - name: Run snapshot
-        run: python record_snapshot.py/scheduled_daily/record_snapshot.py
+        run: python record_snapshot.py
