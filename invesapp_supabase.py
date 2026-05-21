@@ -1922,7 +1922,6 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             continue
         render_platform_group(platform, p_rows)
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # 以下原版完全不變
 # ════════════════════════════════════════════════════════════════════════════
