@@ -1567,8 +1567,13 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "配息率":   st.column_config.TextColumn("配息率",   width="small"),
             "損益率":   st.column_config.TextColumn("損益率",   width="small"),
         }
+        # 台股列數多，固定2列高度可上下滾動；基金類較少，自適應
+        if sub_label in {"台股", "美股"}:
+            tbl_height = 42 * 2 + 44   # 固定顯示2列，其餘捲動
+        else:
+            tbl_height = min(42 * len(df_disp) + 44, 480)
         st.dataframe(df_disp, use_container_width=True, hide_index=True,
-                     height=min(42 * len(df_disp) + 44, 480),
+                     height=tbl_height,
                      column_config=col_cfg)
 
 
@@ -1949,7 +1954,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         if p_rows.empty:
             continue
         render_platform_group(platform, p_rows)
-
+        
 # ════════════════════════════════════════════════════════════════════════════
 # 以下原版完全不變
 # ════════════════════════════════════════════════════════════════════════════
