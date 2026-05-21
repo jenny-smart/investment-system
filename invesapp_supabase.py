@@ -847,7 +847,7 @@ def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_gas_div_for_enrich(fund_code: str) -> float | None:
-    GAS_V3 = "https://script.google.com/macros/s/AKfycbwS8AUn4M4Qx9qHxcRkNv2GqTTKAIYgXmNRoYsOKFNfSv9yLFz1sEu5EKY2Tqvnf_Ok/exec"
+    GAS_V3 = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
     if not fund_code: return None
     try:
         r = requests.get(GAS_V3, params={"code": fund_code}, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
