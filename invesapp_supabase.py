@@ -3355,9 +3355,15 @@ TXN_CATEGORIES = ["薪資", "獎金", "房租", "餐飲", "交通", "購物", "�
 
 CURRENCY_LIST = ["TWD", "USD", "CNY", "JPY", "ZAR"]
 
-
 @st.cache_data(ttl=30, show_spinner=False)
 def load_accounts() -> pd.DataFrame:
+    try:
+        rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
+        return pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
+    except Exception as e:
+        st.error(f"load_accounts 錯誤：{e}")
+        return pd.DataFrame(columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])() -> pd.DataFrame:
     rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
     return pd.DataFrame(rows) if rows else pd.DataFrame(
         columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
