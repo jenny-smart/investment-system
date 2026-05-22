@@ -3365,10 +3365,14 @@ def load_accounts() -> pd.DataFrame:
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_transactions(limit: int = 200) -> pd.DataFrame:
-    rows = supabase_client().table("transactions").select(
-        "id,txn_date,txn_type,from_account_id,to_account_id,amount,currency,fx_rate,twd_amount,description,category,note,created_at"
-    ).order("txn_date", desc=True).order("id", desc=True).limit(limit).execute().data or []
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    try:
+        rows = supabase_client().table("transactions").select(
+            "id,txn_date,txn_type,from_account_id,to_account_id,amount,currency,fx_rate,twd_amount,description,category,note,created_at"
+        ).order("txn_date", desc=True).order("id", desc=True).limit(limit).execute().data or []
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as e:
+        st.error(f"load_transactions 錯誤：{e}")
+        return pd.DataFrame()
 
 
 def _acct_label(accts: pd.DataFrame, acct_id) -> str:
