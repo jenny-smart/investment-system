@@ -3192,36 +3192,33 @@ total_rate  = total_pnl / total_cost if total_cost else None
 with st.container():
     st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
-    # 顯示缺報價的台股名稱
-    tw_missing = []
-    if not enriched.empty:
-        tw_no_price = enriched[
-            (enriched["platform"] == "台股") &
-            (enriched["units"].fillna(0) > 0) &
-            (enriched["即時價格/淨值"].isna())
-        ]
-        tw_missing = tw_no_price["name"].dropna().unique().tolist()
-    if tw_missing:
-        st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
-    pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
-    c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
-    # 外部投入 = 排除配息再投入的成本
-    external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
-    c2.metric("總台幣成本", money(total_cost),
-              delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
-    c3.metric("預估每月配息", money(total_div))
-    c4.metric("投資筆數",     f"{len(positions):,}")
-    if c5.button("🔄 更新即時價"):
-        st.cache_data.clear(); st.rerun()
-    st.markdown("</div></div>", unsafe_allow_html=True)
+# ── 第2排：5個平台小卡 ──
+if not enriched.empty:
+    summary = enriched.groupby("platform", dropna=False).agg(
+        台幣市值=("台幣市值","sum"), 台幣成本=("台幣成本","sum"),
+        含息總損益=("含息總損益","sum"), 每月配息=("每月配息","sum"),
+        缺報價=("即時價格/淨值", lambda s: int(s.isna().sum())),
+    ).reset_index()
+    card_cols = st.columns(5)
+    for i, plt_name in enumerate(OVERVIEW_ORDER):
+        r = summary[summary["platform"] == plt_name]
+        if r.empty: continue
+        r = r.iloc[0]
+        miss = int(r["缺報價"])
+        warn = f" ⚠️{miss}缺" if miss else ""
+        rate = r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None
+        with card_cols[i]:
+            st.metric(
+                f"{PLATFORM_ICONS.get(plt_name,'💼')} {plt_name}{warn}",
+                money(r["台幣市值"]),
+                delta=f"{signed_money(r['含息總損益'])} / {pct(rate)}",
+            )
+            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表"])
-
-show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
-             "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
-             "即時價格/淨值", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
-             "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
-             "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
+# ── 第3排：匯率（小字）──
+fx_data = [(cur, fetch_fx(cur)[0]) for cur in CURRENCIES]
+fx_str = "　".join(f"**{cur}** {money(rate,4)}" for cur, rate in fx_data)
+st.markdown(f'<div style="font-size:12px;color:#64748b;padding:4px 0 8px">{fx_str}</div>', unsafe_allow_html=True)
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
@@ -3236,18 +3233,6 @@ with tabs[0]:
 for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
-        # ── 第一排：全局KPI ──
-        g1, g2, g3, g4, g5 = st.columns(5)
-        g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
-        g2.metric("總台幣成本", money(total_cost))
-        g3.metric("預估每月配息", money(total_div))
-        g4.metric("投資筆數", f"{len(positions):,}")
-        if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
-            st.cache_data.clear(); st.rerun()
-        view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
-        if view.empty:
-            st.info(f"尚無 {platform} 資料")
-        else:
             # ── 第二排：平台KPI ──
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
