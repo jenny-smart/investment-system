@@ -2454,6 +2454,33 @@ def render_dividend_log_tab(enriched: "pd.DataFrame | None" = None) -> None:
 
     details = st.session_state.get("est_div_details", [])
 
+    # 若 session_state 沒有，直接從 enriched 計算
+    if not details and enriched is not None and not enriched.empty:
+        for _, r in enriched.iterrows():
+            if normalize_text(r.get("asset_type","")) != "基金":
+                continue
+            fc   = normalize_text(r.get("fund_code",""))
+            u    = normalize_number(r.get("units",0), 0)
+            cur  = normalize_text(r.get("currency","TWD")).upper()
+            nm   = normalize_text(r.get("name",""))
+            plt  = normalize_text(r.get("platform",""))
+            fx   = to_float(r.get("匯率")) or 1.0
+            mdiv_twd = to_float(r.get("每月配息")) or 0.0
+            if not fc or u <= 0 or mdiv_twd <= 0:
+                continue
+            mdiv_orig = mdiv_twd / u / fx if u > 0 and fx > 0 else 0
+            ex_d = _gas_cache.get(fc, {}).get("ex_date") or "—"
+            details.append({
+                "平台":            plt,
+                "基金名稱":        nm,
+                "幣別":            cur,
+                "目前單位數":      round(u, 4),
+                "除息日期":        ex_d,
+                "每單位配息(原幣)": round(mdiv_orig, 6),
+                "預估配息(原幣)":   round(u * mdiv_orig, 2),
+                "預估配息(台幣)":   round(mdiv_twd, 0),
+            })
+
     if details:
         df_est = _pd.DataFrame(details).sort_values(["平台", "基金名稱"])
         total_est = df_est["預估配息(台幣)"].fillna(0).sum()
