@@ -2987,7 +2987,7 @@ with tabs[13]:
     render_history_tab()
 
 with tabs[14]:
-    render_dividend_log_tab(enriched)
+    render_dividend_log_tab()
 
 with tabs[15]:
     render_online_sheets_tab()
