@@ -3233,7 +3233,7 @@ if not enriched.empty:
             )
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表", "💵 現金流"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -3344,3 +3344,319 @@ with tabs[9]:
 
 with tabs[10]:
     render_online_sheets_tab()
+
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 現金流 Tab
+# ════════════════════════════════════════════════════════════════════════════
+
+TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出"]
+TXN_CATEGORIES = ["薪資", "獎金", "房租", "餐飲", "交通", "購物", "醫療", "保險",
+                   "投資", "利息", "信用卡", "其他"]
+
+CURRENCY_LIST = ["TWD", "USD", "CNY", "JPY", "ZAR"]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_accounts() -> pd.DataFrame:
+    rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
+    return pd.DataFrame(rows) if rows else pd.DataFrame(
+        columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_transactions(limit: int = 200) -> pd.DataFrame:
+    rows = supabase_client().table("transactions").select(
+        "id,txn_date,txn_type,from_account_id,to_account_id,amount,currency,fx_rate,twd_amount,description,category,note,created_at"
+    ).order("txn_date", desc=True).order("id", desc=True).limit(limit).execute().data or []
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _acct_label(accts: pd.DataFrame, acct_id) -> str:
+    if not acct_id or pd.isna(acct_id):
+        return "—"
+    row = accts[accts["id"] == int(float(acct_id))]
+    if row.empty:
+        return str(acct_id)
+    r = row.iloc[0]
+    return f"{r['bank']} {r['name']}({r['currency']})"
+
+
+def _acct_options(accts: pd.DataFrame) -> list[str]:
+    opts = []
+    for _, r in accts[accts.get("is_active", True) == True].iterrows() if "is_active" in accts.columns else accts.iterrows():
+        opts.append(f"{r['id']}｜{r['bank']} {r['name']}({r['currency']})")
+    return opts
+
+
+def _id_from_option(opt: str) -> int | None:
+    if not opt:
+        return None
+    try:
+        return int(opt.split("｜")[0])
+    except Exception:
+        return None
+
+
+def render_cashflow_tab() -> None:
+    """💵 現金流管理"""
+
+    # ── 載入資料 ──
+    accts = load_accounts()
+    txns  = load_transactions()
+
+    # ── 頂部 KPI ──
+    if not accts.empty:
+        active = accts[accts.get("is_active", pd.Series([True]*len(accts))) != False]
+
+        # 各類別加總（台幣）
+        def _twd_bal(rows):
+            total = 0
+            for _, r in rows.iterrows():
+                bal = float(r.get("balance") or 0)
+                cur = normalize_text(r.get("currency","TWD")).upper()
+                if cur == "TWD":
+                    total += bal
+                else:
+                    fx_val, _ = fetch_fx(cur)
+                    total += bal * (fx_val or 1)
+            return total
+
+        cash_rows  = active[active["category"].isin(["現金"])]
+        bank_rows  = active[active["category"] == "銀行"]
+        invest_rows= active[active["category"] == "投資"]
+        card_rows  = active[active["category"] == "信用卡"]
+
+        cash_twd   = _twd_bal(cash_rows)
+        bank_twd   = _twd_bal(bank_rows)
+        invest_twd = _twd_bal(invest_rows)
+        card_twd   = _twd_bal(card_rows)
+        net_twd    = cash_twd + bank_twd + invest_twd - card_twd
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("淨資產（台幣）",   f"{net_twd:,.0f}")
+        k2.metric("現金 + 零用金",    f"{cash_twd:,.0f}")
+        k3.metric("銀行存款",          f"{bank_twd:,.0f}")
+        k4.metric("投資市值（帳面）",  f"{invest_twd:,.0f}")
+        k5.metric("信用卡待還",        f"{card_twd:,.0f}", delta=f"-{card_twd:,.0f}" if card_twd else None)
+
+    st.markdown("---")
+
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 帳戶總覽", "➕ 新增交易", "📜 交易記錄", "⚙️ 帳戶管理"])
+
+    # ════ Tab1：帳戶總覽 ════
+    with tab1:
+        if accts.empty:
+            st.info("尚無帳戶，請先到「帳戶管理」新增。")
+        else:
+            for cat in ["現金", "銀行", "投資", "信用卡"]:
+                grp = accts[accts["category"] == cat]
+                if grp.empty:
+                    continue
+                st.markdown(f"#### {'💵' if cat=='現金' else '🏦' if cat=='銀行' else '📈' if cat=='投資' else '💳'} {cat}")
+
+                rows_disp = []
+                for _, r in grp.iterrows():
+                    bal = float(r.get("balance") or 0)
+                    cur = normalize_text(r.get("currency","TWD")).upper()
+                    fx_val, _ = fetch_fx(cur)
+                    twd_val = bal * (fx_val or 1)
+                    rows_disp.append({
+                        "銀行/平台": r.get("bank",""),
+                        "帳戶名稱":  r.get("name",""),
+                        "幣別":      cur,
+                        "餘額":      round(bal, 4),
+                        "台幣換算":  round(twd_val, 0),
+                        "備註":      r.get("note",""),
+                    })
+                df_disp = pd.DataFrame(rows_disp)
+                total_twd = df_disp["台幣換算"].sum()
+                st.caption(f"小計：{total_twd:,.0f} 台幣")
+                col_cfg = {
+                    "餘額":    st.column_config.NumberColumn("餘額",    format="%,.4f"),
+                    "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+                }
+                st.dataframe(df_disp, use_container_width=True, hide_index=True,
+                             height=min(42*len(df_disp)+44, 320), column_config=col_cfg)
+
+    # ════ Tab2：新增交易 ════
+    with tab2:
+        st.markdown("#### ➕ 新增一筆交易")
+        if accts.empty:
+            st.warning("請先到「帳戶管理」建立帳戶。")
+        else:
+            acct_opts = ["（無）"] + _acct_options(accts)
+            with st.form("new_txn_form"):
+                c1, c2, c3 = st.columns(3)
+                txn_date = c1.date_input("日期", value=pd.Timestamp.today())
+                txn_type = c2.selectbox("類型", TXN_TYPES)
+                txn_cat  = c3.selectbox("分類", TXN_CATEGORIES)
+
+                c4, c5 = st.columns(2)
+                from_opt = c4.selectbox("來源帳戶（支出方）", acct_opts, key="from_acct")
+                to_opt   = c5.selectbox("目標帳戶（收入方）", acct_opts, key="to_acct")
+
+                c6, c7, c8 = st.columns(3)
+                amount   = c6.number_input("金額（原幣）", value=0.0, format="%,.2f", min_value=0.0)
+                currency = c7.selectbox("幣別", CURRENCY_LIST)
+                fx_rate_input = c8.number_input("匯率（原幣→台幣）", value=1.0, format="%.4f", min_value=0.0)
+
+                twd_est = amount * fx_rate_input
+                st.caption(f"估算台幣金額：**{twd_est:,.0f}**")
+                desc = st.text_input("說明", placeholder="例：轉帳到投資帳戶")
+                note = st.text_input("備註")
+
+                if st.form_submit_button("💾 新增交易"):
+                    from_id = _id_from_option(from_opt) if from_opt != "（無）" else None
+                    to_id   = _id_from_option(to_opt)   if to_opt   != "（無）" else None
+
+                    if amount <= 0:
+                        st.error("金額必須大於 0")
+                    elif from_id is None and to_id is None:
+                        st.error("來源和目標帳戶至少填一個")
+                    else:
+                        try:
+                            sb = supabase_client()
+                            # 寫入交易記錄
+                            sb.table("transactions").insert({
+                                "txn_date":       str(txn_date),
+                                "txn_type":       txn_type,
+                                "from_account_id": from_id,
+                                "to_account_id":   to_id,
+                                "amount":          amount,
+                                "currency":        currency,
+                                "fx_rate":         fx_rate_input,
+                                "twd_amount":      round(twd_est, 0),
+                                "description":     desc,
+                                "category":        txn_cat,
+                                "note":            note,
+                            }).execute()
+
+                            # 更新帳戶餘額
+                            if from_id:
+                                from_row = accts[accts["id"] == from_id].iloc[0]
+                                new_bal = float(from_row.get("balance") or 0) - amount
+                                sb.table("accounts").update({"balance": new_bal}).eq("id", from_id).execute()
+                            if to_id:
+                                to_row = accts[accts["id"] == to_id].iloc[0]
+                                new_bal = float(to_row.get("balance") or 0) + amount
+                                sb.table("accounts").update({"balance": new_bal}).eq("id", to_id).execute()
+
+                            st.success("✅ 已新增！")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"新增失敗：{e}")
+
+    # ════ Tab3：交易記錄 ════
+    with tab3:
+        st.markdown("#### 📜 最近 200 筆交易")
+        if txns.empty:
+            st.info("還沒有交易記錄。")
+        else:
+            # 加入帳戶名稱
+            txns_disp = txns.copy()
+            txns_disp["來源"] = txns_disp["from_account_id"].apply(lambda x: _acct_label(accts, x))
+            txns_disp["目標"] = txns_disp["to_account_id"].apply(  lambda x: _acct_label(accts, x))
+            txns_disp["txn_date"] = pd.to_datetime(txns_disp["txn_date"]).dt.strftime("%Y/%m/%d")
+
+            show = txns_disp[[
+                "txn_date","txn_type","來源","目標",
+                "amount","currency","twd_amount","description","category","note"
+            ]].copy()
+            show.columns = ["日期","類型","來源","目標","金額","幣別","台幣金額","說明","分類","備註"]
+
+            # 篩選
+            f1, f2 = st.columns(2)
+            types = ["全部"] + sorted(show["類型"].dropna().unique().tolist())
+            sel_type = f1.selectbox("篩選類型", types, key="txn_filter_type")
+            cats = ["全部"] + sorted(show["分類"].dropna().unique().tolist())
+            sel_cat = f2.selectbox("篩選分類", cats, key="txn_filter_cat")
+
+            if sel_type != "全部":
+                show = show[show["類型"] == sel_type]
+            if sel_cat != "全部":
+                show = show[show["分類"] == sel_cat]
+
+            col_cfg = {
+                "金額":    st.column_config.NumberColumn("金額",    format="%,.2f"),
+                "台幣金額": st.column_config.NumberColumn("台幣金額", format="%,.0f"),
+            }
+            st.dataframe(show, use_container_width=True, hide_index=True,
+                         height=min(42*len(show)+44, 600), column_config=col_cfg)
+
+            # 統計
+            st.markdown("---")
+            col_s1, col_s2, col_s3 = st.columns(3)
+            income  = show[show["類型"].isin(["收入","利息收入"])]["台幣金額"].fillna(0).sum()
+            expense = show[show["類型"].isin(["支出","信用卡消費","利息支出"])]["台幣金額"].fillna(0).sum()
+            transfer= show[show["類型"] == "轉帳"]["台幣金額"].fillna(0).sum()
+            col_s1.metric("收入合計（台幣）",  f"{income:,.0f}")
+            col_s2.metric("支出合計（台幣）",  f"{expense:,.0f}")
+            col_s3.metric("轉帳合計（台幣）",  f"{transfer:,.0f}")
+
+    # ════ Tab4：帳戶管理 ════
+    with tab4:
+        st.markdown("#### ⚙️ 帳戶餘額更新")
+        st.caption("直接輸入現在的帳戶餘額（不透過交易記錄，用於初始設定或更正）")
+
+        if accts.empty:
+            st.info("還沒有帳戶。")
+        else:
+            with st.form("update_balance_form"):
+                updated_vals: dict[int, float] = {}
+                for cat in ["現金", "銀行", "投資", "信用卡"]:
+                    grp = accts[accts["category"] == cat]
+                    if grp.empty:
+                        continue
+                    st.markdown(f"**{cat}**")
+                    cols = st.columns(min(len(grp), 4))
+                    for i, (_, r) in enumerate(grp.iterrows()):
+                        with cols[i % 4]:
+                            label = f"{r['bank']} {r['name']}\n({r['currency']})"
+                            updated_vals[int(r["id"])] = st.number_input(
+                                label, value=float(r.get("balance") or 0),
+                                format="%,.2f", key=f"bal_{r['id']}"
+                            )
+
+                if st.form_submit_button("💾 更新所有餘額"):
+                    sb = supabase_client()
+                    for aid, bal in updated_vals.items():
+                        sb.table("accounts").update({"balance": bal}).eq("id", aid).execute()
+                    st.success("✅ 餘額已更新！")
+                    st.cache_data.clear()
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### ➕ 新增帳戶")
+        with st.form("add_account_form"):
+            a1, a2, a3 = st.columns(3)
+            a_cat  = a1.selectbox("類別", ["現金","銀行","投資","信用卡"])
+            a_bank = a2.text_input("銀行/平台名稱")
+            a_name = a3.text_input("帳戶名稱")
+            a4, a5, a6 = st.columns(3)
+            a_cur  = a4.selectbox("幣別", CURRENCY_LIST)
+            a_bal  = a5.number_input("初始餘額", value=0.0, format="%,.2f")
+            a_note = a6.text_input("備註")
+            if st.form_submit_button("新增帳戶"):
+                if not a_bank or not a_name:
+                    st.error("銀行/平台和帳戶名稱必填")
+                else:
+                    try:
+                        next_order = int(accts["sort_order"].max() or 0) + 1
+                        supabase_client().table("accounts").insert({
+                            "sort_order": next_order,
+                            "category": a_cat,
+                            "bank": a_bank,
+                            "name": a_name,
+                            "currency": a_cur,
+                            "balance": a_bal,
+                            "note": a_note,
+                        }).execute()
+                        st.success("✅ 已新增帳戶！")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"新增失敗：{e}")
+
+with tabs[11]:
+    render_cashflow_tab()
