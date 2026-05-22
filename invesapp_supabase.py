@@ -2494,9 +2494,8 @@ def render_dividend_log_tab(enriched: "pd.DataFrame | None" = None) -> None:
             units = info["units"]
             fx    = info["fx"]
             # 從 GAS 取最新配息資訊
-            gas   = _get_gas_data(fc)
-            mdiv  = gas.get("monthly_div")   # 每單位配息（原幣）
-            ex_d  = gas.get("ex_date")        # 最近除息日
+            mdiv  = _fetch_gas_div_for_enrich(fc)   # 每單位配息（原幣）
+            ex_d  = _get_gas_ex_date(fc)        # 最近除息日
             # 預估台幣 = 單位數 × 每單位配息（原幣）× 即時匯率
             est_orig = units * mdiv           if mdiv else None
             est_twd  = est_orig * fx          if est_orig is not None else None
