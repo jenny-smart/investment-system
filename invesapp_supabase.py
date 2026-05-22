@@ -3363,10 +3363,7 @@ def load_accounts() -> pd.DataFrame:
             columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
     except Exception as e:
         st.error(f"load_accounts 錯誤：{e}")
-        return pd.DataFrame(columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])() -> pd.DataFrame:
-    rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
-    return pd.DataFrame(rows) if rows else pd.DataFrame(
-        columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
+        return pd.DataFrame(columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
 
 
 @st.cache_data(ttl=30, show_spinner=False)
