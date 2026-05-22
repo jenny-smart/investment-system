@@ -2472,37 +2472,40 @@ def render_dividend_log_tab(enriched: "pd.DataFrame | None" = None) -> None:
     est_rows = []
     if not enriched.empty and "asset_type" in enriched.columns:
         fund_df = enriched[enriched["asset_type"] == "基金"].copy()
-        seen: set[str] = set()
-        fund_groups = {}
+        fund_groups: dict = {}
         for _, r in fund_df.iterrows():
             fc  = normalize_text(r.get("fund_code", ""))
             plt = normalize_text(r.get("platform", ""))
             cur = normalize_text(r.get("currency", "TWD"))
             nm  = normalize_text(r.get("name", ""))
             u   = normalize_number(r.get("units", 0), 0)
-            if not fc: continue
+            mdiv_twd = to_float(r.get("每月配息")) or 0.0  # 台幣月配息（已算好）
+            fx   = to_float(r.get("匯率")) or 1.0
+            if not fc or u <= 0: continue
             key = (plt, fc, cur)
             if key not in fund_groups:
                 fund_groups[key] = {"platform": plt, "name": nm, "currency": cur,
-                                    "fund_code": fc, "units": 0, "fx": to_float(r.get("匯率")) or 1.0}
-            fund_groups[key]["units"] += u
+                                    "fund_code": fc, "units": 0, "mdiv_twd": 0.0, "fx": fx}
+            fund_groups[key]["units"]    += u
+            fund_groups[key]["mdiv_twd"] += mdiv_twd
 
         for (plt, fc, cur), info in fund_groups.items():
-            units = info["units"]
-            if units <= 0: continue
-            mdiv = _get_gas_monthly_div(fc)
-            ex_d = _get_gas_ex_date(fc)
-            fx   = info["fx"]
-            est_twd = units * mdiv * fx if mdiv else None
+            units    = info["units"]
+            mdiv_twd = info["mdiv_twd"]
+            fx       = info["fx"]
+            # 反推每單位配息（原幣）
+            mdiv_orig = (mdiv_twd / units / fx) if units > 0 and fx > 0 else None
+            # 除息日從 GAS 快取取（若有）
+            ex_d = _get_gas_ex_date(fc) if fc in _gas_cache else None
             est_rows.append({
                 "平台":           plt,
                 "基金名稱":       info["name"],
                 "幣別":           cur,
                 "目前單位數":     round(units, 4),
                 "最近除息日":     ex_d or "—",
-                "每單位配息":     mdiv,
-                "預估配息(原幣)": round(units * mdiv, 4) if mdiv else None,
-                "預估配息(台幣)": round(est_twd, 0) if est_twd else None,
+                "每單位配息":     round(mdiv_orig, 6) if mdiv_orig else None,
+                "預估配息(原幣)": round(units * mdiv_orig, 4) if mdiv_orig else None,
+                "預估配息(台幣)": round(mdiv_twd, 0) if mdiv_twd else None,
             })
 
     if est_rows:
