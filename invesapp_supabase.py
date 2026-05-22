@@ -2785,10 +2785,10 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
     df = df.sort_values(["平台", "基金名稱", "幣別", "_sort_date"], ascending=True).reset_index(drop=True)
-    df["累計配息金額"] = (
-        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息金額"]
+    df["台幣累積配息"] = (
+        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_實際配息台幣"]
         .cumsum()
-        .round(2)
+        .round(0)
     )
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
