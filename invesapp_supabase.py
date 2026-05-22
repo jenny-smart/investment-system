@@ -2512,6 +2512,8 @@ ESTIMATED_DIVIDEND_COLUMNS = [
     "除息日期",
     "配息金額",
     "預估配息金額",
+    "匯率",
+    "台幣配息金額",
 ]
 
 ACTUAL_DIVIDEND_COLUMNS = [
