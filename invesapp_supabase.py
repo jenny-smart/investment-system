@@ -2804,6 +2804,8 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
         "目前單位數": st.column_config.NumberColumn("目前單位數", format="%,.4f"),
         "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
         "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%,.2f"),
+        "匯率":         st.column_config.NumberColumn("匯率",         format="%.4f"),
+        "台幣配息金額": st.column_config.NumberColumn("台幣配息金額", format="%,.0f"),
     }
     st.dataframe(
         display_df,
@@ -2823,9 +2825,11 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
         "配息單位數": st.column_config.NumberColumn("配息單位數", format="%,.4f"),
         "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
-        "實際配息金額": st.column_config.NumberColumn("實際配息金額", format="%,.2f"),
-        "勾選確認": st.column_config.CheckboxColumn("勾選確認"),
-        "累計配息金額": st.column_config.NumberColumn("累計配息金額", format="%,.2f"),
+        "實際配息金額": total_amount if is_paid or actual_div > 0 else None,
+        "匯率": round(fx, 4) if fx > 0 else None,
+        "確認收到日期": _format_dividend_date(record.get("pay_date", "")) if is_paid else "",
+        "台幣累積配息": None,
+        "勾選確認": is_paid,
     }
     edited = st.data_editor(
         display_df,
