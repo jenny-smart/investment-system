@@ -2715,6 +2715,8 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "除息日期": ex_date,
             "配息金額": div_per_unit if div_per_unit > 0 else None,
             "預估配息金額": total_amount if div_per_unit > 0 else None,
+            "匯率": round(fx, 4) if fx > 0 else None,
+            "台幣配息金額": round(total_amount * fx, 0) if div_per_unit > 0 and fx else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
     return pd.DataFrame(rows, columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]).sort_values(["平台", "基金名稱"])
