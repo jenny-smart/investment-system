@@ -2009,53 +2009,13 @@ def _date_diff_days(date_str: str) -> int | None:
         return None
 
 
-def _parse_dividend_date(value: Any):
-    text = normalize_text(value)
-    if not text:
-        return None
-    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y/%m", "%Y-%m"):
-        try:
-            parsed = datetime.strptime(text, fmt)
-            return parsed.date()
-        except Exception:
-            continue
-    return None
-
-
-def _position_counts_on_ex_date(row: pd.Series, ex_date: str | None) -> bool:
-    if not ex_date:
-        return True
-    purchase_date = _parse_dividend_date(row.get("purchase_ym", ""))
-    ex_dt = _parse_dividend_date(ex_date)
-    if purchase_date is None or ex_dt is None:
-        return True
-    return purchase_date <= ex_dt
-
-
-def _position_dividend_units(row: pd.Series) -> float:
-    units = normalize_number(row.get("units", 0), 0)
-    original_units = normalize_number(row.get("original_units", 0), 0)
-    note = normalize_text(row.get("note", ""))
-    is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
-    return units if units > 0 or is_closed else original_units
-
-
-def _fund_name_from_rows(rows: list[pd.Series]) -> str:
-    names: list[str] = []
-    for row in rows:
-        name = normalize_text(row.get("name", ""))
-        if name and name not in names:
-            names.append(name)
-    return " / ".join(names[:2])
-
-
 def auto_dividend_update(positions: pd.DataFrame) -> int:
     """
     每次頁面載入自動執行：
     1. 【快照】今天在 [ex_date-1天, ex_date+2天] 且 fund_dividends 還沒有這筆
        → 加總同基金所有 units → 寫入 fund_dividends
     2. 【認列】pay_date <= 今天 且 is_paid=False
-       → twd_total = units_at_ex × actual_div_amount × fx_rate
+       → twd_total = units_at_ex × div_amount × fx_rate
        → is_paid = True
        → dividend_received_total += twd_total（只加到 MIN(id) 那筆）
     回傳：更新筆數
@@ -2063,8 +2023,6 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
     from datetime import date as dt_date
     today_str = dt_date.today().strftime("%Y/%m/%d")
     today = dt_date.today()
-
-    positions = ensure_columns(pd.DataFrame(positions))
 
     if positions.empty:
         return 0
@@ -2074,7 +2032,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
 
     # 取得所有已有記錄的 fund_dividends
     try:
-        existing_rows = sb.table("fund_dividends").select("fund_code,fund_name,platform,currency,ex_date,pay_date,is_paid,units_at_ex,div_amount,actual_div_amount,fx_rate,twd_total,id").execute()
+        existing_rows = sb.table("fund_dividends").select("fund_code,platform,currency,ex_date,pay_date,is_paid,units_at_ex,div_amount,fx_rate,twd_total,id").execute()
         existing = {
             (r["fund_code"], r["platform"], r["currency"], r["ex_date"]): r
             for r in (existing_rows.data or [])
@@ -2083,7 +2041,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
         existing = {}
 
     # 按基金分組處理
-    fund_groups: dict[tuple, list[pd.Series]] = {}
+    fund_groups: dict[tuple, pd.DataFrame] = {}
     for _, r in positions.iterrows():
         if normalize_text(r.get("asset_type","")) != "基金":
             continue
@@ -2116,31 +2074,27 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
         if diff is not None and -1 <= diff <= 2 and not exist_row:
             # 加總這個基金所有持倉的單位數
             total_units = sum(
-                _position_dividend_units(r)
-                for r in rows
-                if _position_counts_on_ex_date(r, ex_date)
+                normalize_number(r.get("units", 0), 0) for r in rows
             )
             if total_units > 0:
                 try:
                     sb.table("fund_dividends").insert({
                         "fund_code":   fc,
-                        "fund_name":   _fund_name_from_rows(rows),
                         "platform":    plt,
                         "currency":    cur,
                         "ex_date":     ex_date,
                         "pay_date":    pay_date,
                         "div_amount":  float(div_amt),
-                        "actual_div_amount": 0,
                         "units_at_ex": float(total_units),
                         "fx_rate":     float(fx_val),
-                        "twd_total":   0,
+                        "twd_total":   None,
                         "is_paid":     False,
                     }).execute()
                     exist_row = {
                         "fund_code": fc, "platform": plt, "currency": cur,
                         "ex_date": ex_date, "pay_date": pay_date,
                         "div_amount": div_amt, "units_at_ex": total_units,
-                        "actual_div_amount": 0, "fx_rate": fx_val, "is_paid": False,
+                        "fx_rate": fx_val, "is_paid": False,
                     }
                     updated += 1
                 except Exception:
@@ -2162,8 +2116,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
         units_at_ex = float(exist_row.get("units_at_ex") or 0)
         fx_at_ex    = float(exist_row.get("fx_rate") or fx_val)
         div_amount  = float(exist_row.get("div_amount") or div_amt)
-        actual_div_amount = float(exist_row.get("actual_div_amount") or div_amount)
-        twd_total   = units_at_ex * actual_div_amount * fx_at_ex
+        twd_total   = units_at_ex * div_amount * fx_at_ex
 
         if twd_total <= 0:
             continue
@@ -2175,7 +2128,6 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
                 sb.table("fund_dividends").update({
                     "is_paid":   True,
                     "twd_total": twd_total,
-                    "actual_div_amount": actual_div_amount,
                     "fx_rate":   fx_at_ex,
                     "updated_at": "now()",
                 }).eq("id", int(row_id)).execute()
@@ -2221,16 +2173,17 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     if not enriched.empty:
         est_monthly_div = 0.0
         fx_cache_local: dict[str, float] = {}
+        fund_mdiv_done: set[str] = set()
         for _, fr in enriched.iterrows():
             if normalize_text(fr.get("asset_type","")) != "基金":
                 continue
             fc    = normalize_text(fr.get("fund_code",""))
-            units = normalize_number(fr.get("市值股數", fr.get("units", 0)), 0)
+            units = normalize_number(fr.get("units", 0), 0)
             cur   = normalize_text(fr.get("currency","TWD")).upper()
             if not fc or units <= 0:
                 continue
             # 取 GAS 配息金額（有快取）
-            mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
+            mdiv_per_unit = _get_gas_monthly_div(fc)
             if not mdiv_per_unit:
                 continue
             # 取匯率
@@ -2252,6 +2205,38 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             pass
 
         col_a, col_b = st.columns(2)
+        # 儲存明細到 session_state 供配息記錄 Tab 使用
+        est_div_details = []
+        for _, fr2 in enriched.iterrows():
+            if normalize_text(fr2.get("asset_type","")) != "基金":
+                continue
+            fc2   = normalize_text(fr2.get("fund_code",""))
+            u2    = normalize_number(fr2.get("units", 0), 0)
+            cur2  = normalize_text(fr2.get("currency","TWD")).upper()
+            nm2   = normalize_text(fr2.get("name",""))
+            plt2  = normalize_text(fr2.get("platform",""))
+            if not fc2 or u2 <= 0:
+                continue
+            mdiv2 = _get_gas_monthly_div(fc2)
+            if not mdiv2:
+                continue
+            if cur2 not in fx_cache_local:
+                fxv, _ = fetch_fx(cur2)
+                fx_cache_local[cur2] = fxv or 1.0
+            fxv2 = fx_cache_local[cur2]
+            ex_d2 = _get_gas_ex_date(fc2) or "—"
+            est_div_details.append({
+                "平台":           plt2,
+                "基金名稱":       nm2,
+                "幣別":           cur2,
+                "目前單位數":     round(u2, 4),
+                "除息日期":       ex_d2,
+                "每單位配息(原幣)": round(mdiv2, 6),
+                "預估配息(原幣)":  round(u2 * mdiv2, 2),
+                "預估配息(台幣)":  round(u2 * mdiv2 * fxv2, 0),
+            })
+        st.session_state["est_div_details"] = est_div_details
+
         if est_monthly_div > 0:
             col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次配息金額 × 目前單位數）")
         if this_month_paid > 0:
