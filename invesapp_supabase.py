@@ -2779,7 +2779,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "_sort_date": _parse_dividend_date(record.get("pay_date", "")),
         })
 
-    internal_cols = ["_確認前", "_累計用配息金額", "_實際配息台幣", "_id", "_source_table", "_fx_rate", "_sort_date"]
+    internal_cols = ["_確認前", "_累計用配息金額", "_id", "_source_table", "_fx_rate", "_sort_date"]
     columns = ACTUAL_DIVIDEND_COLUMNS + internal_cols
     if not rows:
         return pd.DataFrame(columns=columns)
