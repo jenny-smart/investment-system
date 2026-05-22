@@ -2767,10 +2767,12 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "發放日期": _format_dividend_date(record.get("pay_date", "")),
             "配息金額": display_div if display_div > 0 else None,
             "實際配息金額": total_amount if is_paid or actual_div > 0 else None,
+            "匯率": round(fx, 4) if fx > 0 else None,
+            "確認收到日期": _format_dividend_date(record.get("pay_date", "")) if is_paid else "",
+            "台幣累積配息": None,
             "勾選確認": is_paid,
             "_確認前": is_paid,
-            "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
-            "_實際配息台幣": twd_total,
+            "_累計用配息金額": twd_total if is_paid else 0,
             "_id": record.get("id"),
             "_source_table": record.get("_source_table", "fund_dividends"),
             "_fx_rate": fx,
@@ -2825,11 +2827,10 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
         "配息單位數": st.column_config.NumberColumn("配息單位數", format="%,.4f"),
         "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
-        "實際配息金額": total_amount if is_paid or actual_div > 0 else None,
-        "匯率": round(fx, 4) if fx > 0 else None,
-        "確認收到日期": _format_dividend_date(record.get("pay_date", "")) if is_paid else "",
-        "台幣累積配息": None,
-        "勾選確認": is_paid,
+        "實際配息金額": st.column_config.NumberColumn("實際配息金額", format="%,.2f"),
+        "匯率":         st.column_config.NumberColumn("匯率",         format="%.4f"),
+        "確認收到日期": st.column_config.TextColumn("確認收到日期",   width="small"),
+        "台幣累積配息": st.column_config.NumberColumn("台幣累積配息", format="%,.0f"),
     }
     edited = st.data_editor(
         display_df,
@@ -2837,7 +2838,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         hide_index=True,
         height=min(42 * len(display_df) + 44, height_cap),
         column_config=col_cfg,
-        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "勾選確認"],
+        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認收到日期"],
         key="actual_dividend_editor",
     )
     if st.button("💾 儲存勾選確認", key="save_actual_dividend_confirm"):
@@ -3190,8 +3191,25 @@ total_rate  = total_pnl / total_cost if total_cost else None
 
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
-    st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5 = st.columns(5)
+    tw_missing = []
+    if not enriched.empty:
+        tw_no_price = enriched[
+            (enriched["platform"] == "台股") &
+            (enriched["units"].fillna(0) > 0) &
+            (enriched["即時價格/淨值"].isna())
+        ]
+        tw_missing = tw_no_price["name"].dropna().unique().tolist()
+    if tw_missing:
+        st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
+    pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
+    c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
+    c2.metric("總台幣成本", money(total_cost))
+    c3.metric("預估每月配息", money(total_div))
+    c4.metric("投資筆數", f"{len(positions):,}")
+    if c5.button("🔄 更新即時價"):
+        st.cache_data.clear(); st.rerun()
+
 # ── 第2排：5個平台小卡 ──
 if not enriched.empty:
     summary = enriched.groupby("platform", dropna=False).agg(
@@ -3215,12 +3233,13 @@ if not enriched.empty:
             )
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
-# ── 第3排：匯率（小字）──
-fx_data = [(cur, fetch_fx(cur)[0]) for cur in CURRENCIES]
-fx_str = "　".join(f"**{cur}** {money(rate,4)}" for cur, rate in fx_data)
-st.markdown(f'<div style="font-size:12px;color:#64748b;padding:4px 0 8px">{fx_str}</div>', unsafe_allow_html=True)
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表"])
 
-# ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
+show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
+             "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
+             "即時價格/淨值", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
+             "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
+             "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 with tabs[0]:
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
@@ -3233,6 +3252,10 @@ with tabs[0]:
 for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
+        view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
+        if view.empty:
+            st.info(f"尚無 {platform} 資料")
+        else:
             # ── 第二排：平台KPI ──
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
