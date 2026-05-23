@@ -3492,7 +3492,11 @@ def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
                 if item in auto_items:
                     continue  # 自動帶入不存
                 for ym in months:
-                    orig = float(pivot.at[item, ym]) if item in pivot.index else 0.0
+                    try:
+                        v = pivot.at[item, ym]
+                        orig = float(v) if not isinstance(v, pd.Series) else float(v.iloc[0])
+                    except Exception:
+                        orig = 0.0
                     new_val = float(edited.at[item, ym]) if item in edited.index else 0.0
                     if abs(new_val - orig) > 0.001:
                         edited_data[(item, ym)] = new_val
@@ -3918,5 +3922,8 @@ with tabs[9]:
 with tabs[10]:
     render_online_sheets_tab()
     
+with tabs[11]:
+    render_cashflow_tab()
+
 with tabs[12]:
     render_monthly_report_tab(enriched)
