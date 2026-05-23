@@ -3423,14 +3423,15 @@ def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
     df_raw = load_monthly_report(tuple(months))
 
     # pivot：index=item, columns=year_month, values=amount
+    all_items = [item for items in REPORT_GROUPS.values() for item in items]
     if not df_raw.empty:
         pivot = df_raw.pivot_table(
             index="item", columns="year_month", values="amount",
             aggfunc="sum", fill_value=0
-        ).reindex(columns=months, fill_value=0)
+        ).reindex(index=all_items, columns=months, fill_value=0)
     else:
-        all_items = [item for items in REPORT_GROUPS.values() for item in items]
         pivot = pd.DataFrame(0.0, index=all_items, columns=months)
+    pivot.index = pivot.index.astype(str)
 
     # ── 從投資系統自動帶入當月市值 ──
     if enriched is not None and not enriched.empty:
@@ -3439,8 +3440,9 @@ def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
             subset = enriched[enriched[col] == val]
             if not subset.empty and metric in subset.columns:
                 auto_val = round(subset[metric].fillna(0).sum(), 0)
-                if item in pivot.index:
-                    pivot.at[item, cur_month] = auto_val
+                mask = pivot.index == item
+                if mask.any():
+                    pivot.loc[mask, cur_month] = auto_val
 
     # ── 顯示與編輯 ──
     st.caption("💡 點選科目群組展開編輯；自動帶入欄位（投資市值）會標示 🤖")
@@ -3456,7 +3458,11 @@ def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
             for item in items:
                 row = {"科目": item}
                 for ym in months:
-                    val = float(pivot.at[item, ym]) if item in pivot.index else 0.0
+                    try:
+                        v = pivot.at[item, ym]
+                        val = float(v) if not isinstance(v, pd.Series) else float(v.iloc[0])
+                    except Exception:
+                        val = 0.0
                     row[ym] = val
                 rows_disp.append(row)
 
