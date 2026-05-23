@@ -3404,6 +3404,35 @@ def _get_months(n: int = 6) -> list[str]:
             m = 12; y -= 1
     return list(reversed(months))
 
+# ════ 現金流 Tab ════
+TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出"]
+TXN_CATEGORIES = ["薪資", "獎金", "房租", "餐飲", "交通", "購物", "醫療", "保險",
+                   "投資", "利息", "信用卡", "其他"]
+
+CURRENCY_LIST = ["TWD", "USD", "CNY", "JPY", "ZAR"]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_accounts() -> pd.DataFrame:
+    try:
+        rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
+        return pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
+    except Exception as e:
+        st.error(f"load_accounts 錯誤：{e}")
+        return pd.DataFrame(columns=["id","sort_order","category","bank","name","currency","balance","note","is_active"])
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_transactions(limit: int = 200) -> pd.DataFrame:
+    try:
+        rows = supabase_client().table("transactions").select(
+            "id,txn_date,txn_type,from_account_id,to_account_id,amount,currency,fx_rate,twd_amount,description,category,note,created_at"
+        ).order("txn_date", desc=True).order("id", desc=True).limit(limit).execute().data or []
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as e:
+        st.error(f"load_transactions 錯誤：{e}")
+        return pd.DataFrame()
 
 def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
     """📅 月報表"""
