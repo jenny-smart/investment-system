@@ -3302,7 +3302,238 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
-                        
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 月報表 Tab
+# ════════════════════════════════════════════════════════════════════════════
+
+from datetime import date as _date
+import calendar
+
+# ── 科目分組定義 ──
+REPORT_GROUPS = {
+    "零用金": [
+        "零用金-餐費","零用金-食材","零用金-衣飾","零用金-頭髮",
+        "零用金-化妝保養+按摩","零用金-交通1","零用金-交通2","零用金-書",
+        "零用金-用品","零用金-電話","零用金-電影","零用金-命理",
+        "零用金-醫療","零用金-拜拜","零用金-其他","零用金-公司",
+        "零用金-公司內勤","零用金-公司代墊","零用金-旅行",
+        "零用金-朋友","零用金-代墊","零用金-家用",
+    ],
+    "零用金小計": ["零用金","零用金--總支出","零用金-支出","零用金-淨值"],
+    "收入":   ["薪資入帳","公司代墊款入帳"],
+    "銀行":   [
+        "富邦銀行","富邦銀行-銀行利息","元大銀行","元大bank-銀行利息","郵局",
+        "台新銀行-建北","台新bank-銀行利息","台新銀行-信義","台新銀行-Richard",
+        "台新銀行-子帳戶","台新銀行-內湖新轉","連線銀行","連線bank-銀行利息",
+        "將來銀行","將來bank-銀行利息","渣打銀行","中國信託",
+        "樂天銀行","樂天bank-銀行利息","悠遊付","一卡通",
+    ],
+    "保險":   ["台銀人壽","國泰人壽","新光人壽","保誠人壽"],
+    "外幣":   [
+        "台幣換外幣","美金","日幣","韓幣","人民幣","港幣","泰幣","歐元",
+        "渣打美金","渣打南非","台新美金","台新日幣","台新南非",
+    ],
+    "借貸":   ["借出+投資","借入","借出+代墊+借入小計"],
+    "投資":   [
+        "台股-舊資金","台股-新資金","台股","富邦奈米投",
+        "基富通-台","基富通-日","渣打-美金","渣打-南非","台新-美金","台新-南非",
+        "懷思投資","懷思新增投資","懷思投資total","notyetincome","懷思投資報酬",
+    ],
+    "基金配息": [
+        "基金配息","基富通-台","基富通-人","基富通-日","j渣打-大華",
+        "渣打-美金","渣打-南非","台新-美金","台新-南非","保險回饋金",
+    ],
+}
+
+# 小計列（自動加總同群組）
+AUTO_SUM_ITEMS = {"零用金","零用金--總支出"}
+
+# 從投資系統自動帶入的對應（item → enriched 欄位）
+AUTO_FROM_INVEST = {
+    "台股":      ("platform", "台股",    "台幣市值"),
+    "基富通-台": ("platform", "基富通",  "台幣市值"),
+    "渣打-美金": ("platform", "渣打基金","台幣市值"),
+    "台新-美金": ("platform", "台新基金","台幣市值"),
+}
+
+GROUP_ICONS = {
+    "零用金": "💸", "零用金小計": "📊", "收入": "💰",
+    "銀行": "🏦", "保險": "🛡️", "外幣": "💱",
+    "借貸": "📋", "投資": "📈", "基金配息": "💰",
+}
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_monthly_report(year_months: tuple) -> pd.DataFrame:
+    """從 Supabase 載入指定年月的月報資料"""
+    try:
+        rows = supabase_client().table("monthly_report").select(
+            "year_month,item,amount,note"
+        ).in_("year_month", list(year_months)).execute().data or []
+        return pd.DataFrame(rows) if rows else pd.DataFrame(
+            columns=["year_month","item","amount","note"])
+    except Exception as e:
+        st.error(f"月報讀取失敗：{e}")
+        return pd.DataFrame(columns=["year_month","item","amount","note"])
+
+
+def _save_monthly_cell(year_month: str, item: str, amount: float, note: str = "") -> bool:
+    """upsert 單格資料"""
+    try:
+        supabase_client().table("monthly_report").upsert({
+            "year_month": year_month,
+            "item": item,
+            "amount": amount,
+            "note": note,
+        }, on_conflict="year_month,item").execute()
+        return True
+    except Exception as e:
+        st.error(f"儲存失敗：{e}")
+        return False
+
+
+def _get_months(n: int = 6) -> list[str]:
+    """取最近 n 個月，格式 2026/01"""
+    today = _date.today()
+    months = []
+    y, m = today.year, today.month
+    for _ in range(n):
+        months.append(f"{y}/{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12; y -= 1
+    return list(reversed(months))
+
+
+def render_monthly_report_tab(enriched: pd.DataFrame | None = None) -> None:
+    """📅 月報表"""
+    st.subheader("📅 月報表")
+
+    # ── 控制列：顯示月數 + 新增月份 ──
+    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 4])
+    n_months = ctrl1.selectbox("顯示月數", [3, 6, 12], index=1, key="report_n_months")
+    months = _get_months(n_months)
+
+    # 手動新增額外月份
+    extra_month = ctrl2.text_input("加入特定月份", placeholder="2025/12", key="report_extra_month")
+    if extra_month and extra_month not in months:
+        months = [extra_month] + months
+
+    # ── 載入資料 ──
+    df_raw = load_monthly_report(tuple(months))
+
+    # pivot：index=item, columns=year_month, values=amount
+    if not df_raw.empty:
+        pivot = df_raw.pivot_table(
+            index="item", columns="year_month", values="amount",
+            aggfunc="sum", fill_value=0
+        ).reindex(columns=months, fill_value=0)
+    else:
+        all_items = [item for items in REPORT_GROUPS.values() for item in items]
+        pivot = pd.DataFrame(0.0, index=all_items, columns=months)
+
+    # ── 從投資系統自動帶入當月市值 ──
+    if enriched is not None and not enriched.empty:
+        cur_month = months[-1]
+        for item, (col, val, metric) in AUTO_FROM_INVEST.items():
+            subset = enriched[enriched[col] == val]
+            if not subset.empty and metric in subset.columns:
+                auto_val = round(subset[metric].fillna(0).sum(), 0)
+                if item in pivot.index:
+                    pivot.at[item, cur_month] = auto_val
+
+    # ── 顯示與編輯 ──
+    st.caption("💡 點選科目群組展開編輯；自動帶入欄位（投資市值）會標示 🤖")
+
+    edited_data: dict[tuple[str,str], float] = {}  # (item, ym) → new_amount
+
+    for group, items in REPORT_GROUPS.items():
+        icon = GROUP_ICONS.get(group, "📌")
+        with st.expander(f"{icon} {group}（{len(items)} 項）", expanded=(group in ["零用金","收入"])):
+
+            # 建立顯示用 DataFrame
+            rows_disp = []
+            for item in items:
+                row = {"科目": item}
+                for ym in months:
+                    val = float(pivot.at[item, ym]) if item in pivot.index else 0.0
+                    row[ym] = val
+                rows_disp.append(row)
+
+            df_grp = pd.DataFrame(rows_disp).set_index("科目")
+
+            # 標示自動帶入欄位
+            auto_items = set(AUTO_FROM_INVEST.keys())
+            last_month = months[-1]
+
+            col_cfg = {}
+            for ym in months:
+                col_cfg[ym] = st.column_config.NumberColumn(ym, format="%,.0f", width="small")
+
+            # 判斷哪些列是唯讀（自動帶入）
+            disabled_rows = [item for item in items if item in auto_items]
+
+            edited = st.data_editor(
+                df_grp,
+                use_container_width=True,
+                column_config=col_cfg,
+                key=f"editor_{group}",
+                num_rows="fixed",
+            )
+
+            # 收集變更
+            for item in items:
+                if item in auto_items:
+                    continue  # 自動帶入不存
+                for ym in months:
+                    orig = float(pivot.at[item, ym]) if item in pivot.index else 0.0
+                    new_val = float(edited.at[item, ym]) if item in edited.index else 0.0
+                    if abs(new_val - orig) > 0.001:
+                        edited_data[(item, ym)] = new_val
+
+            # 群組合計列
+            totals = {ym: df_grp[ym].sum() for ym in months}
+            total_row = pd.DataFrame([totals], index=["── 合計 ──"])
+            st.dataframe(total_row, use_container_width=True,
+                         column_config=col_cfg, hide_index=False)
+
+    # ── 儲存按鈕 ──
+    st.markdown("---")
+    col_save, col_info = st.columns([1, 4])
+    if col_save.button("💾 儲存所有變更", key="save_monthly_report", type="primary"):
+        if not edited_data:
+            st.info("沒有變更需要儲存。")
+        else:
+            ok = 0
+            for (item, ym), amt in edited_data.items():
+                if _save_monthly_cell(ym, item, amt):
+                    ok += 1
+            if ok:
+                st.success(f"✅ 已儲存 {ok} 格")
+                st.cache_data.clear()
+                st.rerun()
+
+    col_info.caption(f"共 {len(edited_data)} 格有變更待儲存")
+
+    # ── 全覽橫向表（唯讀）──
+    st.markdown("---")
+    st.markdown("#### 📊 全覽（所有科目 × 所有月份）")
+    all_items_ordered = [item for items in REPORT_GROUPS.values() for item in items]
+    df_all = pivot.reindex(all_items_ordered).fillna(0)
+    df_all.index.name = "科目"
+    col_cfg_all = {ym: st.column_config.NumberColumn(ym, format="%,.0f", width="small") for ym in months}
+    st.dataframe(
+        df_all,
+        use_container_width=True,
+        hide_index=False,
+        height=min(42 * len(df_all) + 44, 800),
+        column_config=col_cfg_all,
+    )
+
+    # ── 下載 ──
+    csv = df_all.reset_index().to_csv(index=False, encoding="utf-8-sig")
+    st.download_button("⬇️ 下載月報 CSV", data=csv.encode("utf-8-sig"),
+                       file_name=f"monthly_report_{_date.today()}.csv", mime="text/csv")                      
 def price_test_section() -> None:
     st.subheader("抓價測試")
     st.caption("用這裡確認美股 ticker、基金代碼與匯率是否能抓到。")
