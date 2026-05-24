@@ -3532,12 +3532,13 @@ TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信�
 CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
 LIABILITY_CATEGORIES = ["借款/代墊"]
-TRANSFER_ACCOUNT_CATEGORIES = set(NET_ASSET_CATEGORIES + LIABILITY_CATEGORIES + ["其他"])
+TRANSFER_ACCOUNT_CATEGORIES = {"銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
 TRANSFER_ACCOUNT_ROLES = {
     "account_balance", "foreign_cash_balance", "foreign_account_balance",
     "insurance_balance", "investment_transfer_or_balance",
     "loan_payable", "loan_or_investment_outflow",
 }
+ACCOUNT_BALANCE_ROLES = TRANSFER_ACCOUNT_ROLES
 
 CASH_SUBJECT_ALIASES = {
     "food": "零用金-餐費",
@@ -3606,12 +3607,17 @@ def canonical_cash_subject(subject: Any, occurrence_counts: dict[str, int] | Non
     return CASH_SUBJECT_ALIASES.get(item, item)
 
 
-def _is_transfer_account_rule(rule: dict[str, str]) -> bool:
+def _is_account_balance_rule(rule: dict[str, str]) -> bool:
     subject = normalize_text(rule.get("科目", ""))
     role = normalize_text(rule.get("資料角色", ""))
-    if subject == "零用金":
-        return True
-    return role in TRANSFER_ACCOUNT_ROLES
+    return subject == "零用金" or role in ACCOUNT_BALANCE_ROLES
+
+
+def _is_transfer_account_rule(rule: dict[str, str]) -> bool:
+    if not _is_account_balance_rule(rule):
+        return False
+    category = _cash_account_category(rule)
+    return category in TRANSFER_ACCOUNT_CATEGORIES
 
 
 def _unique_keep_order(values: list[Any]) -> list[str]:
@@ -3712,7 +3718,7 @@ def cash_account_preset_rows() -> list[dict[str, Any]]:
         subject = normalize_text(rule.get("科目", ""))
         role = normalize_text(rule.get("資料角色", ""))
         rule_dict = rule.to_dict()
-        if role == "summary" or not _is_transfer_account_rule(rule_dict):
+        if role == "summary" or not _is_account_balance_rule(rule_dict):
             continue
         if subject in seen:
             continue
@@ -3886,6 +3892,8 @@ def _cash_subject_account_fields(subject: str) -> dict[str, str]:
     rule = classify_cash_subject(subject)
     category = _cash_account_category(rule)
     bank, name = _cash_account_bank_name(subject, category)
+    is_account = _is_account_balance_rule(rule)
+    is_transfer_endpoint = _is_transfer_account_rule(rule)
     return {
         "科目": subject,
         "類別": category,
@@ -3893,7 +3901,8 @@ def _cash_subject_account_fields(subject: str) -> dict[str, str]:
         "帳戶名稱": name,
         "幣別": _cash_subject_currency(subject),
         "資料角色": normalize_text(rule.get("資料角色", "")),
-        "可互轉": "是" if _is_transfer_account_rule(rule) else "否",
+        "匯入帳戶": "是" if is_account else "否",
+        "可互轉": "是" if is_transfer_endpoint else "否",
         "備註": normalize_text(rule.get("備註", "")),
     }
 
@@ -3922,13 +3931,12 @@ def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.Data
             continue
         fields = _cash_subject_account_fields(subject)
         role = fields["資料角色"]
-        can_transfer = fields["可互轉"] == "是"
-        should_import = can_transfer
+        should_import = fields["匯入帳戶"] == "是"
         fx_val, _ = fetch_fx(fields["幣別"])
         if role == "summary":
-            skip_reason = "彙總/公式列，不匯入為可互轉帳戶"
-        elif not can_transfer:
-            skip_reason = "支出/收入分類，只留作交易分類，不建立互轉帳戶"
+            skip_reason = "彙總/公式列，不匯入為帳戶"
+        elif not should_import:
+            skip_reason = "支出/收入分類，只留作交易分類，不建立帳戶"
         else:
             skip_reason = ""
         rows.append({
@@ -4024,9 +4032,155 @@ def apply_cash_import_preview(preview: pd.DataFrame, update_existing: bool = Tru
     return inserted, updated, skipped
 
 
+def _cash_month_end_date(month_label: str) -> str:
+    try:
+        year_text, month_text = normalize_text(month_label).split("-", 1)
+        year = int(year_text)
+        month = int(month_text)
+        if month == 12:
+            next_month = datetime(year + 1, 1, 1)
+        else:
+            next_month = datetime(year, month + 1, 1)
+        return (next_month - timedelta(days=1)).date().isoformat()
+    except Exception:
+        return tw_now().date().isoformat()
+
+
+def _cash_ledger_transaction_type(role: str) -> str:
+    role = normalize_text(role)
+    if role == "interest_income":
+        return "利息收入"
+    if role in {"income", "investment_income", "insurance_rebate"}:
+        return "收入"
+    if role == "credit_card_expense":
+        return "信用卡消費"
+    if role == "advance_expense":
+        return "代墊"
+    if role == "insurance_expense":
+        return "支出"
+    if role == "expense":
+        return "支出"
+    return "轉帳"
+
+
+def _cash_ledger_transaction_import_columns() -> list[str]:
+    return ["匯入", "月份", "交易日期", "原始科目", "科目", "交易類型", "金額", "幣別", "匯率", "台幣金額", "資料角色", "略過原因", "備註"]
+
+
+def build_cash_ledger_transaction_preview(
+    ledger: pd.DataFrame,
+    start_month: str,
+    end_month: str,
+) -> pd.DataFrame:
+    if ledger.empty:
+        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
+
+    months = cash_import_month_options(ledger)
+    if start_month not in months or end_month not in months:
+        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
+    start_idx = months.index(start_month)
+    end_idx = months.index(end_month)
+    if start_idx > end_idx:
+        start_idx, end_idx = end_idx, start_idx
+    selected_months = set(months[start_idx:end_idx + 1])
+
+    label_col = ledger.columns[0]
+    occurrence_counts: dict[str, int] = {}
+    rows: list[dict[str, Any]] = []
+    for _, sheet_row in ledger.iterrows():
+        raw_subject = normalize_text(sheet_row.get(label_col, ""))
+        if not raw_subject or raw_subject in {"合計", "總計"}:
+            continue
+        subject = canonical_cash_subject(raw_subject, occurrence_counts)
+        rule = classify_cash_subject(subject)
+        role = normalize_text(rule.get("資料角色", ""))
+        is_account = _is_account_balance_rule(rule)
+        is_summary = role == "summary"
+
+        for col in month_columns(ledger):
+            month_label = normalize_sheet_month_label(col)
+            if month_label not in selected_months:
+                continue
+            amount = parse_sheet_number(sheet_row.get(col))
+            if amount is None or amount == 0:
+                continue
+            currency = _cash_subject_currency(subject)
+            fx_val, _ = fetch_fx(currency)
+            fx_val = fx_val or 1.0
+            should_import = not is_summary and not is_account
+            if is_summary:
+                skip_reason = "彙總/公式列，不匯入交易"
+            elif is_account:
+                skip_reason = "帳戶餘額列，請用帳戶餘額匯入"
+            else:
+                skip_reason = ""
+            marker = f"[2026細帳匯入:{month_label}:{subject}]"
+            rows.append({
+                "匯入": should_import,
+                "月份": month_label,
+                "交易日期": _cash_month_end_date(month_label),
+                "原始科目": raw_subject,
+                "科目": subject,
+                "交易類型": _cash_ledger_transaction_type(role),
+                "金額": abs(float(amount)),
+                "幣別": currency,
+                "匯率": fx_val,
+                "台幣金額": round(abs(float(amount)) * fx_val, 0),
+                "資料角色": role,
+                "略過原因": skip_reason,
+                "備註": f"{marker} 原始科目:{raw_subject}",
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
+    return pd.DataFrame(rows)[_cash_ledger_transaction_import_columns()].sort_values(["匯入", "月份", "科目"], ascending=[False, True, True])
+
+
+def apply_cash_ledger_transaction_preview(
+    preview: pd.DataFrame,
+    skip_existing: bool = True,
+) -> tuple[int, int]:
+    if preview.empty:
+        return 0, 0
+    existing_notes: set[str] = set()
+    if skip_existing:
+        try:
+            existing = supabase_client().table("transactions").select("note").execute().data or []
+            existing_notes = {normalize_text(row.get("note", "")) for row in existing}
+        except Exception:
+            existing_notes = set()
+
+    sb = supabase_client()
+    inserted = 0
+    skipped = 0
+    rows = preview[preview["匯入"] == True].copy()
+    for _, row in rows.iterrows():
+        note = normalize_text(row.get("備註", ""))
+        if skip_existing and note in existing_notes:
+            skipped += 1
+            continue
+        payload = {
+            "txn_date": normalize_text(row.get("交易日期", "")) or tw_now().date().isoformat(),
+            "txn_type": normalize_text(row.get("交易類型", "")),
+            "from_account_id": None,
+            "to_account_id": None,
+            "amount": normalize_number(row.get("金額", 0), 0),
+            "currency": normalize_text(row.get("幣別", "TWD"), "TWD"),
+            "fx_rate": normalize_number(row.get("匯率", 1), 1),
+            "twd_amount": round(normalize_number(row.get("台幣金額", 0), 0), 0),
+            "description": normalize_text(row.get("科目", "")),
+            "category": normalize_text(row.get("科目", "")),
+            "note": note,
+        }
+        sb.table("transactions").insert(payload).execute()
+        existing_notes.add(note)
+        inserted += 1
+    return inserted, skipped
+
+
 def render_cash_import_section() -> None:
-    st.markdown("#### 📥 匯入目前資料")
-    st.caption("從 2026細帳選一個月份，匯入可互轉帳戶的目前餘額。零用金明細、信用卡消費、收入與彙總列只保留為交易分類，不建立成互轉帳戶。")
+    st.markdown("#### 📥 匯入 2026細帳")
+    st.caption("直接讀取 2026細帳：第一欄是科目，右側月份欄是每月帳務。帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -4054,43 +4208,86 @@ def render_cash_import_section() -> None:
     if not months:
         st.warning("找不到月份欄位，請確認欄名格式像 2026-01 或 2026/01。")
         return
-    selected_month = st.selectbox("選擇要匯入的目前月份", months, index=len(months) - 1, key="cash_import_month")
-    preview = build_cash_import_preview(ledger, selected_month)
-    if preview.empty:
-        st.info("這個月份沒有可匯入資料。")
-        return
+    balance_tab, txn_tab = st.tabs(["帳戶餘額", "歷史交易"])
 
-    importable = preview[preview["匯入"] == True]
-    skipped = preview[preview["匯入"] == False]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("可匯入科目", f"{len(importable):,}")
-    c2.metric("分類/彙總不匯入", f"{len(skipped):,}")
-    c3.metric("匯入台幣換算", money(importable["台幣換算"].fillna(0).sum() if not importable.empty else 0))
+    with balance_tab:
+        selected_month = st.selectbox("選擇帳戶餘額月份", months, index=len(months) - 1, key="cash_import_month")
+        preview = build_cash_import_preview(ledger, selected_month)
+        if preview.empty:
+            st.info("這個月份沒有可匯入資料。")
+        else:
+            importable = preview[preview["匯入"] == True]
+            skipped = preview[preview["匯入"] == False]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("可匯入帳戶", f"{len(importable):,}")
+            c2.metric("分類/彙總不匯入", f"{len(skipped):,}")
+            c3.metric("匯入台幣換算", money(importable["台幣換算"].fillna(0).sum() if not importable.empty else 0))
 
-    edited_preview = st.data_editor(
-        preview,
-        use_container_width=True,
-        hide_index=True,
-        height=min(42 * len(preview) + 44, 620),
-        disabled=[col for col in preview.columns if col != "匯入"],
-        column_config={
-            "匯入": st.column_config.CheckboxColumn("匯入"),
-            "餘額": st.column_config.NumberColumn("餘額", format="%,.4f"),
-            "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
-        },
-        key="cash_import_preview_editor",
-    )
+            edited_preview = st.data_editor(
+                preview,
+                use_container_width=True,
+                hide_index=True,
+                height=min(42 * len(preview) + 44, 620),
+                disabled=[col for col in preview.columns if col != "匯入"],
+                column_config={
+                    "匯入": st.column_config.CheckboxColumn("匯入"),
+                    "餘額": st.column_config.NumberColumn("餘額", format="%,.4f"),
+                    "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+                },
+                key="cash_import_preview_editor",
+            )
 
-    update_existing = st.checkbox("若科目已存在，更新目前餘額", value=True, key="cash_import_update_existing")
-    confirm = st.checkbox("確認匯入/更新 accounts 科目餘額", key="cash_import_confirm")
-    if st.button("匯入目前資料", disabled=not confirm, key="apply_cash_import"):
-        try:
-            inserted, updated, skipped_count = apply_cash_import_preview(edited_preview, update_existing=update_existing)
-            st.success(f"匯入完成：新增 {inserted} 筆，更新 {updated} 筆，略過 {skipped_count} 筆。")
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"匯入失敗：{e}")
+            update_existing = st.checkbox("若帳戶已存在，更新目前餘額", value=True, key="cash_import_update_existing")
+            confirm = st.checkbox("確認匯入/更新 accounts 帳戶餘額", key="cash_import_confirm")
+            if st.button("匯入帳戶餘額", disabled=not confirm, key="apply_cash_import"):
+                try:
+                    inserted, updated, skipped_count = apply_cash_import_preview(edited_preview, update_existing=update_existing)
+                    st.success(f"匯入完成：新增 {inserted} 筆，更新 {updated} 筆，略過 {skipped_count} 筆。")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"匯入失敗：{e}")
+
+    with txn_tab:
+        c1, c2 = st.columns(2)
+        start_month = c1.selectbox("匯入起始月份", months, index=0, key="cash_txn_import_start_month")
+        end_month = c2.selectbox("匯入結束月份", months, index=len(months) - 1, key="cash_txn_import_end_month")
+        txn_preview = build_cash_ledger_transaction_preview(ledger, start_month, end_month)
+        if txn_preview.empty:
+            st.info("選取月份沒有可匯入的交易資料。")
+        else:
+            importable_txn = txn_preview[txn_preview["匯入"] == True]
+            skipped_txn = txn_preview[txn_preview["匯入"] == False]
+            k1, k2, k3 = st.columns(3)
+            k1.metric("可匯入交易", f"{len(importable_txn):,}")
+            k2.metric("帳戶/彙總不匯入", f"{len(skipped_txn):,}")
+            k3.metric("交易台幣合計", money(importable_txn["台幣金額"].fillna(0).sum() if not importable_txn.empty else 0))
+
+            edited_txn_preview = st.data_editor(
+                txn_preview,
+                use_container_width=True,
+                hide_index=True,
+                height=min(42 * len(txn_preview) + 44, 620),
+                disabled=[col for col in txn_preview.columns if col != "匯入"],
+                column_config={
+                    "匯入": st.column_config.CheckboxColumn("匯入"),
+                    "金額": st.column_config.NumberColumn("金額", format="%,.2f"),
+                    "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
+                    "台幣金額": st.column_config.NumberColumn("台幣金額", format="%,.0f"),
+                },
+                key="cash_txn_import_preview_editor",
+            )
+
+            skip_existing = st.checkbox("略過已匯入過的 2026細帳交易", value=True, key="cash_txn_skip_existing")
+            confirm_txn = st.checkbox("確認匯入 transactions 歷史交易", key="cash_txn_import_confirm")
+            if st.button("匯入歷史交易", disabled=not confirm_txn, key="apply_cash_txn_import"):
+                try:
+                    inserted, skipped_count = apply_cash_ledger_transaction_preview(edited_txn_preview, skip_existing=skip_existing)
+                    st.success(f"交易匯入完成：新增 {inserted} 筆，略過 {skipped_count} 筆。")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"交易匯入失敗：{e}")
 
 
 def render_cashflow_tab() -> None:
@@ -4186,6 +4383,7 @@ def render_cashflow_tab() -> None:
             acct_opts = ["（無）"] + _acct_options(accts)
             subject_opts = cash_subject_options()
             default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
+            st.caption("來源/目標是帳戶互轉；轉入零用金或信用卡時，請在「分類 / 支出項目」選對應科目，並可填轉帳註記。")
             with st.form("new_txn_form"):
                 c1, c2, c3 = st.columns(3)
                 txn_date = c1.date_input("日期", value=pd.Timestamp.today())
@@ -4200,7 +4398,7 @@ def render_cashflow_tab() -> None:
                 to_opt = c5.selectbox("目標科目（入帳方）", acct_opts, key="to_acct")
 
                 c6, c7, c8 = st.columns(3)
-                amount = c6.number_input("金額（原幣）", value=0.0, format="%,.2f", min_value=0.0)
+                amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
                 currency = c7.selectbox("幣別", CASH_CURRENCIES, index=0)
                 default_fx, _ = fetch_fx(currency)
                 fx_rate_input = c8.number_input("匯率（原幣→台幣）", value=float(default_fx or 1.0), format="%.4f", min_value=0.0)
@@ -4208,7 +4406,7 @@ def render_cashflow_tab() -> None:
                 twd_est = amount * fx_rate_input
                 st.caption(f"估算台幣金額：**{money(twd_est)}**")
                 desc = st.text_input("說明", value=txn_subject)
-                note = st.text_input("備註")
+                note = st.text_input("轉帳註記 / 備註")
 
                 if st.form_submit_button("💾 新增交易"):
                     from_id = _id_from_option(from_opt)
@@ -4322,7 +4520,7 @@ def render_cashflow_tab() -> None:
                             updated_vals[int(r["id"])] = st.number_input(
                                 label,
                                 value=normalize_number(r.get("balance", 0), 0),
-                                format="%,.2f",
+                                format="%.2f",
                                 key=f"bal_{r['id']}",
                             )
                 if st.form_submit_button("💾 更新所有餘額"):
@@ -4346,7 +4544,7 @@ def render_cashflow_tab() -> None:
                 a_name = a3.text_input("帳戶名稱")
                 a4, a5, a6 = st.columns(3)
                 a_cur = a4.selectbox("幣別", CASH_CURRENCIES)
-                a_bal = a5.number_input("初始餘額", value=0.0, format="%,.2f")
+                a_bal = a5.number_input("初始餘額", value=0.0, format="%.2f")
                 a_note = a6.text_input("備註")
             else:
                 preset = next(row for row in preset_rows if row["科目"] == preset_choice)
@@ -4354,7 +4552,7 @@ def render_cashflow_tab() -> None:
                 a_bank = preset["bank"]
                 a_name = preset["name"]
                 a_cur = preset["currency"]
-                a_bal = st.number_input("初始餘額", value=0.0, format="%,.2f")
+                a_bal = st.number_input("初始餘額", value=0.0, format="%.2f")
                 a_note = st.text_input("備註", value=preset["note"])
                 st.caption(f"將建立：{a_cat}｜{a_bank} {a_name}｜{a_cur}")
 
@@ -4383,7 +4581,7 @@ def render_cashflow_tab() -> None:
                         st.error(f"新增失敗：{e}")
 
         with st.expander("一鍵建立缺少的預設帳戶"):
-            st.caption("只會建立可互轉帳戶（銀行、外幣、保險、投資、借款、零用金），支出/收入/信用卡消費不會建立為帳戶；已存在者會略過。")
+            st.caption("會建立帳戶餘額科目；來源/目標互轉只列銀行、外幣、保險、投資、借款/代墊。現金類可做總覽但不列入互轉，支出/收入/信用卡消費只作分類；已存在者會略過。")
             st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
             confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
             if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
