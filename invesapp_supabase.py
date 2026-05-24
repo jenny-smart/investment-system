@@ -1331,7 +1331,7 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
             "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
             "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
             "渣打-南非", "台新-美金", "台新-南非",
-            "懷思投資", "懷思新增投資", "notyetincome",
+            "台新基金", "懷思投資", "懷思新增投資", "notyetincome",
         ],
         "投資",
         "投資資金/帳戶",
@@ -3529,14 +3529,15 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出", "借入", "借出", "代墊"]
-CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
+CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "收入", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
 LIABILITY_CATEGORIES = ["借款/代墊"]
-TRANSFER_ACCOUNT_CATEGORIES = {"銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
+TRANSFER_ACCOUNT_CATEGORIES = {"銀行", "外幣", "投資", "保險", "借款/代墊", "收入", "其他"}
 TRANSFER_ACCOUNT_ROLES = {
     "account_balance", "foreign_cash_balance", "foreign_account_balance",
     "insurance_balance", "investment_transfer_or_balance",
     "loan_payable", "loan_or_investment_outflow",
+    "income", "interest_income", "investment_income", "insurance_rebate",
 }
 ACCOUNT_BALANCE_ROLES = TRANSFER_ACCOUNT_ROLES
 
@@ -3794,23 +3795,63 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if row.empty:
         return str(acct_id)
     r = row.iloc[0]
-    return f"{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})"
+    return _acct_display_label(accts, acct_id)
 
 
-def _acct_options(accts: pd.DataFrame) -> list[str]:
-    opts: list[str] = []
+def _acct_subject_from_row(row: pd.Series) -> str:
+    note = normalize_text(row.get("note", ""))
+    match = re.search(r"(?:預設科目|匯入\s+2026細帳\s+[^：]+)：(.+)", note)
+    if match:
+        return normalize_text(match.group(1))
+
+    category = normalize_text(row.get("category", ""))
+    bank = normalize_text(row.get("bank", ""))
+    name = normalize_text(row.get("name", ""))
+    if bank == "外幣現金" and name:
+        return name
+    if bank == "零用金":
+        return "零用金"
+    if category == "信用卡" and name:
+        return f"信用卡-{name}"
+    if name in {"主帳戶", "投資帳戶", "保單", "往來帳戶"} and bank:
+        return bank
+    if bank and name:
+        return f"{bank}-{name}" if not name.startswith(bank) else name
+    return bank or name or "未命名科目"
+
+
+def _acct_display_label(accts: pd.DataFrame, acct_id: Any) -> str:
+    if acct_id is None or pd.isna(acct_id):
+        return "（無）"
+    try:
+        row = accts[accts["id"] == int(float(acct_id))]
+    except Exception:
+        return str(acct_id)
+    if row.empty:
+        return str(acct_id)
+    r = row.iloc[0]
+    subject = _acct_subject_from_row(r)
+    currency = normalize_text(r.get("currency", "TWD"), "TWD")
+    return f"{subject} ({currency})"
+
+
+def _acct_options(accts: pd.DataFrame) -> list[int]:
+    opts: list[int] = []
     if accts.empty:
         return opts
     for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        opts.append(f"{r.get('id')}｜{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})")
+        rid = r.get("id")
+        if pd.isna(rid):
+            continue
+        opts.append(int(float(rid)))
     return opts
 
 
-def _id_from_option(opt: str) -> int | None:
-    if not opt or opt == "（無）":
+def _id_from_option(opt: Any) -> int | None:
+    if opt is None or opt == "（無）":
         return None
     try:
-        return int(str(opt).split("｜")[0])
+        return int(float(opt))
     except Exception:
         return None
 
@@ -3935,6 +3976,9 @@ def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.Data
         fx_val, _ = fetch_fx(fields["幣別"])
         if role == "summary":
             skip_reason = "彙總/公式列，不匯入為帳戶"
+        elif role == "unknown":
+            should_import = False
+            skip_reason = "未在正式科目清單，不匯入"
         elif not should_import:
             skip_reason = "支出/收入分類，只留作交易分類，不建立帳戶"
         else:
@@ -4107,11 +4151,13 @@ def build_cash_ledger_transaction_preview(
             currency = _cash_subject_currency(subject)
             fx_val, _ = fetch_fx(currency)
             fx_val = fx_val or 1.0
-            should_import = not is_summary and not is_account
+            should_import = not is_summary and not is_account and role != "unknown"
             if is_summary:
                 skip_reason = "彙總/公式列，不匯入交易"
             elif is_account:
                 skip_reason = "帳戶餘額列，請用帳戶餘額匯入"
+            elif role == "unknown":
+                skip_reason = "未在正式科目清單，不匯入"
             else:
                 skip_reason = ""
             marker = f"[2026細帳匯入:{month_label}:{subject}]"
@@ -4380,7 +4426,7 @@ def render_cashflow_tab() -> None:
         if accts.empty:
             st.warning("請先到「帳戶管理」建立帳戶。")
         else:
-            acct_opts = ["（無）"] + _acct_options(accts)
+            acct_opts = [None] + _acct_options(accts)
             subject_opts = cash_subject_options()
             default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
             st.caption("來源/目標是帳戶互轉；轉入零用金或信用卡時，請在「分類 / 支出項目」選對應科目，並可填轉帳註記。")
@@ -4394,8 +4440,18 @@ def render_cashflow_tab() -> None:
                 st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
 
                 c4, c5 = st.columns(2)
-                from_opt = c4.selectbox("來源科目（扣款方）", acct_opts, key="from_acct")
-                to_opt = c5.selectbox("目標科目（入帳方）", acct_opts, key="to_acct")
+                from_opt = c4.selectbox(
+                    "來源科目（扣款方）",
+                    acct_opts,
+                    key="from_acct",
+                    format_func=lambda opt: _acct_display_label(accts, opt),
+                )
+                to_opt = c5.selectbox(
+                    "目標科目（入帳方）",
+                    acct_opts,
+                    key="to_acct",
+                    format_func=lambda opt: _acct_display_label(accts, opt),
+                )
 
                 c6, c7, c8 = st.columns(3)
                 amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
