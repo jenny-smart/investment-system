@@ -2730,29 +2730,25 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None = None) -> dict:
-    sb = supabase_client()
-    rows = sb.table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
+    rows = supabase_client().table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
     if not rows:
         return {}
-    
     r = rows[0]
-    total = float(r.get("total_twd", 0))
+    total = float(r.get("total_twd") or 0)
     if total == 0:
         return {}
-    
     tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
     label = "手動" if trigger == "manual" else "排程"
-    
     return {
-        "tw_stock":            r.get("tw_stock", 0),
-        "us_stock":            r.get("us_stock", 0),
-        "kifutong":            r.get("kifutong", 0),
-        "scb":                 r.get("scb", 0),
-        "taishin":             r.get("taishin", 0),
-        "total_twd":           total,
-        "total_cost":          r.get("total_cost", 0),
-        "total_pnl":           float(r.get("total_twd", 0)) - float(r.get("total_cost", 0)),
-        "cumulative_dividend": r.get("cumulative_dividend", 0),
+        "tw_stock":            round(float(r.get("tw_stock") or 0), 0),
+        "us_stock":            round(float(r.get("us_stock") or 0), 0),
+        "kifutong":            round(float(r.get("kifutong") or 0), 0),
+        "scb":                 round(float(r.get("scb") or 0), 0),
+        "taishin":             round(float(r.get("taishin") or 0), 0),
+        "total_twd":           round(total, 0),
+        "total_cost":          round(float(r.get("total_cost") or 0), 0),
+        "total_pnl":           round(total - float(r.get("total_cost") or 0), 0),
+        "cumulative_dividend": round(float(r.get("cumulative_dividend") or 0), 0),
         "trigger":             trigger,
         "note":                f"{label}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}　資料時間：{r.get('updated_at', '')}",
     }
