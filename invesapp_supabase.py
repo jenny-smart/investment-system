@@ -4050,6 +4050,38 @@ def build_cash_ledger_wide_table(
     return pd.DataFrame(rows)
 
 
+def build_cash_ledger_complete_table(ledger: pd.DataFrame, months: list[str] | None = None) -> pd.DataFrame:
+    if ledger.empty:
+        return pd.DataFrame()
+
+    out = ledger.copy()
+    rename_map = {}
+    for col in out.columns:
+        month_label = normalize_sheet_month_label(col)
+        if month_label:
+            rename_map[col] = cash_display_month_label(month_label)
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    return out
+
+
+def count_cash_ledger_month_cells(ledger: pd.DataFrame, months: list[str]) -> int:
+    if ledger.empty:
+        return 0
+    month_col_by_label = {
+        normalize_sheet_month_label(col): col
+        for col in month_columns(ledger)
+        if normalize_sheet_month_label(col)
+    }
+    count = 0
+    for _, sheet_row in ledger.iterrows():
+        for month in months:
+            source_col = month_col_by_label.get(month)
+            if source_col and parse_sheet_number(sheet_row.get(source_col)) is not None:
+                count += 1
+    return count
+
+
 def _cash_import_preview_columns() -> list[str]:
     return ["匯入", "可互轉", "月份", "原始科目", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "餘額", "台幣換算", "資料角色", "略過原因", "備註"]
 
@@ -4540,7 +4572,21 @@ def render_cash_import_section() -> None:
         st.warning("找不到月份欄位，請確認欄名格式像 2026-01 或 2026/01。")
         return
     default_month_idx = cash_default_month_index(months)
-    balance_tab, txn_tab = st.tabs(["帳戶餘額", "歷史交易"])
+    complete_tab, balance_tab, txn_tab = st.tabs(["完整 2026細帳", "帳戶餘額", "歷史交易"])
+
+    with complete_tab:
+        complete_df = build_cash_ledger_complete_table(ledger, months)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("完整列數", f"{len(complete_df):,}")
+        c2.metric("完整欄數", f"{len(complete_df.columns):,}")
+        c3.metric("月份資料格", f"{count_cash_ledger_month_cells(ledger, months):,}")
+        st.caption("這裡維持 2026細帳原始列數和欄數，不加欄、不刪列；只把月份欄名顯示成 YYYY/MM。")
+        st.dataframe(
+            complete_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(42 * len(complete_df) + 44, 680),
+        )
 
     with balance_tab:
         selected_month = st.selectbox(
