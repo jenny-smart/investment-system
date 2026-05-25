@@ -4947,6 +4947,8 @@ except Exception as e:
 
 enriched = enrich(positions)
 
+cache_enriched_summary(enriched)  # ← 只加這一行
+
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
