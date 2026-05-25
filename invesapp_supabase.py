@@ -2761,49 +2761,6 @@ def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None
         "trigger": trigger,
         "note": f"{label}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
     }
-# ════════════════════════════════════════════════════════════════════════════
-# ★ 歷史記錄 Tab
-# ════════════════════════════════════════════════════════════════════════════
-
-def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
-    if enriched is None or enriched.empty:
-        return {}
-
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
-    total_cost_sum = 0.0
-    total_div_sum  = 0.0
-
-    for _, r in enriched.iterrows():
-        plt = normalize_text(r.get("platform", ""))
-        val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
-        if plt in platform_val and val:
-            platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
-
-    total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-
-    return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
-        "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
-    }
-
 
 def render_history_tab(enriched_df: pd.DataFrame) -> None:
     """📊 歷史市值"""
