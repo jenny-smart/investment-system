@@ -2823,7 +2823,7 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
             val = latest.get(key, 0) or 0
             with card_cols[i]:
                 st.metric(label, f"{val:,.0f}")
-        st.caption(f"快照時間：{latest['時間']}　觸發：{latest.get('trigger', '')}　總市值：{latest.get('總市值', 0):,.0f}")
+        st.caption(f"快照時間：{latest['時間']}　觸發：{latest.get('trigger', '')}　總市值：{latest.get('total_twd', 0):,.0f}　總成本：{latest.get('total_cost', 0):,.0f}　市值損益：{latest.get('total_pnl', 0):,.0f}")
         st.markdown("---")
         
     df_show = df[[
