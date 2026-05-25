@@ -2742,8 +2742,10 @@ def cache_enriched_summary(enriched_df: pd.DataFrame) -> None:
         row["cumulative_dividend"] = round(float(enriched_df["累計已領配息"].fillna(0).sum()), 0)
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
         supabase_client().table("latest_portfolio_values").upsert(row).execute()
-    except Exception:
-        pass
+        print(f"cache_enriched_summary 寫入成功：{row['total_twd']}")  # ← 加這行看 log
+    except Exception as e:
+        print(f"cache_enriched_summary 失敗：{e}")  # ← 改這行
+        st.warning(f"cache寫入失敗：{e}")  # ← 加這行顯示在頁面
 
 def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None = None) -> dict:
     rows = supabase_client().table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
