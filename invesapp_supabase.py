@@ -2903,16 +2903,36 @@ def _latest_past_record(records: list[dict[str, Any]], date_col: str) -> dict[st
     return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
 
 
+ESTIMATED_DIVIDEND_COLUMNS = [
+    "平台",
+    "基金名稱",
+    "幣別",
+    "目前單位數",
+    "除息日期",
+    "配息金額",
+    "預估配息金額",
+]
+
+ACTUAL_DIVIDEND_COLUMNS = [
+    "平台",
+    "基金名稱",
+    "幣別",
+    "配息單位數",
+    "發放日期",
+    "配息金額",
+    "實際配息金額",
+    "勾選確認",
+    "累計配息金額",
+]
+
+
 def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if enriched_df is None or enriched_df.empty:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
-
     funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
     if funds.empty:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
-
     history_index = _dividend_history_index(_combined_dividend_records())
-
     funds["_dividend_key"] = funds.apply(
         lambda r: "|".join([
             normalize_text(r.get("platform", "")),
@@ -2921,7 +2941,6 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         ]),
         axis=1,
     )
-
     rows: list[dict[str, Any]] = []
     for _, grp in funds.groupby("_dividend_key", dropna=False):
         first = grp.iloc[0]
@@ -2932,12 +2951,10 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         units = sum(normalize_number(r.get("市值股數", r.get("units", 0)), 0) for _, r in grp.iterrows())
         if units <= 0:
             continue
-
         history_rows = _history_records_for(history_index, fund_code, platform, currency)
         latest_history = _latest_past_record(history_rows, "ex_date")
         gas = _get_gas_data(fund_code) if fund_code else {}
         ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
-
         div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
         if div_per_unit <= 0:
             div_per_unit = _first_positive(grp.get("monthly_dividend_per_unit", pd.Series(dtype=float)).tolist())
