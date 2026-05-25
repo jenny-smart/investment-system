@@ -2730,29 +2730,35 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _take_snapshot_now(trigger: str = "manual") -> dict:
-    if enriched is None or enriched.empty:
+    global enriched
+    try:
+        _e = enriched
+    except NameError:
         return {}
 
-    # 直接用 platform 加總，和畫面顯示完全一致
-    platform_map = {"台股": "tw_stock", "美股": "us_stock", 
+    if _e is None or (hasattr(_e, "empty") and _e.empty):
+        return {}
+
+    platform_map = {"台股": "tw_stock", "美股": "us_stock",
                     "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
-    
     result = {"tw_stock": 0, "us_stock": 0, "kifutong": 0, "scb": 0, "taishin": 0}
     total_cost_sum = 0.0
     total_div_sum = 0.0
 
     for platform, key in platform_map.items():
-        p_rows = enriched[enriched["platform"] == platform]
-        val = p_rows["台幣市值"].fillna(0).sum()      # ← fillna(0).sum() 和畫面一致
-        cost = p_rows["台幣成本"].fillna(0).sum()
-        div = p_rows["累計已領配息"].fillna(0).sum()
-        result[key] = round(val, 0)
-        total_cost_sum += cost
-        total_div_sum += div
+        p_rows = _e[_e["platform"] == platform]
+        result[key] = round(float(p_rows["台幣市值"].fillna(0).sum()), 0)
+        total_cost_sum += float(p_rows["台幣成本"].fillna(0).sum())
+        total_div_sum += float(p_rows["累計已領配息"].fillna(0).sum())
 
     total = sum(result.values())
-    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
+    # total 為 0 代表報價還沒抓到，不記錄
+    if total == 0:
+        return {}
+
+    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    label = "手動" if trigger == "manual" else "排程"
     return {
         **result,
         "total_twd": round(total, 0),
@@ -2760,7 +2766,7 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
         "total_pnl": round(total - total_cost_sum, 0),
         "cumulative_dividend": round(total_div_sum, 0),
         "trigger": trigger,
-        "note": f"{'手動' if trigger == 'manual' else '排程'}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
+        "note": f"{label}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
     }
 
 
