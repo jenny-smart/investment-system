@@ -2729,14 +2729,9 @@ def render_fx_overview_cards() -> None:
 # ★ 歷史記錄 Tab
 # ════════════════════════════════════════════════════════════════════════════
 
-def _take_snapshot_now(trigger: str = "manual") -> dict:
-    global enriched
-    try:
-        _e = enriched
-    except NameError:
-        return {}
-
-    if _e is None or (hasattr(_e, "empty") and _e.empty):
+def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None = None) -> dict:
+    _e = enriched_df
+    if _e is None or _e.empty:
         return {}
 
     platform_map = {"台股": "tw_stock", "美股": "us_stock",
@@ -2752,8 +2747,6 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
         total_div_sum += float(p_rows["累計已領配息"].fillna(0).sum())
 
     total = sum(result.values())
-
-    # total 為 0 代表報價還沒抓到，不記錄
     if total == 0:
         return {}
 
@@ -2768,8 +2761,6 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
         "trigger": trigger,
         "note": f"{label}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
     }
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 歷史記錄 Tab
 # ════════════════════════════════════════════════════════════════════════════
