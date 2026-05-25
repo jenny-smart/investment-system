@@ -5045,7 +5045,7 @@ with tabs[7]:
         price_test_section()
 
 with tabs[8]:
-    render_history_tab()
+    render_history_tab(enriched)
 
 with tabs[9]:
     render_dividend_log_tab(enriched)
