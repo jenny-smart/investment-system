@@ -3010,7 +3010,13 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "預估配息金額": total_amount if div_per_unit > 0 else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
-    return pd.DataFrame(rows, columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]).sort_values(["平台", "基金名稱"])
+    if not rows:
+        return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
+    df_out = pd.DataFrame(rows)
+    for col in ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]:
+        if col not in df_out.columns:
+            df_out[col] = None
+    return df_out[ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]].sort_values(["平台", "基金名稱"])
 
 
 def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
