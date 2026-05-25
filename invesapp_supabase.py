@@ -2728,6 +2728,22 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 歷史記錄 Tab
 # ════════════════════════════════════════════════════════════════════════════
+def cache_enriched_summary(enriched_df: pd.DataFrame) -> None:
+    try:
+        platform_map = {"台股": "tw_stock", "美股": "us_stock",
+                        "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
+        row = {"id": 1}
+        for platform, key in platform_map.items():
+            p_rows = enriched_df[enriched_df["platform"] == platform]
+            val = float(p_rows["台幣市值"].fillna(0).sum())
+            row[key] = round(val, 0)
+        row["total_twd"] = sum(row[k] for k in platform_map.values())
+        row["total_cost"] = round(float(enriched_df["台幣成本"].fillna(0).sum()), 0)
+        row["cumulative_dividend"] = round(float(enriched_df["累計已領配息"].fillna(0).sum()), 0)
+        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        supabase_client().table("latest_portfolio_values").upsert(row).execute()
+    except Exception:
+        pass
 
 def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None = None) -> dict:
     rows = supabase_client().table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
@@ -4937,8 +4953,6 @@ except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
 
 enriched = enrich(positions)
-
-cache_enriched_summary(enriched)  # ← 只加這一行
 
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
