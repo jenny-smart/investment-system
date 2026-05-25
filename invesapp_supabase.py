@@ -2780,6 +2780,55 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
             st.error(f"記錄失敗：{e}")
     col_info.caption("排程：每天 08:00 / 20:00 自動記錄。也可以手動點按鈕立即記錄。")
 
+    # ── 讀取資料 ──
+    try:
+        rows = supabase_client().table("portfolio_snapshots") \
+            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .order("snapshot_at", desc=True) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取失敗：{e}")
+        return
+
+    if not rows:
+        st.info("還沒有記錄，點上方按鈕立即記錄一筆。")
+        return
+
+    df = pd.DataFrame(rows)
+    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+    df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
+    df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+
+    df_show = df[[
+        "時間", "total_twd", "tw_stock", "us_stock",
+        "kifutong", "scb", "taishin",
+        "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
+    ]].copy()
+    df_show.columns = [
+        "時間", "總市值", "台股", "美股",
+        "基富通", "渣打", "台新",
+        "總成本", "市值損益", "累計配息", "觸發方式", "備註"
+    ]
+    col_cfg = {
+        "時間":     st.column_config.TextColumn("時間",       width="small"),
+        "總市值":   st.column_config.NumberColumn("總市值",   format="%,.0f", width="medium"),
+        "台股":     st.column_config.NumberColumn("台股",     format="%,.0f", width="medium"),
+        "美股":     st.column_config.NumberColumn("美股",     format="%,.0f", width="medium"),
+        "基富通":   st.column_config.NumberColumn("基富通",   format="%,.0f", width="medium"),
+        "渣打":     st.column_config.NumberColumn("渣打",     format="%,.0f", width="medium"),
+        "台新":     st.column_config.NumberColumn("台新",     format="%,.0f", width="medium"),
+        "總成本":   st.column_config.NumberColumn("總成本",   format="%,.0f", width="medium"),
+        "市值損益": st.column_config.NumberColumn("市值損益", format="%,.0f", width="medium"),
+        "累計配息": st.column_config.NumberColumn("累計配息", format="%,.0f", width="medium"),
+        "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
+        "備註":     st.column_config.TextColumn("備註",       width="medium"),
+    }
+    st.dataframe(
+        df_show, use_container_width=True, hide_index=True,
+        height=min(42 * len(df_show) + 44, 600),
+        column_config=col_cfg
+    )
+
 def _fund_name_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str, str, str], str]:
     lookup: dict[tuple[str, str, str], str] = {}
     if enriched_df is None or enriched_df.empty:
