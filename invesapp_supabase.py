@@ -2730,42 +2730,37 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
     if enriched is None or enriched.empty:
         return {}
 
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
+    # 直接用 platform 加總，和畫面顯示完全一致
+    platform_map = {"台股": "tw_stock", "美股": "us_stock", 
+                    "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
+    
+    result = {"tw_stock": 0, "us_stock": 0, "kifutong": 0, "scb": 0, "taishin": 0}
     total_cost_sum = 0.0
-    total_div_sum  = 0.0
+    total_div_sum = 0.0
 
-    for _, r in enriched.iterrows():
-        plt = normalize_text(r.get("platform", ""))
-        val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
-        if plt in platform_val and val:
-            platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
+    for platform, key in platform_map.items():
+        p_rows = enriched[enriched["platform"] == platform]
+        val = p_rows["台幣市值"].fillna(0).sum()      # ← fillna(0).sum() 和畫面一致
+        cost = p_rows["台幣成本"].fillna(0).sum()
+        div = p_rows["累計已領配息"].fillna(0).sum()
+        result[key] = round(val, 0)
+        total_cost_sum += cost
+        total_div_sum += div
 
-    total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    total = sum(result.values())
+    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
     return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
+        **result,
+        "total_twd": round(total, 0),
+        "total_cost": round(total_cost_sum, 0),
+        "total_pnl": round(total - total_cost_sum, 0),
         "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+        "trigger": trigger,
+        "note": f"{'手動' if trigger == 'manual' else '排程'}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
     }
 
 
