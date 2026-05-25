@@ -4956,6 +4956,23 @@ except Exception as e:
 
 enriched = enrich(positions)
 
+# 寫入 latest_portfolio_values（debug 版）
+try:
+    platform_map = {"台股": "tw_stock", "美股": "us_stock",
+                    "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
+    _row = {"id": 1}
+    for _plt, _key in platform_map.items():
+        _p = enriched[enriched["platform"] == _plt]
+        _row[_key] = round(float(_p["台幣市值"].fillna(0).sum()), 0)
+    _row["total_twd"] = sum(_row[k] for k in platform_map.values())
+    _row["total_cost"] = round(float(enriched["台幣成本"].fillna(0).sum()), 0)
+    _row["cumulative_dividend"] = round(float(enriched["累計已領配息"].fillna(0).sum()), 0)
+    _row["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase_client().table("latest_portfolio_values").upsert(_row).execute()
+    st.toast(f"✅ cache 寫入：{_row['total_twd']:,.0f}")
+except Exception as _e:
+    st.warning(f"cache 失敗：{_e}")
+
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
