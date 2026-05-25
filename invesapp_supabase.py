@@ -2799,6 +2799,26 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
+    # ── 最新一筆快照的平台小卡 ──
+    if rows:
+        latest = df.iloc[0]
+        st.markdown("#### 📊 最新快照各平台市值")
+        card_cols = st.columns(5)
+        platform_fields = [
+            ("📈 台股",    "台股"),
+            ("🇺🇸 美股",  "美股"),
+            ("🟧 基富通",  "基富通"),
+            ("🏦 渣打",    "渣打"),
+            ("🟥 台新",    "台新"),
+        ]
+        col_keys = ["tw_stock", "us_stock", "kifutong", "scb", "taishin"]
+        for i, ((label, _), key) in enumerate(zip(platform_fields, col_keys)):
+            val = latest.get(key, 0) or 0
+            with card_cols[i]:
+                st.metric(label, f"{val:,.0f}")
+        st.caption(f"快照時間：{latest['時間']}　觸發：{latest.get('trigger', '')}　總市值：{latest.get('總市值', 0):,.0f}")
+        st.markdown("---")
+        
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
