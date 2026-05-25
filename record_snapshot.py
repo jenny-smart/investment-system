@@ -78,73 +78,34 @@ def fetch_gas(fund_code: str) -> dict:
     return {}
 
 def calc_portfolio() -> dict:
-    """從 Supabase positions 計算各平台市值"""
+    """從 Supabase latest_portfolio_values 讀畫面已算好的市值"""
     client = sb()
-    rows = client.table("positions").select("*").execute().data or []
+    rows = client.table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
+    
+    if not rows:
+        print("⚠️ latest_portfolio_values 沒有資料，跳過")
+        return {}
+    
+    r = rows[0]
+    total = float(r.get("total_twd") or 0)
+    
+    if total == 0:
+        print("⚠️ total_twd 為 0，跳過")
+        return {}
 
-    # 預先抓匯率
-    fx_cache: dict[str, float] = {"TWD": 1.0}
-    for cur in ["USD", "CNY", "JPY", "ZAR"]:
-        fx_cache[cur] = fetch_fx(cur)
-
-    # 預先抓基金淨值（GAS）
-    nav_cache: dict[str, float] = {}
-    for fc in FUND_PRESETS:
-        d = fetch_gas(fc)
-        if d.get("nav"):
-            nav_cache[fc] = float(d["nav"])
-
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
-    total_cost = 0.0
-
-    for r in rows:
-        platform = (r.get("platform") or "").strip()
-        currency = (r.get("currency") or "TWD").strip().upper()
-        units    = float(r.get("units") or 0)
-        orig_u   = float(r.get("original_units") or 0)
-        avg_cost = float(r.get("avg_cost") or 0)
-        total_ci = float(r.get("total_cost_input") or 0)
-        note     = (r.get("note") or "")
-        asset    = (r.get("asset_type") or "").strip()
-
-        if "已賣出" in note or "已結清" in note:
-            continue
-
-        mkt_units = units if units > 0 else orig_u
-        fx = fx_cache.get(currency, 1.0)
-        cost = (total_ci if total_ci > 0 else orig_u * avg_cost) * fx
-        total_cost += cost
-
-        price = None
-        if asset in {"台股", "美股"}:
-            ticker = (r.get("ticker") or "").strip()
-            price = fetch_yahoo(ticker) if ticker else None
-        elif asset == "基金":
-            fc = (r.get("fund_code") or "").strip()
-            price = nav_cache.get(fc)
-
-        if price is None or mkt_units <= 0:
-            continue
-
-        val = mkt_units * price * fx
-        if platform in platform_val:
-            platform_val[platform] += val
-
-    total = sum(platform_val.values())
-    total_pnl = total - total_cost
-
+    updated_at = r.get("updated_at", "")
+    
     return {
-        "total_twd": round(total, 0),
-        "tw_stock":  round(platform_val["台股"], 0),
-        "us_stock":  round(platform_val["美股"], 0),
-        "kifutong":  round(platform_val["基富通"], 0),
-        "scb":       round(platform_val["渣打基金"], 0),
-        "taishin":   round(platform_val["台新基金"], 0),
-        "total_cost": round(total_cost, 0),
-        "total_pnl":  round(total_pnl, 0),
-        "note": f"{'晚間' if IS_EVENING else '早間'}快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')}",
+        "total_twd":           round(total, 0),
+        "tw_stock":            round(float(r.get("tw_stock") or 0), 0),
+        "us_stock":            round(float(r.get("us_stock") or 0), 0),
+        "kifutong":            round(float(r.get("kifutong") or 0), 0),
+        "scb":                 round(float(r.get("scb") or 0), 0),
+        "taishin":             round(float(r.get("taishin") or 0), 0),
+        "total_cost":          round(float(r.get("total_cost") or 0), 0),
+        "total_pnl":           round(total - float(r.get("total_cost") or 0), 0),
+        "cumulative_dividend": round(float(r.get("cumulative_dividend") or 0), 0),
+        "note": f"{'晚間' if IS_EVENING else '早間'}快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')}　資料時間：{updated_at}",
         "trigger": "schedule",
     }
 
