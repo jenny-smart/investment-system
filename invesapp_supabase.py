@@ -2823,8 +2823,10 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
             p_rows = enriched_df[enriched_df["platform"] == platform]
             val = float(p_rows["台幣市值"].fillna(0).sum())
             cost = float(p_rows["台幣成本"].fillna(0).sum())
+            pnl = val - cost
             with card_cols[i]:
-                st.metric(label, f"{val:,.0f}", delta=f"成本 {cost:,.0f}")
+                st.metric(label, f"{val:,.0f}")
+                st.caption(f"成本 {cost:,.0f}")
         total_val = float(enriched_df["台幣市值"].fillna(0).sum())
         total_cost = float(enriched_df["台幣成本"].fillna(0).sum())
         st.caption(f"即時總市值：{total_val:,.0f}　總成本：{total_cost:,.0f}　市值損益：{total_val - total_cost:,.0f}")
