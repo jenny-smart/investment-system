@@ -2808,24 +2808,26 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
-    # ── 最新一筆快照的平台小卡 ──
-    if rows:
-        latest = df.iloc[0]
-        st.markdown("#### 📊 最新快照各平台市值")
-        card_cols = st.columns(5)
-        platform_fields = [
-            ("📈 台股",    "台股"),
-            ("🇺🇸 美股",  "美股"),
-            ("🟧 基富通",  "基富通"),
-            ("🏦 渣打",    "渣打"),
-            ("🟥 台新",    "台新"),
+    # ── 即時各平台市值小卡（和總覽一致）──
+    if not enriched_df.empty:
+        st.markdown("#### 📊 即時各平台市值")
+        platform_map = [
+            ("📈 台股",   "台股"),
+            ("🇺🇸 美股", "美股"),
+            ("🟧 基富通", "基富通"),
+            ("🏦 渣打基金","渣打基金"),
+            ("🟥 台新基金","台新基金"),
         ]
-        col_keys = ["tw_stock", "us_stock", "kifutong", "scb", "taishin"]
-        for i, ((label, _), key) in enumerate(zip(platform_fields, col_keys)):
-            val = latest.get(key, 0) or 0
+        card_cols = st.columns(5)
+        for i, (label, platform) in enumerate(platform_map):
+            p_rows = enriched_df[enriched_df["platform"] == platform]
+            val = float(p_rows["台幣市值"].fillna(0).sum())
+            cost = float(p_rows["台幣成本"].fillna(0).sum())
             with card_cols[i]:
-                st.metric(label, f"{val:,.0f}")
-        st.caption(f"快照時間：{latest['時間']}　觸發：{latest.get('trigger', '')}　總市值：{latest.get('total_twd', 0):,.0f}　總成本：{latest.get('total_cost', 0):,.0f}　市值損益：{latest.get('total_pnl', 0):,.0f}")
+                st.metric(label, f"{val:,.0f}", delta=f"成本 {cost:,.0f}")
+        total_val = float(enriched_df["台幣市值"].fillna(0).sum())
+        total_cost = float(enriched_df["台幣成本"].fillna(0).sum())
+        st.caption(f"即時總市值：{total_val:,.0f}　總成本：{total_cost:,.0f}　市值損益：{total_val - total_cost:,.0f}")
         st.markdown("---")
         
     df_show = df[[
