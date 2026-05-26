@@ -1109,9 +1109,10 @@ def online_sheet_url(gid: str) -> str:
 def load_online_sheet_csv(gid: str) -> pd.DataFrame:
     response = requests.get(online_sheet_url(gid), timeout=30)
     response.raise_for_status()
-    if "<html" in response.text[:200].lower():
+    csv_text = response.content.decode("utf-8-sig", errors="replace")
+    if "<html" in csv_text[:200].lower():
         raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
-    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+    df = pd.read_csv(io.StringIO(csv_text), dtype=str, keep_default_na=False)
     df = df.dropna(axis=1, how="all")
     empty_cols = [c for c in df.columns if str(c).startswith("Unnamed") and df[c].astype(str).str.strip().eq("").all()]
     if empty_cols:
@@ -1659,11 +1660,13 @@ def build_upload_template(positions: pd.DataFrame) -> pd.DataFrame:
 def read_uploaded_table(uploaded_file) -> pd.DataFrame:
     filename = uploaded_file.name.lower()
     if filename.endswith(".csv"):
-        try:
-            return pd.read_csv(uploaded_file, encoding="utf-8-sig")
-        except UnicodeDecodeError:
-            uploaded_file.seek(0)
-            return pd.read_csv(uploaded_file, encoding="big5")
+        for encoding in ["utf-8-sig", "utf-8", "cp950", "big5"]:
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, encoding=encoding, dtype=str, keep_default_na=False)
+            except UnicodeDecodeError:
+                continue
+        raise ValueError("CSV 編碼無法辨識；請改上傳 Excel .xlsx，或另存為 UTF-8 CSV。")
     if filename.endswith((".xlsx", ".xls")):
         return pd.read_excel(uploaded_file)
     raise ValueError("只支援 CSV / Excel 檔案")
@@ -2808,28 +2811,24 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
-    # ── 即時各平台市值小卡（和總覽一致）──
-    if not enriched_df.empty:
-        st.markdown("#### 📊 即時各平台市值")
-        platform_map = [
-            ("📈 台股",   "台股"),
-            ("🇺🇸 美股", "美股"),
-            ("🟧 基富通", "基富通"),
-            ("🏦 渣打基金","渣打基金"),
-            ("🟥 台新基金","台新基金"),
-        ]
+    # ── 最新一筆快照的平台小卡 ──
+    if rows:
+        latest = df.iloc[0]
+        st.markdown("#### 📊 最新快照各平台市值")
         card_cols = st.columns(5)
-        for i, (label, platform) in enumerate(platform_map):
-            p_rows = enriched_df[enriched_df["platform"] == platform]
-            val = float(p_rows["台幣市值"].fillna(0).sum())
-            cost = float(p_rows["台幣成本"].fillna(0).sum())
-            pnl = val - cost
+        platform_fields = [
+            ("📈 台股",    "台股"),
+            ("🇺🇸 美股",  "美股"),
+            ("🟧 基富通",  "基富通"),
+            ("🏦 渣打",    "渣打"),
+            ("🟥 台新",    "台新"),
+        ]
+        col_keys = ["tw_stock", "us_stock", "kifutong", "scb", "taishin"]
+        for i, ((label, _), key) in enumerate(zip(platform_fields, col_keys)):
+            val = latest.get(key, 0) or 0
             with card_cols[i]:
                 st.metric(label, f"{val:,.0f}")
-                st.caption(f"成本 {cost:,.0f}")
-        total_val = float(enriched_df["台幣市值"].fillna(0).sum())
-        total_cost = float(enriched_df["台幣成本"].fillna(0).sum())
-        st.caption(f"即時總市值：{total_val:,.0f}　總成本：{total_cost:,.0f}　市值損益：{total_val - total_cost:,.0f}")
+        st.caption(f"快照時間：{latest['時間']}　觸發：{latest.get('trigger', '')}　總市值：{latest.get('total_twd', 0):,.0f}　總成本：{latest.get('total_cost', 0):,.0f}　市值損益：{latest.get('total_pnl', 0):,.0f}")
         st.markdown("---")
         
     df_show = df[[
@@ -4547,7 +4546,7 @@ def build_cash_monthly_flow_table(txns: pd.DataFrame, accts: pd.DataFrame, flow_
 
 def render_cash_import_section() -> None:
     st.markdown("#### 📥 匯入 2026細帳")
-    st.caption("直接讀取 2026細帳原始欄位：A 欄是科目，B 欄開始是 2025/12、2026/01...。帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
+    st.caption("直接讀取 2026細帳原始欄位：A 欄是科目，B 欄開始是 2025/12、2026/01...。完整頁保留原始列數與欄數；帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -4779,7 +4778,7 @@ def render_cashflow_tab() -> None:
         transfer_subject_opts = ["（無）"] + cash_transfer_subject_options()
         subject_opts = cash_transaction_subject_options()
         default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
-        st.caption("來源/目標使用正式科目名稱。A 轉 B 10000 時，月份流向會顯示 A -10000、B +10000。")
+        st.caption("來源/目標使用正式科目名稱。A 轉 B 10000 時，月份流向會顯示 A -10000、B +10000。利息收入、薪資或其他收入進帳時，來源科目選（無），目標科目選實際入帳帳戶。")
         with st.form("new_txn_form"):
             c1, c2, c3 = st.columns(3)
             txn_date = c1.date_input("日期", value=pd.Timestamp.today())
