@@ -1036,7 +1036,21 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
         return df
-    rows = []
+    df = df.copy()
+    for col in ["units", "original_units", "total_cost_input"]:
+        df[col] = df[col].apply(lambda x: normalize_number(x, 0))
+
+    df = df[
+        (df["units"] > 0) |
+        (df["original_units"] > 0) |
+        (df["total_cost_input"] > 0)
+    ].copy()
+
+    if df.empty:
+        return df
+
+    fx_cache = {}
+        rows = []
     for _, r in df.iterrows():
         name = normalize_text(r.get("name", ""))
         currency = normalize_text(r.get("currency", "TWD")).upper()
@@ -1059,7 +1073,9 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             fund_pattern = normalize_text(r.get("fund_pattern", ""))
             fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
             price, p_status = fetch_fund_nav(fund_code, fund_pattern)
-        fx, fx_status = fetch_fx(currency)
+        if currency not in fx_cache:
+            fx_cache[currency] = fetch_fx(currency)
+        fx, fx_status = fx_cache[currency]
         calc = calculate_cost_and_value(r, price, fx)
         units = normalize_number(calc.get("市值股數", r.get("units", 0)), 0)
         if asset_type == "基金":
@@ -5180,9 +5196,11 @@ try:
     positions = load_positions()
 except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
+
 try:
-    with st.spinner(f"正在讀取與計算投資資料，共 {len(positions)} 筆..."):
-        enriched = enrich(positions)
+    with st.spinner(f"正在讀取資料，共 {len(positions)} 筆..."):
+        # 暫時跳過即時抓價，先讓畫面出來
+        enriched = ensure_columns(positions).copy()
 except Exception as e:
     st.error(f"投資資料計算失敗：{e}")
     st.exception(e)
