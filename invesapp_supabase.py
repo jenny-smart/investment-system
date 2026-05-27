@@ -2219,27 +2219,17 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     return pd.DataFrame(merged_rows)
 
 
-def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
-    """
-    單一子平台：藍色小標題 + 明細表（每檔一行）
-    欄位固定寬度，對齊 Google Sheet 格式：
-    名稱 / 日期 / 現值 / 損益 / 台幣成本 / 台幣市值 / 累積配息 / 月配息 / 配息率 / 損益率
-    """
+def def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     if sub_rows.empty:
         return
 
-    total_val  = sub_rows["台幣市值"].fillna(0).sum()
-    total_pnl  = sub_rows["含息總損益"].fillna(0).sum()
+    total_val = sub_rows["台幣市值"].fillna(0).sum()
     total_cost = sub_rows["台幣成本"].fillna(0).sum()
-    total_div  = sub_rows["累計已領配息"].fillna(0).sum()
+    total_div = sub_rows["累計已領配息"].fillna(0).sum()
     total_mdiv = sub_rows["每月配息"].fillna(0).sum()
-    total_rate = total_pnl / total_cost if total_cost else None
-    pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
-    nav_pnl_sub   = total_val - total_cost if total_val and total_cost else 0
+    nav_pnl_sub = total_val - total_cost if total_val and total_cost else 0
     total_pnl_sub = nav_pnl_sub + total_div
-    nav_color  = "#6ee7b7" if nav_pnl_sub >= 0 else "#fca5a5"
-    tot_color  = "#6ee7b7" if total_pnl_sub >= 0 else "#fca5a5"
 
     st.markdown(f"""
 <div style="background:#f0fdf4;color:#1a2e22;padding:8px 16px;border-radius:8px;
@@ -2253,13 +2243,13 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     <span style="color:#9ca3af;font-size:10px">市值 </span>{money(total_val)}</span>
   <span style="min-width:110px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">市值損益 </span>
-    <span style="color:{'#059669' if nav_pnl_sub>=0 else '#dc2626'};font-weight:700">{signed_money(nav_pnl_sub)}</span></span>
+    <span style="color:{'#059669' if nav_pnl_sub >= 0 else '#dc2626'};font-weight:700">{signed_money(nav_pnl_sub)}</span></span>
   <span style="min-width:90px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">配息 </span>
     <span style="color:#0284c7">{money(total_div)}</span></span>
   <span style="min-width:110px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">總損益 </span>
-    <span style="color:{'#059669' if total_pnl_sub>=0 else '#dc2626'};font-weight:800">{signed_money(total_pnl_sub)}</span></span>
+    <span style="color:{'#059669' if total_pnl_sub >= 0 else '#dc2626'};font-weight:800">{signed_money(total_pnl_sub)}</span></span>
   <span style="min-width:80px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">月配息 </span>
     <span style="color:#7c3aed">{money(total_mdiv)}</span></span>
@@ -2267,78 +2257,81 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 """, unsafe_allow_html=True)
 
     rows_disp = []
-    for _, pr in sub_rows.iterrows():
-        atype     = normalize_text(pr.get("asset_type", ""))
-        price_val = to_float(pr.get("即時價格/淨值"))
-        cost_val  = to_float(pr.get("台幣成本")) or 0.0
-        mval      = to_float(pr.get("台幣市值")) or 0.0
-        pnl_val   = to_float(pr.get("含息總損益"))
-        div_val   = to_float(pr.get("累計已領配息")) or 0.0
-        mdiv      = to_float(pr.get("每月配息")) or 0.0
-        rate_val  = to_float(pr.get("含息總損益率"))
-        ann_rate  = (mdiv * 12 / cost_val) if cost_val and mdiv else None
 
-        # 取報價日期
+    for _, pr in sub_rows.iterrows():
+        atype = normalize_text(pr.get("asset_type", ""))
+        price_val = to_float(pr.get("即時價格/淨值"))
+        cost_val = to_float(pr.get("台幣成本")) or 0.0
+        mval = to_float(pr.get("台幣市值")) or 0.0
+        div_val = to_float(pr.get("累計已領配息")) or 0.0
+        div_original = to_float(pr.get("累計已領配息原幣")) or 0.0
+        mdiv = to_float(pr.get("每月配息")) or 0.0
+
         if atype in {"台股", "美股"}:
-            tk       = normalize_text(pr.get("ticker", ""))
+            tk = normalize_text(pr.get("ticker", ""))
             date_str = fetch_stock_date(tk) if tk else "—"
         else:
-            fc       = normalize_text(pr.get("fund_code", ""))
+            fc = normalize_text(pr.get("fund_code", ""))
             date_str = _get_gas_date(fc) if fc else "—"
 
         if price_val is None:
             date_str = "❌"
 
-        # 市值損益 = 台幣市值 - 台幣成本（不含配息）
-        nav_pnl = (mval - cost_val) if mval and cost_val else None
-        nav_pnl_rate = (nav_pnl / cost_val * 100) if nav_pnl is not None and cost_val else None
-        total_pnl_val = (nav_pnl + div_val) if nav_pnl is not None else None
-        total_pnl_rate = (total_pnl_val / cost_val * 100) if total_pnl_val is not None and cost_val else None
+        nav_pnl = mval - cost_val if mval or cost_val else None
+        nav_pnl_rate = nav_pnl / cost_val * 100 if nav_pnl is not None and cost_val else None
 
+        total_pnl_val = nav_pnl + div_val if nav_pnl is not None else None
+        total_pnl_rate = total_pnl_val / cost_val * 100 if total_pnl_val is not None and cost_val else None
 
-        cum_div_original = to_float(pr.get("累計已領配息原幣"))
-        cum_div_twd = to_float(pr.get("累計已領配息")) or 0.0
+        ann_rate = mdiv * 12 / cost_val if cost_val and mdiv else None
 
         rows_disp.append({
-            "名稱":     normalize_text(pr.get("name", "")),
-            "日期":     date_str,
-            "現值":     round(price_val, 2)       if price_val is not None else None,
-            "台幣成本": round(cost_val, 0)         if cost_val else None,
-            "台幣市值": round(mval, 0)             if mval     else None,
-            "市值損益": round(nav_pnl, 0)          if nav_pnl  is not None else None,
-            "累積配息原幣": round(cum_div_original, 2) if cum_div_original else None,
-            "累積配息":  round(cum_div_twd, 0)     if cum_div_twd else None,
-            "總損益":   round(total_pnl_val, 0)    if total_pnl_val is not None else None,
-            "市值損益率%": round(nav_pnl_rate, 2)  if nav_pnl_rate is not None else None,
-            "總損益率%":  round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
-            "月配息":   round(mdiv, 0)             if mdiv     else None,
-            "配息率%":  round(ann_rate * 100, 2)   if ann_rate else None,
+            "名稱": normalize_text(pr.get("name", "")),
+            "日期": date_str,
+            "現值": round(price_val, 4) if price_val is not None else None,
+            "台幣成本": round(cost_val, 0) if cost_val else None,
+            "台幣市值": round(mval, 0) if mval else None,
+            "市值損益": round(nav_pnl, 0) if nav_pnl is not None else None,
+            "累積配息原幣": round(div_original, 2) if div_original else None,
+            "累積配息": round(div_val, 0) if div_val else None,
+            "總損益": round(total_pnl_val, 0) if total_pnl_val is not None else None,
+            "市值損益率%": round(nav_pnl_rate, 2) if nav_pnl_rate is not None else None,
+            "總損益率%": round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
+            "月配息": round(mdiv, 0) if mdiv else None,
+            "配息率%": round(ann_rate * 100, 2) if ann_rate else None,
         })
 
     if rows_disp:
         df_disp = pd.DataFrame(rows_disp)
+
         col_cfg = {
-            "名稱":       st.column_config.TextColumn("名稱",       width="large"),
-            "日期":       st.column_config.TextColumn("日期",       width="small"),
-            "現值":       st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
-            "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
-            "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
-            "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
-            "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
-            "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%,.0f"),
-            "市值損益率%":st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
-            "總損益率%":  st.column_config.NumberColumn("總損益率%",  width="small", format="%.2f"),
-            "月配息":     st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
-            "配息率%":    st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
+            "名稱": st.column_config.TextColumn("名稱", width="large"),
+            "日期": st.column_config.TextColumn("日期", width="small"),
+            "現值": st.column_config.NumberColumn("現值", width="small", format="%.4f"),
+            "台幣成本": st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
+            "台幣市值": st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
+            "市值損益": st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
+            "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%,.2f"),
+            "累積配息": st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
+            "總損益": st.column_config.NumberColumn("總損益", width="medium", format="%,.0f"),
+            "市值損益率%": st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
+            "總損益率%": st.column_config.NumberColumn("總損益率%", width="small", format="%.2f"),
+            "月配息": st.column_config.NumberColumn("月配息", width="small", format="%,.0f"),
+            "配息率%": st.column_config.NumberColumn("配息率%", width="small", format="%.2f"),
         }
-        # 台股/美股列數多，固定2列高度可上下滾動；基金類自適應
+
         if sub_label in {"台股", "美股"}:
             tbl_height = 42 * 2 + 44
         else:
             tbl_height = min(42 * len(df_disp) + 44, 480)
-        st.dataframe(df_disp, use_container_width=True, hide_index=True,
-                     height=tbl_height,
-                     column_config=col_cfg)
+
+        st.dataframe(
+            df_disp,
+            use_container_width=True,
+            hide_index=True,
+            height=tbl_height,
+            column_config=col_cfg,
+        )
 
 
 def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
