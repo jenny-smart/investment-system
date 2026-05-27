@@ -5105,7 +5105,7 @@ try:
 except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
 
-enriched = enrich(positions)
+enriched = pd.DataFrame()  # 先空的，讓頁面顯示出來
 
 # 寫入 latest_portfolio_values（debug 版）
 try:
@@ -5166,6 +5166,11 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
+    if st.button("🔄 載入即時報價", key="load_enriched"):
+        with st.spinner("抓取報價中，約需 2-3 分鐘..."):
+            enriched = enrich(positions)
+        st.session_state["enriched"] = enriched
+    enriched = st.session_state.get("enriched", pd.DataFrame())
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
