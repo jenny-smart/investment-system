@@ -2219,7 +2219,7 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     return pd.DataFrame(merged_rows)
 
 
-def def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
+def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     if sub_rows.empty:
         return
 
