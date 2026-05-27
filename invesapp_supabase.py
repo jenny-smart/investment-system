@@ -2221,6 +2221,11 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         total_pnl_val = (nav_pnl + div_val) if nav_pnl is not None else None
         total_pnl_rate = (total_pnl_val / cost_val * 100) if total_pnl_val is not None and cost_val else None
 
+
+        cum_div_original = to_float(pr.get("累計已領配息原幣"))
+        cum_div_fx = to_float(pr.get("累計已領配息匯率")) or fx_val
+        cum_div_twd = round(cum_div_original * cum_div_fx, 0) if cum_div_original and cum_div_fx else div_val
+
         rows_disp.append({
             "名稱":     normalize_text(pr.get("name", "")),
             "日期":     date_str,
