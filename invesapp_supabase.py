@@ -5180,8 +5180,13 @@ try:
     positions = load_positions()
 except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
-
-enriched = enrich(positions)
+try:
+    with st.spinner(f"正在讀取與計算投資資料，共 {len(positions)} 筆..."):
+        enriched = enrich(positions)
+except Exception as e:
+    st.error(f"投資資料計算失敗：{e}")
+    st.exception(e)
+    st.stop()
 
 # 寫入 latest_portfolio_values（debug 版）
 try:
