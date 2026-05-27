@@ -5120,7 +5120,6 @@ try:
     _row["cumulative_dividend"] = round(float(enriched["累計已領配息"].fillna(0).sum()), 0)
     _row["updated_at"] = datetime.now(timezone.utc).isoformat()
     supabase_client().table("latest_portfolio_values").upsert(_row).execute()
-    st.toast(f"✅ cache 寫入：{_row['total_twd']:,.0f}")
 except Exception as _e:
     st.warning(f"cache 失敗：{_e}")
 
