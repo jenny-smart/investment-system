@@ -963,7 +963,6 @@ dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 
         "損益": total_pnl_with_dividend,
         "損益率": total_pnl_rate_with_dividend,
     }
-
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
