@@ -1510,7 +1510,6 @@ def render_online_sheets_tab() -> None:
             c1.metric("2026 已估/已入帳收入", money(current_year["金額"].sum()))
             c2.metric("最近月份", latest["月份"])
             c3.metric("最近月份金額", money(latest["金額"]))
-            st.bar_chart(monthly.set_index("月份")[["金額"]], height=320)
             st.dataframe(
                 monthly,
                 use_container_width=True,
@@ -1537,7 +1536,13 @@ def render_online_sheets_tab() -> None:
             c1.metric("線上細帳筆數", f"{len(long_entries):,}")
             c2.metric("月份數", f"{long_entries['月份'].nunique():,}")
             c3.metric("非零項目數", f"{long_entries['項目'].nunique():,}")
-            st.bar_chart(monthly_sum.set_index("月份")[["金額"]], height=300)
+            st.markdown("#### 月份合計")
+            st.dataframe(
+                monthly_sum,
+                use_container_width=True,
+                hide_index=True,
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+            )
             st.markdown("#### 金額最大的項目")
             st.dataframe(
                 category_sum,
@@ -4580,7 +4585,16 @@ with tabs[0]:
     st.markdown("### 📈 資產配置圖")
     if not enriched.empty:
         chart_summary = enriched.groupby("platform", dropna=False).agg(台幣市值=("台幣市值", "sum")).reset_index()
-        st.bar_chart(chart_summary.set_index("platform")[["台幣市值"]], height=280)
+        chart_summary["占比"] = chart_summary["台幣市值"] / chart_summary["台幣市值"].sum() if chart_summary["台幣市值"].sum() else 0
+        st.dataframe(
+            chart_summary,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "台幣市值": st.column_config.NumberColumn("台幣市值", format="%,.0f"),
+                "占比": st.column_config.NumberColumn("占比", format="%.2f%%"),
+            },
+        )
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
 for idx, platform in enumerate(PLATFORMS, start=1):
