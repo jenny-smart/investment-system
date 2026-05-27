@@ -968,31 +968,52 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     units = normalize_number(r.get("units", 0), 0)
     avg_cost = normalize_number(r.get("avg_cost", 0), 0)
     total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
+
     note = normalize_text(r.get("note", ""))
     is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
+
     market_units = units if units > 0 or is_closed else original_units
+
     cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
     value_original_currency = market_units * latest_price if latest_price is not None else None
+
     twd_cost = cost_original_currency * fx if fx is not None else None
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
+
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
-    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
-    
-    # 原幣累計配息 × 即時匯率 → 覆蓋台幣累計配息
-    div_original = normalize_number(r.get("dividend_received_original", 0), 0)
+
     currency = normalize_text(r.get("currency", "TWD")).upper()
 
-    if div_original > 0 and fx is not None and fx > 0:
-        dividend_received_twd = round(div_original * fx, 0)
-    elif currency == "TWD":
-        div_original = normalize_number(r.get("dividend_received_total", 0), 0)
-        dividend_received_twd = round(div_original, 0)
+    # 正確邏輯：
+    # dividend_received_original = 原幣累積配息，只能填在該基金其中一列，其他重複列填 0
+    # dividend_received_total = 舊台幣欄位，只做備援，不應再當主要資料
+    div_original = normalize_number(r.get("dividend_received_original", 0), 0)
+    div_total_old = normalize_number(r.get("dividend_received_total", 0), 0)
+
+    if div_original > 0:
+        if currency == "TWD":
+            dividend_received_twd = round(div_original, 0)
+        elif fx is not None and fx > 0:
+            dividend_received_twd = round(div_original * fx, 0)
+        else:
+            dividend_received_twd = 0
     else:
-        dividend_received_twd = 0
+        # 舊資料備援：只有 TWD 才允許直接吃 dividend_received_total
+        if currency == "TWD" and div_total_old > 0:
+            div_original = div_total_old
+            dividend_received_twd = round(div_total_old, 0)
+        else:
+            div_original = 0
+            dividend_received_twd = 0
+
     total_pnl_with_dividend = pnl + dividend_received_twd if pnl is not None else None
-    total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
-    is_reinvest = bool(r.get("is_reinvest", False))
+    total_pnl_rate_with_dividend = (
+        total_pnl_with_dividend / twd_cost
+        if total_pnl_with_dividend is not None and twd_cost
+        else None
+    )
+
     return {
         "成本原幣": cost_original_currency,
         "市值原幣": value_original_currency,
