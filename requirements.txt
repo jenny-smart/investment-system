@@ -1,8 +1,8 @@
 streamlit==1.44.0
-pandas
-requests
 supabase
 yfinance
 beautifulsoup4
 lxml
+pandas
+requests
 openpyxl
