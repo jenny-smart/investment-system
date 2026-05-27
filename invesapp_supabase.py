@@ -1945,7 +1945,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
     st.caption("新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
     cols = ["sort_order", "id", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
             "currency", "original_units", "units", "corporate_action", "avg_cost", "total_cost_input",
-            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total", "dividend_note", "note",
+            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original", "dividend_received_total", "dividend_note", "note",
             "is_reinvest"]
     current_positions = ensure_columns(current_positions)
     if current_positions.empty:
@@ -1968,7 +1968,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         base, use_container_width=True, hide_index=True, height=360, num_rows="dynamic",
         column_order=["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
                       "currency", "original_units", "units", "avg_cost", "total_cost_input", "purchase_ym",
-                      "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
+                      "dividend_received_original", "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
         column_config={
             "sort_order": st.column_config.NumberColumn("排序", step=1),
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
