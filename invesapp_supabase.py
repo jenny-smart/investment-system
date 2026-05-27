@@ -1514,7 +1514,7 @@ def render_online_sheets_tab() -> None:
                 monthly,
                 use_container_width=True,
                 hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
 
     with sheet_tabs[1]:
@@ -1541,14 +1541,14 @@ def render_online_sheets_tab() -> None:
                 monthly_sum,
                 use_container_width=True,
                 hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
             st.markdown("#### 金額最大的項目")
             st.dataframe(
                 category_sum,
                 use_container_width=True,
                 hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
             st.markdown("#### 明細")
             st.dataframe(
@@ -1556,7 +1556,7 @@ def render_online_sheets_tab() -> None:
                 use_container_width=True,
                 hide_index=True,
                 height=520,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
 
     with sheet_tabs[2]:
@@ -1607,7 +1607,7 @@ def render_online_sheets_tab() -> None:
                 use_container_width=True,
                 hide_index=True,
                 height=min(42 * len(summary) + 44, 420),
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
             st.markdown("#### 月份 × 大類")
             st.dataframe(
@@ -1623,7 +1623,7 @@ def render_online_sheets_tab() -> None:
                     use_container_width=True,
                     hide_index=True,
                     height=min(42 * len(unknown) + 44, 280),
-                    column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                    column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
                 )
             st.markdown("#### 轉換後明細")
             st.dataframe(
@@ -1631,7 +1631,7 @@ def render_online_sheets_tab() -> None:
                 use_container_width=True,
                 hide_index=True,
                 height=520,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%,.0f")},
+                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
             )
 
         st.markdown("#### 科目字典明細")
@@ -1656,8 +1656,8 @@ def render_online_sheets_tab() -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "非空白儲存格": st.column_config.NumberColumn("非空白儲存格", format="%,.0f"),
-                "公式錯誤格": st.column_config.NumberColumn("公式錯誤格", format="%,.0f"),
+                "非空白儲存格": st.column_config.NumberColumn("非空白儲存格", format="%.0f"),
+                "公式錯誤格": st.column_config.NumberColumn("公式錯誤格", format="%.0f"),
                 "CSV": st.column_config.LinkColumn("CSV"),
             },
         )
@@ -1995,8 +1995,8 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
             "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
             "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
-            "dividend_received_original_total": st.column_config.NumberColumn("累計配息原幣", format="%,.4f"),
-            "dividend_received_total": st.column_config.NumberColumn("累計配息台幣舊欄", format="%,.0f"),
+            "dividend_received_original_total": st.column_config.NumberColumn("累計配息原幣", format="%.4f"),
+            "dividend_received_total": st.column_config.NumberColumn("累計配息台幣舊欄", format="%.0f"),
             "is_reinvest": st.column_config.CheckboxColumn("配息再投入"),
         }, key=editor_key,
     )
@@ -2289,15 +2289,15 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "名稱":       st.column_config.TextColumn("名稱",       width="large"),
             "日期":       st.column_config.TextColumn("日期",       width="small"),
             "現值":       st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
-            "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
-            "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
-            "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
-            "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%,.2f"),
-            "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
-            "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%,.0f"),
+            "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%.0f"),
+            "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%.0f"),
+            "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%.0f"),
+            "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%.2f"),
+            "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%.0f"),
+            "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%.0f"),
             "市值損益率%":st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
             "總損益率%":  st.column_config.NumberColumn("總損益率%",  width="small", format="%.2f"),
-            "月配息":     st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
+            "月配息":     st.column_config.NumberColumn("月配息",   width="small",  format="%.0f"),
             "配息率%":    st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
         }
         # 台股/美股列數多，固定2列高度可上下滾動；基金類自適應
@@ -2914,15 +2914,15 @@ def render_history_tab() -> None:
     ]
     col_cfg = {
         "時間":     st.column_config.TextColumn("時間",       width="small"),
-        "總市值":   st.column_config.NumberColumn("總市值",   format="%,.0f", width="medium"),
-        "台股":     st.column_config.NumberColumn("台股",     format="%,.0f", width="medium"),
-        "美股":     st.column_config.NumberColumn("美股",     format="%,.0f", width="medium"),
-        "基富通":   st.column_config.NumberColumn("基富通",   format="%,.0f", width="medium"),
-        "渣打":     st.column_config.NumberColumn("渣打",     format="%,.0f", width="medium"),
-        "台新":     st.column_config.NumberColumn("台新",     format="%,.0f", width="medium"),
-        "總成本":   st.column_config.NumberColumn("總成本",   format="%,.0f", width="medium"),
-        "市值損益": st.column_config.NumberColumn("市值損益", format="%,.0f", width="medium"),
-        "累計配息": st.column_config.NumberColumn("累計配息", format="%,.0f", width="medium"),
+        "總市值":   st.column_config.NumberColumn("總市值",   format="%.0f", width="medium"),
+        "台股":     st.column_config.NumberColumn("台股",     format="%.0f", width="medium"),
+        "美股":     st.column_config.NumberColumn("美股",     format="%.0f", width="medium"),
+        "基富通":   st.column_config.NumberColumn("基富通",   format="%.0f", width="medium"),
+        "渣打":     st.column_config.NumberColumn("渣打",     format="%.0f", width="medium"),
+        "台新":     st.column_config.NumberColumn("台新",     format="%.0f", width="medium"),
+        "總成本":   st.column_config.NumberColumn("總成本",   format="%.0f", width="medium"),
+        "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f", width="medium"),
+        "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f", width="medium"),
         "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
         "備註":     st.column_config.TextColumn("備註",       width="medium"),
     }
@@ -3225,9 +3225,9 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
     display_df = df[ESTIMATED_DIVIDEND_COLUMNS].copy()
     col_cfg = {
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
-        "目前單位數": st.column_config.NumberColumn("目前單位數", format="%,.4f"),
-        "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
-        "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%,.2f"),
+        "目前單位數": st.column_config.NumberColumn("目前單位數", format="%.4f"),
+        "配息金額": st.column_config.NumberColumn("配息金額", format="%.6f"),
+        "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%.2f"),
     }
     st.dataframe(
         display_df,
@@ -3245,11 +3245,11 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     display_df = df[ACTUAL_DIVIDEND_COLUMNS].copy()
     col_cfg = {
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
-        "配息單位數": st.column_config.NumberColumn("配息單位數", format="%,.4f"),
-        "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
-        "實際配息金額": st.column_config.NumberColumn("實際配息金額", format="%,.2f"),
+        "配息單位數": st.column_config.NumberColumn("配息單位數", format="%.4f"),
+        "配息金額": st.column_config.NumberColumn("配息金額", format="%.6f"),
+        "實際配息金額": st.column_config.NumberColumn("實際配息金額", format="%.2f"),
         "勾選確認": st.column_config.CheckboxColumn("勾選確認"),
-        "累計配息金額": st.column_config.NumberColumn("累計配息金額", format="%,.2f"),
+        "累計配息金額": st.column_config.NumberColumn("累計配息金額", format="%.2f"),
     }
     edited = st.data_editor(
         display_df,
@@ -4127,8 +4127,8 @@ def render_cash_import_section() -> None:
         disabled=[col for col in preview.columns if col != "匯入"],
         column_config={
             "匯入": st.column_config.CheckboxColumn("匯入"),
-            "餘額": st.column_config.NumberColumn("餘額", format="%,.4f"),
-            "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+            "餘額": st.column_config.NumberColumn("餘額", format="%.4f"),
+            "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
         },
         key="cash_import_preview_editor",
     )
@@ -4195,8 +4195,8 @@ def render_cashflow_tab() -> None:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "科目數": st.column_config.NumberColumn("科目數", format="%,.0f"),
-                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+                        "科目數": st.column_config.NumberColumn("科目數", format="%.0f"),
+                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
                     },
                 )
             for cat in categories:
@@ -4225,8 +4225,8 @@ def render_cashflow_tab() -> None:
                     hide_index=True,
                     height=min(42 * len(df_disp) + 44, 340),
                     column_config={
-                        "餘額": st.column_config.NumberColumn("餘額", format="%,.4f"),
-                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+                        "餘額": st.column_config.NumberColumn("餘額", format="%.4f"),
+                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
                     },
                 )
 
@@ -4342,8 +4342,8 @@ def render_cashflow_tab() -> None:
                 hide_index=True,
                 height=min(42 * len(show) + 44, 600),
                 column_config={
-                    "金額": st.column_config.NumberColumn("金額", format="%,.2f"),
-                    "台幣金額": st.column_config.NumberColumn("台幣金額", format="%,.0f"),
+                    "金額": st.column_config.NumberColumn("金額", format="%.2f"),
+                    "台幣金額": st.column_config.NumberColumn("台幣金額", format="%.0f"),
                 },
             )
 
@@ -4591,7 +4591,7 @@ with tabs[0]:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "台幣市值": st.column_config.NumberColumn("台幣市值", format="%,.0f"),
+                "台幣市值": st.column_config.NumberColumn("台幣市值", format="%.0f"),
                 "占比": st.column_config.NumberColumn("占比", format="%.2f%%"),
             },
         )
@@ -4621,23 +4621,23 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             st.markdown("#### 即時計算結果")
             # 數值欄位直接用原始數值 + NumberColumn，靠右對齊、可排序
             num_cols = {
-                "total_cost_input": st.column_config.NumberColumn("總投入成本", format="%,.0f"),
-                "original_units":   st.column_config.NumberColumn("成本股數",   format="%,.4f"),
-                "units":            st.column_config.NumberColumn("現在股數",   format="%,.4f"),
-                "市值股數":         st.column_config.NumberColumn("市值股數",   format="%,.4f"),
-                "avg_cost":         st.column_config.NumberColumn("平均成本",   format="%,.4f"),
-                "即時價格/淨值":    st.column_config.NumberColumn("即時價格/淨值", format="%,.4f"),
-                "匯率":             st.column_config.NumberColumn("匯率",       format="%,.4f"),
-                "成本原幣":         st.column_config.NumberColumn("成本原幣",   format="%,.0f"),
-                "市值原幣":         st.column_config.NumberColumn("市值原幣",   format="%,.0f"),
-                "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%,.0f"),
-                "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%,.0f"),
-                "價差損益":         st.column_config.NumberColumn("市值損益",   format="%,.0f"),
-                "累計配息原幣":     st.column_config.NumberColumn("累積配息原幣", format="%,.2f"),
-                "累計已領配息":     st.column_config.NumberColumn("累積配息台幣", format="%,.0f"),
-                "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
-                "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
-                "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%,.4f"),
+                "total_cost_input": st.column_config.NumberColumn("總投入成本", format="%.0f"),
+                "original_units":   st.column_config.NumberColumn("成本股數",   format="%.4f"),
+                "units":            st.column_config.NumberColumn("現在股數",   format="%.4f"),
+                "市值股數":         st.column_config.NumberColumn("市值股數",   format="%.4f"),
+                "avg_cost":         st.column_config.NumberColumn("平均成本",   format="%.4f"),
+                "即時價格/淨值":    st.column_config.NumberColumn("即時價格/淨值", format="%.4f"),
+                "匯率":             st.column_config.NumberColumn("匯率",       format="%.4f"),
+                "成本原幣":         st.column_config.NumberColumn("成本原幣",   format="%.0f"),
+                "市值原幣":         st.column_config.NumberColumn("市值原幣",   format="%.0f"),
+                "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%.0f"),
+                "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%.0f"),
+                "價差損益":         st.column_config.NumberColumn("市值損益",   format="%.0f"),
+                "累計配息原幣":     st.column_config.NumberColumn("累積配息原幣", format="%.2f"),
+                "累計已領配息":     st.column_config.NumberColumn("累積配息台幣", format="%.0f"),
+                "含息總損益":       st.column_config.NumberColumn("總損益",     format="%.0f"),
+                "每月配息":         st.column_config.NumberColumn("月配息",     format="%.0f"),
+                "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%.4f"),
                 "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
                 "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
             }
