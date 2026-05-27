@@ -2241,22 +2241,22 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 
 
         cum_div_original = to_float(pr.get("累計已領配息原幣"))
-        cum_div_fx = to_float(pr.get("累計已領配息匯率")) or fx_val
-        cum_div_twd = round(cum_div_original * cum_div_fx, 0) if cum_div_original and cum_div_fx else div_val
+        cum_div_twd = to_float(pr.get("累計已領配息")) or 0.0
 
         rows_disp.append({
             "名稱":     normalize_text(pr.get("name", "")),
             "日期":     date_str,
-            "現值":     round(price_val, 2)      if price_val is not None else None,
-            "台幣成本": round(cost_val, 0)        if cost_val else None,
-            "台幣市值": round(mval, 0)            if mval     else None,
-            "市值損益": round(nav_pnl, 0)         if nav_pnl  is not None else None,
-            "累積配息": round(div_val, 0)         if div_val  else None,
-            "總損益":   round(total_pnl_val, 0)   if total_pnl_val is not None else None,
-            "市值損益率%": round(nav_pnl_rate, 2) if nav_pnl_rate is not None else None,
+            "現值":     round(price_val, 2)       if price_val is not None else None,
+            "台幣成本": round(cost_val, 0)         if cost_val else None,
+            "台幣市值": round(mval, 0)             if mval     else None,
+            "市值損益": round(nav_pnl, 0)          if nav_pnl  is not None else None,
+            "累積配息原幣": round(cum_div_original, 2) if cum_div_original else None,
+            "累積配息":  round(cum_div_twd, 0)     if cum_div_twd else None,
+            "總損益":   round(total_pnl_val, 0)    if total_pnl_val is not None else None,
+            "市值損益率%": round(nav_pnl_rate, 2)  if nav_pnl_rate is not None else None,
             "總損益率%":  round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
-            "月配息":   round(mdiv, 0)            if mdiv     else None,
-            "配息率%":  round(ann_rate * 100, 2)  if ann_rate else None,
+            "月配息":   round(mdiv, 0)             if mdiv     else None,
+            "配息率%":  round(ann_rate * 100, 2)   if ann_rate else None,
         })
 
     if rows_disp:
