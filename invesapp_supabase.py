@@ -955,8 +955,12 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     
     # 原幣累計配息 × 即時匯率 → 覆蓋台幣累計配息
     div_original = normalize_number(r.get("dividend_received_original", 0), 0)
+    currency = normalize_text(r.get("currency", "TWD")).upper()
     if div_original > 0 and fx is not None and fx > 0:
         dividend_received_twd = round(div_original * fx, 0)
+    elif currency == "TWD" and dividend_received_total > 0:
+        div_original = dividend_received_total
+        dividend_received_twd = dividend_received_total
     else:
         dividend_received_twd = dividend_received_total
         div_original = None
