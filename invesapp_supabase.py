@@ -285,6 +285,41 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+_original_st_dataframe = st.dataframe
+
+
+def _localized_number_config(config: Any) -> Any:
+    if not isinstance(config, dict):
+        return config
+    out = dict(config)
+    type_config = out.get("type_config")
+    if isinstance(type_config, dict) and type_config.get("type") == "number":
+        new_type_config = dict(type_config)
+        new_type_config["format"] = "localized"
+        out["type_config"] = new_type_config
+    return out
+
+
+def _dataframe_with_localized_numbers(data: Any = None, *args: Any, **kwargs: Any) -> Any:
+    df = getattr(data, "data", data)
+    if isinstance(df, pd.DataFrame):
+        column_config = dict(kwargs.get("column_config") or {})
+        for col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                existing = column_config.get(col)
+                column_config[col] = (
+                    st.column_config.NumberColumn(str(col), format="localized")
+                    if existing is None
+                    else _localized_number_config(existing)
+                )
+        if column_config:
+            kwargs["column_config"] = column_config
+    return _original_st_dataframe(data, *args, **kwargs)
+
+
+st.dataframe = _dataframe_with_localized_numbers
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 以下所有函式與原版完全相同，未做任何更動
 # ════════════════════════════════════════════════════════════════════════════
