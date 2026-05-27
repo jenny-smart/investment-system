@@ -349,20 +349,35 @@ def normalize_bool(v: Any, default: bool = False) -> bool:
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     defaults = {
-        "id": None, "sort_order": 0, "platform": "台股", "asset_type": "台股",
-        "name": "", "ticker": "", "fund_code": "", "fund_pattern": "", "currency": "TWD",
-        "original_units": 0.0, "units": 0.0, "corporate_action": "",
-        "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
-        "purchase_ym": "", "dividend_received_total": 0.0, "dividend_note": "", "note": "",
-        "is_reinvest": False,
+        "id": None,
+        "sort_order": 0,
+        "platform": "台股",
+        "asset_type": "台股",
+        "name": "",
+        "ticker": "",
+        "fund_code": "",
+        "fund_pattern": "",
+        "currency": "TWD",
+        "original_units": 0.0,
+        "units": 0.0,
+        "corporate_action": "",
+        "avg_cost": 0.0,
+        "total_cost_input": 0.0,
+        "monthly_dividend_per_unit": 0.0,
+        "purchase_ym": "",
+        "dividend_received_total": 0.0,
         "dividend_received_original": 0.0,
+        "dividend_note": "",
+        "note": "",
+        "is_reinvest": False,
     }
+
     out = df.copy()
     for col, default in defaults.items():
         if col not in out.columns:
             out[col] = default
-    return out
 
+    return out
 
 def infer_fund_fields(name: Any, fund_code: Any = "", fund_pattern: Any = "") -> tuple[str, str]:
     code = normalize_text(fund_code)
@@ -403,23 +418,33 @@ def infer_fund_fields(name: Any, fund_code: Any = "", fund_pattern: Any = "") ->
 def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     platform = normalize_text(r.get("platform", "台股"), "台股")
     asset_type = normalize_text(r.get("asset_type", ""), "")
+
     if not asset_type:
         asset_type = "基金" if platform in ["基富通", "渣打基金", "台新基金"] else platform
+
     currency = normalize_text(r.get("currency", ""), "")
     if not currency:
         currency = "TWD" if platform in ["台股", "基富通"] else "USD"
+
     name = normalize_text(r.get("name", ""), "")
     ticker = normalize_text(r.get("ticker", ""), "")
     fund_code = normalize_text(r.get("fund_code", ""), "")
     fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
+
     if asset_type == "基金" or platform in ["基富通", "渣打基金", "台新基金"]:
         fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
+
     if platform == "台股" and not ticker and name in TW_PRESETS:
         ticker = TW_PRESETS.get(name, "")
+
     return {
         "sort_order": normalize_number(r.get("sort_order", 0), 0),
-        "platform": platform, "asset_type": asset_type, "name": name,
-        "ticker": ticker, "fund_code": fund_code, "fund_pattern": fund_pattern,
+        "platform": platform,
+        "asset_type": asset_type,
+        "name": name,
+        "ticker": ticker,
+        "fund_code": fund_code,
+        "fund_pattern": fund_pattern,
         "currency": currency,
         "original_units": normalize_number(r.get("original_units", 0), 0),
         "units": normalize_number(r.get("units", 0), 0),
@@ -429,6 +454,7 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "monthly_dividend_per_unit": normalize_number(r.get("monthly_dividend_per_unit", 0), 0),
         "purchase_ym": normalize_text(r.get("purchase_ym", ""), ""),
         "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
+        "dividend_received_original": normalize_number(r.get("dividend_received_original", 0), 0),
         "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
         "is_reinvest": normalize_bool(r.get("is_reinvest", False), False),
