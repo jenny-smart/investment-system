@@ -1034,24 +1034,38 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
 
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
+
     if df.empty:
         return df
+
     df = df.copy()
+
     for col in ["units", "original_units", "total_cost_input"]:
         df[col] = df[col].apply(lambda x: normalize_number(x, 0))
 
+    # 只保留有持倉資料
     df = df[
-        (df["units"] > 0) |
-        (df["original_units"] > 0) |
-        (df["total_cost_input"] > 0)
+        (df["units"] > 0)
+        | (df["original_units"] > 0)
+        | (df["total_cost_input"] > 0)
     ].copy()
 
     if df.empty:
         return df
 
+    rows = []
+
     fx_cache = {}
-        rows = []
+
     for _, r in df.iterrows():
+        currency = normalize_text(r.get("currency", "TWD")).upper()
+
+        if currency not in fx_cache:
+            fx_cache[currency] = fetch_fx(currency)
+
+        fx, fx_status = fx_cache[currency]
+
+        # 下面接你原本 enrich() 的內容
         name = normalize_text(r.get("name", ""))
         currency = normalize_text(r.get("currency", "TWD")).upper()
         if "南非幣" in name:
