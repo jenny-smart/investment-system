@@ -349,35 +349,19 @@ def normalize_bool(v: Any, default: bool = False) -> bool:
 
 def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     defaults = {
-        "id": None,
-        "sort_order": 0,
-        "platform": "台股",
-        "asset_type": "台股",
-        "name": "",
-        "ticker": "",
-        "fund_code": "",
-        "fund_pattern": "",
-        "currency": "TWD",
-        "original_units": 0.0,
-        "units": 0.0,
-        "corporate_action": "",
-        "avg_cost": 0.0,
-        "total_cost_input": 0.0,
-        "monthly_dividend_per_unit": 0.0,
-        "purchase_ym": "",
-        "dividend_received_total": 0.0,
-        "dividend_received_original": 0.0,
-        "dividend_note": "",
-        "note": "",
+        "id": None, "sort_order": 0, "platform": "台股", "asset_type": "台股",
+        "name": "", "ticker": "", "fund_code": "", "fund_pattern": "", "currency": "TWD",
+        "original_units": 0.0, "units": 0.0, "corporate_action": "",
+        "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
+        "purchase_ym": "", "dividend_received_total": 0.0, "dividend_note": "", "note": "",
         "is_reinvest": False,
     }
-
     out = df.copy()
     for col, default in defaults.items():
         if col not in out.columns:
             out[col] = default
-
     return out
+
 
 def infer_fund_fields(name: Any, fund_code: Any = "", fund_pattern: Any = "") -> tuple[str, str]:
     code = normalize_text(fund_code)
@@ -418,33 +402,23 @@ def infer_fund_fields(name: Any, fund_code: Any = "", fund_pattern: Any = "") ->
 def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     platform = normalize_text(r.get("platform", "台股"), "台股")
     asset_type = normalize_text(r.get("asset_type", ""), "")
-
     if not asset_type:
         asset_type = "基金" if platform in ["基富通", "渣打基金", "台新基金"] else platform
-
     currency = normalize_text(r.get("currency", ""), "")
     if not currency:
         currency = "TWD" if platform in ["台股", "基富通"] else "USD"
-
     name = normalize_text(r.get("name", ""), "")
     ticker = normalize_text(r.get("ticker", ""), "")
     fund_code = normalize_text(r.get("fund_code", ""), "")
     fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
-
     if asset_type == "基金" or platform in ["基富通", "渣打基金", "台新基金"]:
         fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
-
     if platform == "台股" and not ticker and name in TW_PRESETS:
         ticker = TW_PRESETS.get(name, "")
-
     return {
         "sort_order": normalize_number(r.get("sort_order", 0), 0),
-        "platform": platform,
-        "asset_type": asset_type,
-        "name": name,
-        "ticker": ticker,
-        "fund_code": fund_code,
-        "fund_pattern": fund_pattern,
+        "platform": platform, "asset_type": asset_type, "name": name,
+        "ticker": ticker, "fund_code": fund_code, "fund_pattern": fund_pattern,
         "currency": currency,
         "original_units": normalize_number(r.get("original_units", 0), 0),
         "units": normalize_number(r.get("units", 0), 0),
@@ -454,7 +428,6 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "monthly_dividend_per_unit": normalize_number(r.get("monthly_dividend_per_unit", 0), 0),
         "purchase_ym": normalize_text(r.get("purchase_ym", ""), ""),
         "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
-        "dividend_received_original": normalize_number(r.get("dividend_received_original", 0), 0),
         "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
         "is_reinvest": normalize_bool(r.get("is_reinvest", False), False),
@@ -963,66 +936,30 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
         return None, f"匯率抓取失敗:{currency}"
     return float(price), status
 
+
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
     original_units = normalize_number(r.get("original_units", 0), 0)
     units = normalize_number(r.get("units", 0), 0)
     avg_cost = normalize_number(r.get("avg_cost", 0), 0)
     total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
-
     note = normalize_text(r.get("note", ""))
     is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
-
     market_units = units if units > 0 or is_closed else original_units
-
     cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
     value_original_currency = market_units * latest_price if latest_price is not None else None
-
     twd_cost = cost_original_currency * fx if fx is not None else None
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
-
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
-
-    currency = normalize_text(r.get("currency", "TWD")).upper()
-
-    # 正確邏輯：
-    # dividend_received_original = 原幣累積配息，只能填在該基金其中一列，其他重複列填 0
-    # dividend_received_total = 舊台幣欄位，只做備援，不應再當主要資料
-    div_original = normalize_number(r.get("dividend_received_original", 0), 0)
-    div_total_old = normalize_number(r.get("dividend_received_total", 0), 0)
-
-    if div_original > 0:
-        if currency == "TWD":
-            dividend_received_twd = round(div_original, 0)
-        elif fx is not None and fx > 0:
-            dividend_received_twd = round(div_original * fx, 0)
-        else:
-            dividend_received_twd = 0
-    else:
-        # 舊資料備援：只有 TWD 才允許直接吃 dividend_received_total
-        if currency == "TWD" and div_total_old > 0:
-            div_original = div_total_old
-            dividend_received_twd = round(div_total_old, 0)
-        else:
-            div_original = 0
-            dividend_received_twd = 0
-
-    total_pnl_with_dividend = pnl + dividend_received_twd if pnl is not None else None
-    total_pnl_rate_with_dividend = (
-        total_pnl_with_dividend / twd_cost
-        if total_pnl_with_dividend is not None and twd_cost
-        else None
-    )
-
+    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    total_pnl_with_dividend = pnl + dividend_received_total if pnl is not None else None
+    total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
+    is_reinvest = bool(r.get("is_reinvest", False))
     return {
-        "成本原幣": cost_original_currency,
-        "市值原幣": value_original_currency,
-        "台幣成本": twd_cost,
-        "台幣市值": twd_value,
-        "價差損益": pnl,
-        "價差損益率": pnl_rate,
-        "累計已領配息": dividend_received_twd,
-        "累計已領配息原幣": div_original,
+        "成本原幣": cost_original_currency, "市值原幣": value_original_currency,
+        "台幣成本": twd_cost, "台幣市值": twd_value,
+        "價差損益": pnl, "價差損益率": pnl_rate,
+        "累計已領配息": dividend_received_total,
         "含息總損益": total_pnl_with_dividend,
         "含息總損益率": total_pnl_rate_with_dividend,
         "市值股數": market_units,
@@ -1031,41 +968,12 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     }
 
 
-
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
-
     if df.empty:
         return df
-
-    df = df.copy()
-
-    for col in ["units", "original_units", "total_cost_input"]:
-        df[col] = df[col].apply(lambda x: normalize_number(x, 0))
-
-    # 只保留有持倉資料
-    df = df[
-        (df["units"] > 0)
-        | (df["original_units"] > 0)
-        | (df["total_cost_input"] > 0)
-    ].copy()
-
-    if df.empty:
-        return df
-
     rows = []
-
-    fx_cache = {}
-
     for _, r in df.iterrows():
-        currency = normalize_text(r.get("currency", "TWD")).upper()
-
-        if currency not in fx_cache:
-            fx_cache[currency] = fetch_fx(currency)
-
-        fx, fx_status = fx_cache[currency]
-
-        # 下面接你原本 enrich() 的內容
         name = normalize_text(r.get("name", ""))
         currency = normalize_text(r.get("currency", "TWD")).upper()
         if "南非幣" in name:
@@ -1087,9 +995,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             fund_pattern = normalize_text(r.get("fund_pattern", ""))
             fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
             price, p_status = fetch_fund_nav(fund_code, fund_pattern)
-        if currency not in fx_cache:
-            fx_cache[currency] = fetch_fx(currency)
-        fx, fx_status = fx_cache[currency]
+        fx, fx_status = fetch_fx(currency)
         calc = calculate_cost_and_value(r, price, fx)
         units = normalize_number(calc.get("市值股數", r.get("units", 0)), 0)
         if asset_type == "基金":
@@ -1108,7 +1014,6 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             out["fund_code"] = fund_code
             out["fund_pattern"] = fund_pattern
         out.update(calc)
-        out["累計配息匯率"] = fx if calc.get("累計已領配息原幣") is not None else None
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
@@ -1204,10 +1109,9 @@ def online_sheet_url(gid: str) -> str:
 def load_online_sheet_csv(gid: str) -> pd.DataFrame:
     response = requests.get(online_sheet_url(gid), timeout=30)
     response.raise_for_status()
-    csv_text = response.content.decode("utf-8-sig", errors="replace")
-    if "<html" in csv_text[:200].lower():
+    if "<html" in response.text[:200].lower():
         raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
-    df = pd.read_csv(io.StringIO(csv_text), dtype=str, keep_default_na=False)
+    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
     df = df.dropna(axis=1, how="all")
     empty_cols = [c for c in df.columns if str(c).startswith("Unnamed") and df[c].astype(str).str.strip().eq("").all()]
     if empty_cols:
@@ -1755,13 +1659,11 @@ def build_upload_template(positions: pd.DataFrame) -> pd.DataFrame:
 def read_uploaded_table(uploaded_file) -> pd.DataFrame:
     filename = uploaded_file.name.lower()
     if filename.endswith(".csv"):
-        for encoding in ["utf-8-sig", "utf-8", "cp950", "big5"]:
-            try:
-                uploaded_file.seek(0)
-                return pd.read_csv(uploaded_file, encoding=encoding, dtype=str, keep_default_na=False)
-            except UnicodeDecodeError:
-                continue
-        raise ValueError("CSV 編碼無法辨識；請改上傳 Excel .xlsx，或另存為 UTF-8 CSV。")
+        try:
+            return pd.read_csv(uploaded_file, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            uploaded_file.seek(0)
+            return pd.read_csv(uploaded_file, encoding="big5")
     if filename.endswith((".xlsx", ".xls")):
         return pd.read_excel(uploaded_file)
     raise ValueError("只支援 CSV / Excel 檔案")
@@ -2022,7 +1924,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
     st.caption("新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
     cols = ["sort_order", "id", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
             "currency", "original_units", "units", "corporate_action", "avg_cost", "total_cost_input",
-            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original", "dividend_received_total", "dividend_note", "note",
+            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total", "dividend_note", "note",
             "is_reinvest"]
     current_positions = ensure_columns(current_positions)
     if current_positions.empty:
@@ -2045,7 +1947,7 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
         base, use_container_width=True, hide_index=True, height=360, num_rows="dynamic",
         column_order=["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
                       "currency", "original_units", "units", "avg_cost", "total_cost_input", "purchase_ym",
-                      "dividend_received_original", "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
+                      "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
         column_config={
             "sort_order": st.column_config.NumberColumn("排序", step=1),
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
@@ -2222,12 +2124,8 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     p_rows = p_rows.copy()
     p_rows["_merge_key"] = key_series
 
-    sum_cols = [
-        "台幣成本", "台幣市值", "含息總損益", "累計已領配息",
-        "累計已領配息原幣",
-        "每月配息", "units", "original_units",
-        "total_cost_input", "dividend_received_total"
-    ]
+    sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計已領配息", "每月配息",
+                  "units", "original_units", "total_cost_input", "dividend_received_total"]
     first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
                   "即時價格/淨值", "匯率", "platform", "asset_type", "id"]
 
@@ -2250,16 +2148,26 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
 
 
 def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
+    """
+    單一子平台：藍色小標題 + 明細表（每檔一行）
+    欄位固定寬度，對齊 Google Sheet 格式：
+    名稱 / 日期 / 現值 / 損益 / 台幣成本 / 台幣市值 / 累積配息 / 月配息 / 配息率 / 損益率
+    """
     if sub_rows.empty:
         return
 
-    total_val = sub_rows["台幣市值"].fillna(0).sum()
+    total_val  = sub_rows["台幣市值"].fillna(0).sum()
+    total_pnl  = sub_rows["含息總損益"].fillna(0).sum()
     total_cost = sub_rows["台幣成本"].fillna(0).sum()
-    total_div = sub_rows["累計已領配息"].fillna(0).sum()
+    total_div  = sub_rows["累計已領配息"].fillna(0).sum()
     total_mdiv = sub_rows["每月配息"].fillna(0).sum()
+    total_rate = total_pnl / total_cost if total_cost else None
+    pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
-    nav_pnl_sub = total_val - total_cost if total_val and total_cost else 0
+    nav_pnl_sub   = total_val - total_cost if total_val and total_cost else 0
     total_pnl_sub = nav_pnl_sub + total_div
+    nav_color  = "#6ee7b7" if nav_pnl_sub >= 0 else "#fca5a5"
+    tot_color  = "#6ee7b7" if total_pnl_sub >= 0 else "#fca5a5"
 
     st.markdown(f"""
 <div style="background:#f0fdf4;color:#1a2e22;padding:8px 16px;border-radius:8px;
@@ -2273,13 +2181,13 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     <span style="color:#9ca3af;font-size:10px">市值 </span>{money(total_val)}</span>
   <span style="min-width:110px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">市值損益 </span>
-    <span style="color:{'#059669' if nav_pnl_sub >= 0 else '#dc2626'};font-weight:700">{signed_money(nav_pnl_sub)}</span></span>
+    <span style="color:{'#059669' if nav_pnl_sub>=0 else '#dc2626'};font-weight:700">{signed_money(nav_pnl_sub)}</span></span>
   <span style="min-width:90px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">配息 </span>
     <span style="color:#0284c7">{money(total_div)}</span></span>
   <span style="min-width:110px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">總損益 </span>
-    <span style="color:{'#059669' if total_pnl_sub >= 0 else '#dc2626'};font-weight:800">{signed_money(total_pnl_sub)}</span></span>
+    <span style="color:{'#059669' if total_pnl_sub>=0 else '#dc2626'};font-weight:800">{signed_money(total_pnl_sub)}</span></span>
   <span style="min-width:80px;font-family:monospace">
     <span style="color:#9ca3af;font-size:10px">月配息 </span>
     <span style="color:#7c3aed">{money(total_mdiv)}</span></span>
@@ -2287,81 +2195,73 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 """, unsafe_allow_html=True)
 
     rows_disp = []
-
     for _, pr in sub_rows.iterrows():
-        atype = normalize_text(pr.get("asset_type", ""))
+        atype     = normalize_text(pr.get("asset_type", ""))
         price_val = to_float(pr.get("即時價格/淨值"))
-        cost_val = to_float(pr.get("台幣成本")) or 0.0
-        mval = to_float(pr.get("台幣市值")) or 0.0
-        div_val = to_float(pr.get("累計已領配息")) or 0.0
-        div_original = to_float(pr.get("累計已領配息原幣")) or 0.0
-        mdiv = to_float(pr.get("每月配息")) or 0.0
+        cost_val  = to_float(pr.get("台幣成本")) or 0.0
+        mval      = to_float(pr.get("台幣市值")) or 0.0
+        pnl_val   = to_float(pr.get("含息總損益"))
+        div_val   = to_float(pr.get("累計已領配息")) or 0.0
+        mdiv      = to_float(pr.get("每月配息")) or 0.0
+        rate_val  = to_float(pr.get("含息總損益率"))
+        ann_rate  = (mdiv * 12 / cost_val) if cost_val and mdiv else None
 
+        # 取報價日期
         if atype in {"台股", "美股"}:
-            tk = normalize_text(pr.get("ticker", ""))
+            tk       = normalize_text(pr.get("ticker", ""))
             date_str = fetch_stock_date(tk) if tk else "—"
         else:
-            fc = normalize_text(pr.get("fund_code", ""))
+            fc       = normalize_text(pr.get("fund_code", ""))
             date_str = _get_gas_date(fc) if fc else "—"
 
         if price_val is None:
             date_str = "❌"
 
-        nav_pnl = mval - cost_val if mval or cost_val else None
-        nav_pnl_rate = nav_pnl / cost_val * 100 if nav_pnl is not None and cost_val else None
-
-        total_pnl_val = nav_pnl + div_val if nav_pnl is not None else None
-        total_pnl_rate = total_pnl_val / cost_val * 100 if total_pnl_val is not None and cost_val else None
-
-        ann_rate = mdiv * 12 / cost_val if cost_val and mdiv else None
+        # 市值損益 = 台幣市值 - 台幣成本（不含配息）
+        nav_pnl = (mval - cost_val) if mval and cost_val else None
+        nav_pnl_rate = (nav_pnl / cost_val * 100) if nav_pnl is not None and cost_val else None
+        total_pnl_val = (nav_pnl + div_val) if nav_pnl is not None else None
+        total_pnl_rate = (total_pnl_val / cost_val * 100) if total_pnl_val is not None and cost_val else None
 
         rows_disp.append({
-            "名稱": normalize_text(pr.get("name", "")),
-            "日期": date_str,
-            "現值": round(price_val, 4) if price_val is not None else None,
-            "台幣成本": round(cost_val, 0) if cost_val else None,
-            "台幣市值": round(mval, 0) if mval else None,
-            "市值損益": round(nav_pnl, 0) if nav_pnl is not None else None,
-            "累積配息原幣": round(div_original, 2) if div_original else None,
-            "累積配息": round(div_val, 0) if div_val else None,
-            "總損益": round(total_pnl_val, 0) if total_pnl_val is not None else None,
+            "名稱":     normalize_text(pr.get("name", "")),
+            "日期":     date_str,
+            "現值":     round(price_val, 2)      if price_val is not None else None,
+            "台幣成本": round(cost_val, 0)        if cost_val else None,
+            "台幣市值": round(mval, 0)            if mval     else None,
+            "市值損益": round(nav_pnl, 0)         if nav_pnl  is not None else None,
+            "累積配息": round(div_val, 0)         if div_val  else None,
+            "總損益":   round(total_pnl_val, 0)   if total_pnl_val is not None else None,
             "市值損益率%": round(nav_pnl_rate, 2) if nav_pnl_rate is not None else None,
-            "總損益率%": round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
-            "月配息": round(mdiv, 0) if mdiv else None,
-            "配息率%": round(ann_rate * 100, 2) if ann_rate else None,
+            "總損益率%":  round(total_pnl_rate, 2) if total_pnl_rate is not None else None,
+            "月配息":   round(mdiv, 0)            if mdiv     else None,
+            "配息率%":  round(ann_rate * 100, 2)  if ann_rate else None,
         })
 
     if rows_disp:
         df_disp = pd.DataFrame(rows_disp)
-
         col_cfg = {
-            "名稱": st.column_config.TextColumn("名稱", width="large"),
-            "日期": st.column_config.TextColumn("日期", width="small"),
-            "現值": st.column_config.NumberColumn("現值", width="small", format="%.4f"),
-            "台幣成本": st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
-            "台幣市值": st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
-            "市值損益": st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
-            "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%,.2f"),
-            "累積配息": st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
-            "總損益": st.column_config.NumberColumn("總損益", width="medium", format="%,.0f"),
-            "市值損益率%": st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
-            "總損益率%": st.column_config.NumberColumn("總損益率%", width="small", format="%.2f"),
-            "月配息": st.column_config.NumberColumn("月配息", width="small", format="%,.0f"),
-            "配息率%": st.column_config.NumberColumn("配息率%", width="small", format="%.2f"),
+            "名稱":       st.column_config.TextColumn("名稱",       width="large"),
+            "日期":       st.column_config.TextColumn("日期",       width="small"),
+            "現值":       st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
+            "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
+            "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
+            "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
+            "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
+            "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%,.0f"),
+            "市值損益率%":st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
+            "總損益率%":  st.column_config.NumberColumn("總損益率%",  width="small", format="%.2f"),
+            "月配息":     st.column_config.NumberColumn("月配息",   width="small",  format="%,.0f"),
+            "配息率%":    st.column_config.NumberColumn("配息率%",  width="small",  format="%.2f"),
         }
-
+        # 台股/美股列數多，固定2列高度可上下滾動；基金類自適應
         if sub_label in {"台股", "美股"}:
             tbl_height = 42 * 2 + 44
         else:
             tbl_height = min(42 * len(df_disp) + 44, 480)
-
-        st.dataframe(
-            df_disp,
-            use_container_width=True,
-            hide_index=True,
-            height=tbl_height,
-            column_config=col_cfg,
-        )
+        st.dataframe(df_disp, use_container_width=True, hide_index=True,
+                     height=tbl_height,
+                     column_config=col_cfg)
 
 
 def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
@@ -3093,8 +2993,6 @@ ESTIMATED_DIVIDEND_COLUMNS = [
     "除息日期",
     "配息金額",
     "預估配息金額",
-    "匯率",
-    "預估配息台幣",
 ]
 
 ACTUAL_DIVIDEND_COLUMNS = [
@@ -3166,8 +3064,6 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "除息日期": ex_date,
             "配息金額": div_per_unit if div_per_unit > 0 else None,
             "預估配息金額": total_amount if div_per_unit > 0 else None,
-            "匯率": round(fx, 4) if div_per_unit > 0 else None,
-            "預估配息台幣": round(total_amount * fx, 0) if div_per_unit > 0 else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
     if not rows:
@@ -3261,8 +3157,6 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
         "目前單位數": st.column_config.NumberColumn("目前單位數", format="%,.4f"),
         "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
         "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%,.2f"),
-        "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
-        "預估配息台幣": st.column_config.NumberColumn("預估配息台幣", format="%,.0f"),
     }
     st.dataframe(
         display_df,
@@ -4653,7 +4547,7 @@ def build_cash_monthly_flow_table(txns: pd.DataFrame, accts: pd.DataFrame, flow_
 
 def render_cash_import_section() -> None:
     st.markdown("#### 📥 匯入 2026細帳")
-    st.caption("直接讀取 2026細帳原始欄位：A 欄是科目，B 欄開始是 2025/12、2026/01...。完整頁保留原始列數與欄數；帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
+    st.caption("直接讀取 2026細帳原始欄位：A 欄是科目，B 欄開始是 2025/12、2026/01...。帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -4885,7 +4779,7 @@ def render_cashflow_tab() -> None:
         transfer_subject_opts = ["（無）"] + cash_transfer_subject_options()
         subject_opts = cash_transaction_subject_options()
         default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
-        st.caption("來源/目標使用正式科目名稱。A 轉 B 10000 時，月份流向會顯示 A -10000、B +10000。利息收入、薪資或其他收入進帳時，來源科目選（無），目標科目選實際入帳帳戶。")
+        st.caption("來源/目標使用正式科目名稱。A 轉 B 10000 時，月份流向會顯示 A -10000、B +10000。")
         with st.form("new_txn_form"):
             c1, c2, c3 = st.columns(3)
             txn_date = c1.date_input("日期", value=pd.Timestamp.today())
@@ -5211,14 +5105,7 @@ try:
 except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
 
-try:
-    with st.spinner(f"正在讀取資料，共 {len(positions)} 筆..."):
-        # 暫時跳過即時抓價，先讓畫面出來
-        enriched = ensure_columns(positions).copy()
-except Exception as e:
-    st.error(f"投資資料計算失敗：{e}")
-    st.exception(e)
-    st.stop()
+enriched = enrich(positions)
 
 # 寫入 latest_portfolio_values（debug 版）
 try:
@@ -5233,6 +5120,7 @@ try:
     _row["cumulative_dividend"] = round(float(enriched["累計已領配息"].fillna(0).sum()), 0)
     _row["updated_at"] = datetime.now(timezone.utc).isoformat()
     supabase_client().table("latest_portfolio_values").upsert(_row).execute()
+    st.toast(f"✅ cache 寫入：{_row['total_twd']:,.0f}")
 except Exception as _e:
     st.warning(f"cache 失敗：{_e}")
 
@@ -5274,8 +5162,7 @@ tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台�
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
              "即時價格/淨值", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
-             "價差損益", "價差損益率", "累計已領配息原幣", "累計配息匯率", "累計已領配息",
-             "含息總損益", "含息總損益率", "每月配息",
+             "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
              "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
@@ -5324,8 +5211,6 @@ for idx, platform in enumerate(PLATFORMS, start=1):
                 "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%,.0f"),
                 "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%,.0f"),
                 "價差損益":         st.column_config.NumberColumn("市值損益",   format="%,.0f"),
-                "累計已領配息原幣": st.column_config.NumberColumn("累積配息原幣", format="%,.2f"),
-                "累計配息匯率":     st.column_config.NumberColumn("累積配息匯率", format="%,.4f"),
                 "累計已領配息":     st.column_config.NumberColumn("累積配息",   format="%,.0f"),
                 "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
                 "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
