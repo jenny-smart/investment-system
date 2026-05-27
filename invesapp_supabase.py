@@ -24,7 +24,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-23-v34-cashflow-subject-ledger"
+APP_VERSION = "2026-05-28-v35-dividend-original-nonblocking"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -353,7 +353,8 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "name": "", "ticker": "", "fund_code": "", "fund_pattern": "", "currency": "TWD",
         "original_units": 0.0, "units": 0.0, "corporate_action": "",
         "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
-        "purchase_ym": "", "dividend_received_total": 0.0, "dividend_note": "", "note": "",
+        "purchase_ym": "", "dividend_received_original_total": 0.0,
+        "dividend_received_total": 0.0, "dividend_note": "", "note": "",
         "is_reinvest": False,
     }
     out = df.copy()
@@ -427,6 +428,7 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
         "total_cost_input": normalize_number(r.get("total_cost_input", 0), 0),
         "monthly_dividend_per_unit": normalize_number(r.get("monthly_dividend_per_unit", 0), 0),
         "purchase_ym": normalize_text(r.get("purchase_ym", ""), ""),
+        "dividend_received_original_total": normalize_number(r.get("dividend_received_original_total", 0), 0),
         "dividend_received_total": normalize_number(r.get("dividend_received_total", 0), 0),
         "dividend_note": normalize_text(r.get("dividend_note", ""), ""),
         "note": normalize_text(r.get("note", ""), ""),
@@ -951,7 +953,13 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
-    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    dividend_received_original_total = normalize_number(r.get("dividend_received_original_total", 0), 0)
+    legacy_dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+    dividend_received_total = (
+        dividend_received_original_total * fx
+        if dividend_received_original_total > 0 and fx is not None
+        else legacy_dividend_received_total
+    )
     total_pnl_with_dividend = pnl + dividend_received_total if pnl is not None else None
     total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
     is_reinvest = bool(r.get("is_reinvest", False))
@@ -959,6 +967,7 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
         "成本原幣": cost_original_currency, "市值原幣": value_original_currency,
         "台幣成本": twd_cost, "台幣市值": twd_value,
         "價差損益": pnl, "價差損益率": pnl_rate,
+        "累計配息原幣": dividend_received_original_total,
         "累計已領配息": dividend_received_total,
         "含息總損益": total_pnl_with_dividend,
         "含息總損益率": total_pnl_rate_with_dividend,
@@ -968,11 +977,23 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     }
 
 
+def dividend_group_key(row: pd.Series, asset_type: str, fund_code: str = "", currency: str = "") -> tuple[str, str, str, str] | None:
+    if normalize_text(asset_type) != "基金":
+        return None
+    platform = normalize_text(row.get("platform", ""))
+    currency = normalize_text(currency or row.get("currency", ""))
+    key_code = normalize_text(fund_code or row.get("fund_code", "")) or normalize_match_name(row.get("name", ""))
+    if not key_code:
+        return None
+    return (platform, currency, key_code.lower(), "基金")
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
         return df
     rows = []
+    dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     for _, r in df.iterrows():
         name = normalize_text(r.get("name", ""))
         currency = normalize_text(r.get("currency", "TWD")).upper()
@@ -996,7 +1017,17 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
             price, p_status = fetch_fund_nav(fund_code, fund_pattern)
         fx, fx_status = fetch_fx(currency)
-        calc = calculate_cost_and_value(r, price, fx)
+        calc_row = r.copy()
+        is_dividend_primary = True
+        if asset_type == "基金":
+            group_key = dividend_group_key(r, asset_type, fund_code, currency)
+            if group_key is not None:
+                is_dividend_primary = group_key not in dividend_primary_seen
+                dividend_primary_seen.add(group_key)
+            if not is_dividend_primary:
+                calc_row["dividend_received_original_total"] = 0
+                calc_row["dividend_received_total"] = 0
+        calc = calculate_cost_and_value(calc_row, price, fx)
         units = normalize_number(calc.get("市值股數", r.get("units", 0)), 0)
         if asset_type == "基金":
             _fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(normalize_text(r.get("name","")),normalize_text(r.get("fund_code","")),normalize_text(r.get("fund_pattern","")))[0]
@@ -1017,6 +1048,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
+            "累積配息主列": is_dividend_primary,
             "每單位月配息估算": div_per_unit,
             "每月配息": monthly_div_twd,
             "月配息來源": div_source if div_per_unit else "",
@@ -1033,7 +1065,7 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["即時價格/淨值", "匯率"]:
         if c in out:
             out[c] = out[c].apply(lambda x: money(x, 4))
-    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "價差損益", "累計已領配息", "含息總損益", "損益", "每月配息"]:
+    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "價差損益", "累計配息原幣", "累計已領配息", "含息總損益", "損益", "每月配息"]:
         if c in out:
             out[c] = out[c].apply(money)
     for rate_col in ["價差損益率", "含息總損益率", "損益率"]:
@@ -1046,7 +1078,9 @@ def format_df(df: pd.DataFrame) -> pd.DataFrame:
         "original_units": "成本股數", "units": "現在股數", "市值股數": "市值股數",
         "avg_cost": "平均成本", "total_cost_input": "總投入成本",
         "monthly_dividend_per_unit": "每單位月配息預估",
-        "purchase_ym": "購買年月", "dividend_received_total": "累計已領配息輸入",
+        "purchase_ym": "購買年月",
+        "dividend_received_original_total": "累計配息原幣輸入",
+        "dividend_received_total": "累計已領配息台幣舊欄",
         "dividend_note": "配息備註", "corporate_action": "股數調整備註", "note": "備註",
     }
     return out.rename(columns=rename_map)
@@ -1331,7 +1365,7 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
             "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
             "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
             "渣打-南非", "台新-美金", "台新-南非",
-            "台新基金", "懷思投資", "懷思新增投資", "notyetincome",
+            "懷思投資", "懷思新增投資", "notyetincome",
         ],
         "投資",
         "投資資金/帳戶",
@@ -1649,7 +1683,8 @@ def seed_presets() -> None:
 
 def build_upload_template(positions: pd.DataFrame) -> pd.DataFrame:
     cols = ["sort_order", "platform", "name", "avg_cost", "total_cost_input", "original_units",
-            "units", "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total",
+            "units", "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original_total",
+            "dividend_received_total",
             "dividend_note", "corporate_action"]
     if positions.empty:
         return pd.DataFrame(columns=cols)
@@ -1924,8 +1959,8 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
     st.caption("新增列請拉到表格最下方直接輸入；按儲存後會寫入 Supabase。")
     cols = ["sort_order", "id", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
             "currency", "original_units", "units", "corporate_action", "avg_cost", "total_cost_input",
-            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total", "dividend_note", "note",
-            "is_reinvest"]
+            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original_total",
+            "dividend_received_total", "dividend_note", "note", "is_reinvest"]
     current_positions = ensure_columns(current_positions)
     if current_positions.empty:
         base = pd.DataFrame(columns=cols)
@@ -1941,18 +1976,22 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
              "currency": "TWD" if platform_name in ["台股", "基富通"] else "USD",
              "original_units": 0.0, "units": 0.0, "corporate_action": "", "avg_cost": 0.0,
              "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0, "purchase_ym": "",
-             "dividend_received_total": 0.0, "dividend_note": "", "note": "", "is_reinvest": False}
+             "dividend_received_original_total": 0.0, "dividend_received_total": 0.0,
+             "dividend_note": "", "note": "", "is_reinvest": False}
     base = pd.concat([base, pd.DataFrame([blank])], ignore_index=True)
     edited = st.data_editor(
         base, use_container_width=True, hide_index=True, height=360, num_rows="dynamic",
         column_order=["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
                       "currency", "original_units", "units", "avg_cost", "total_cost_input", "purchase_ym",
-                      "dividend_received_total", "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
+                      "dividend_received_original_total", "dividend_received_total",
+                      "monthly_dividend_per_unit", "dividend_note", "corporate_action", "note", "is_reinvest"],
         column_config={
             "sort_order": st.column_config.NumberColumn("排序", step=1),
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
             "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
             "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
+            "dividend_received_original_total": st.column_config.NumberColumn("累計配息原幣", format="%,.4f"),
+            "dividend_received_total": st.column_config.NumberColumn("累計配息台幣舊欄", format="%,.0f"),
             "is_reinvest": st.column_config.CheckboxColumn("配息再投入"),
         }, key=editor_key,
     )
@@ -2124,7 +2163,7 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     p_rows = p_rows.copy()
     p_rows["_merge_key"] = key_series
 
-    sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計已領配息", "每月配息",
+    sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計配息原幣", "累計已領配息", "每月配息",
                   "units", "original_units", "total_cost_input", "dividend_received_total"]
     first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
                   "即時價格/淨值", "匯率", "platform", "asset_type", "id"]
@@ -2201,6 +2240,7 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         cost_val  = to_float(pr.get("台幣成本")) or 0.0
         mval      = to_float(pr.get("台幣市值")) or 0.0
         pnl_val   = to_float(pr.get("含息總損益"))
+        div_original = to_float(pr.get("累計配息原幣")) or 0.0
         div_val   = to_float(pr.get("累計已領配息")) or 0.0
         mdiv      = to_float(pr.get("每月配息")) or 0.0
         rate_val  = to_float(pr.get("含息總損益率"))
@@ -2208,8 +2248,7 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 
         # 取報價日期
         if atype in {"台股", "美股"}:
-            tk       = normalize_text(pr.get("ticker", ""))
-            date_str = fetch_stock_date(tk) if tk else "—"
+            date_str = fmt_md(tw_now())
         else:
             fc       = normalize_text(pr.get("fund_code", ""))
             date_str = _get_gas_date(fc) if fc else "—"
@@ -2230,6 +2269,7 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "台幣成本": round(cost_val, 0)        if cost_val else None,
             "台幣市值": round(mval, 0)            if mval     else None,
             "市值損益": round(nav_pnl, 0)         if nav_pnl  is not None else None,
+            "累積配息原幣": round(div_original, 2) if div_original else None,
             "累積配息": round(div_val, 0)         if div_val  else None,
             "總損益":   round(total_pnl_val, 0)   if total_pnl_val is not None else None,
             "市值損益率%": round(nav_pnl_rate, 2) if nav_pnl_rate is not None else None,
@@ -2247,6 +2287,7 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%,.0f"),
             "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%,.0f"),
             "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%,.0f"),
+            "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%,.2f"),
             "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%,.0f"),
             "總損益":     st.column_config.NumberColumn("總損益",   width="medium", format="%,.0f"),
             "市值損益率%":st.column_config.NumberColumn("市值損益率%", width="small", format="%.2f"),
@@ -2437,7 +2478,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
     2. 【認列】pay_date <= 今天 且 is_paid=False
        → twd_total = units_at_ex × actual_div_amount × fx_rate
        → is_paid = True
-       → dividend_received_total += twd_total（只加到 MIN(id) 那筆）
+       → dividend_received_original_total += units_at_ex × actual_div_amount（只加到排序第一筆）
     回傳：更新筆數
     """
     from datetime import date as dt_date
@@ -2560,14 +2601,23 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
                     "updated_at": "now()",
                 }).eq("id", int(row_id)).execute()
 
-            # 加到 positions 的 dividend_received_total（只加 MIN(id) 那筆）
-            pos_rows = sorted(rows, key=lambda r: normalize_number(r.get("id", 999999), 999999))
-            min_id = int(float(pos_rows[0].get("id")))
+            # 加到 positions 的原幣累積配息（只加到同基金排序第一筆）
+            pos_rows = sorted(
+                rows,
+                key=lambda r: (
+                    normalize_number(r.get("sort_order", 999999), 999999),
+                    normalize_number(r.get("id", 999999), 999999),
+                ),
+            )
+            primary_id = int(float(pos_rows[0].get("id")))
+            original_total = units_at_ex * actual_div_amount
+            cur_original_total = normalize_number(pos_rows[0].get("dividend_received_original_total", 0), 0)
             cur_total = normalize_number(pos_rows[0].get("dividend_received_total", 0), 0)
             sb.table("positions").update({
+                "dividend_received_original_total": cur_original_total + original_total,
                 "dividend_received_total": cur_total + twd_total,
                 "dividend_pay_date": pay_date,
-            }).eq("id", min_id).execute()
+            }).eq("id", primary_id).execute()
 
             updated += 1
         except Exception:
@@ -2583,18 +2633,18 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         st.info("目前沒有資料。")
         return
 
-    # ── 自動配息更新（快照 + 認列）──
-    # 每次頁面載入執行，有更新才會顯示通知
-    if "dividend_auto_done" not in st.session_state:
+    action_col1, action_col2 = st.columns([1, 1])
+    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
         try:
-            n = auto_dividend_update(
-                supabase_client().table("positions").select("*").execute().data or []
-            )
+            source_positions = globals().get("positions", pd.DataFrame())
+            n = auto_dividend_update(source_positions)
             if n > 0:
-                st.toast(f"💰 配息自動更新 {n} 筆", icon="✅")
-        except Exception:
-            pass
-        st.session_state["dividend_auto_done"] = True
+                st.success(f"配息更新完成：{n} 筆")
+                st.cache_data.clear()
+            else:
+                st.info("目前沒有需要認列或快照的配息。")
+        except Exception as exc:
+            st.warning(f"配息更新失敗：{exc}")
 
     # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
     # 即時計算，不寫回 Supabase，只用於顯示
@@ -2619,17 +2669,9 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
                 fx_cache_local[cur] = fx_val or 1.0
             fx_val = fx_cache_local[cur]
             est_monthly_div += units * mdiv_per_unit * fx_val
-        # 本月已認列配息（從 fund_dividends 查）
+        # 本月已認列配息若需要精算，按上方配息按鈕後到配息記錄頁查看；
+        # 總覽避免額外 Supabase 查詢，減少初次載入卡住。
         this_month_paid = 0.0
-        try:
-            from datetime import date
-            ym = date.today().strftime("%Y/%m")
-            div_rows = supabase_client().table("fund_dividends").select("twd_total,pay_date,is_paid").execute()
-            for dr in (div_rows.data or []):
-                if dr.get("is_paid") and dr.get("pay_date","").startswith(ym):
-                    this_month_paid += float(dr.get("twd_total") or 0)
-        except Exception:
-            pass
 
         col_a, col_b = st.columns(2)
         if est_monthly_div > 0:
@@ -2637,9 +2679,9 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         if this_month_paid > 0:
             col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
 
-    # ── 自動把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
-    # （只更新 monthly_dividend_per_unit == 0 且有 fund_code 的列）
-    if not enriched.empty:
+    # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
+    # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
+    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
         fund_rows = enriched[
             (enriched["asset_type"] == "基金") &
             (enriched["fund_code"].fillna("") != "") &
@@ -2662,7 +2704,10 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
                     done_codes.add(fc)
                     updated += 1
             if updated:
-                st.toast(f"✅ 已自動更新 {updated} 檔基金每月配息金額（從 MoneyDJ）", icon="💰")
+                st.success(f"已更新 {updated} 檔基金每月配息金額。")
+                st.cache_data.clear()
+            else:
+                st.info("沒有需要回填的基金每月配息。")
 
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
@@ -2728,63 +2773,106 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 歷史記錄 Tab
 # ════════════════════════════════════════════════════════════════════════════
-def cache_enriched_summary(enriched_df: pd.DataFrame) -> None:
-    try:
-        platform_map = {"台股": "tw_stock", "美股": "us_stock",
-                        "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
-        row = {"id": 1}
-        for platform, key in platform_map.items():
-            p_rows = enriched_df[enriched_df["platform"] == platform]
-            val = float(p_rows["台幣市值"].fillna(0).sum())
-            row[key] = round(val, 0)
-        row["total_twd"] = sum(row[k] for k in platform_map.values())
-        row["total_cost"] = round(float(enriched_df["台幣成本"].fillna(0).sum()), 0)
-        row["cumulative_dividend"] = round(float(enriched_df["累計已領配息"].fillna(0).sum()), 0)
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
-        supabase_client().table("latest_portfolio_values").upsert(row).execute()
-        print(f"cache_enriched_summary 寫入成功：{row['total_twd']}")  # ← 加這行看 log
-    except Exception as e:
-        print(f"cache_enriched_summary 失敗：{e}")  # ← 改這行
-        st.warning(f"cache寫入失敗：{e}")  # ← 加這行顯示在頁面
 
-def _take_snapshot_now(trigger: str = "manual", enriched_df: pd.DataFrame | None = None) -> dict:
-    rows = supabase_client().table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
-    if not rows:
+def _take_snapshot_now(trigger: str = "manual") -> dict:
+    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
+    if enriched is None or enriched.empty:
         return {}
-    r = rows[0]
-    total = float(r.get("total_twd") or 0)
-    if total == 0:
-        return {}
-    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-    label = "手動" if trigger == "manual" else "排程"
-    return {
-        "tw_stock":            round(float(r.get("tw_stock") or 0), 0),
-        "us_stock":            round(float(r.get("us_stock") or 0), 0),
-        "kifutong":            round(float(r.get("kifutong") or 0), 0),
-        "scb":                 round(float(r.get("scb") or 0), 0),
-        "taishin":             round(float(r.get("taishin") or 0), 0),
-        "total_twd":           round(total, 0),
-        "total_cost":          round(float(r.get("total_cost") or 0), 0),
-        "total_pnl":           round(total - float(r.get("total_cost") or 0), 0),
-        "cumulative_dividend": round(float(r.get("cumulative_dividend") or 0), 0),
-        "trigger":             trigger,
-        "note":                f"{label}快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}　資料時間：{r.get('updated_at', '')}",
+
+    platform_val: dict[str, float] = {
+        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
     }
-    
-def render_history_tab(enriched_df: pd.DataFrame) -> None:
+    total_cost_sum = 0.0
+    total_div_sum  = 0.0
+
+    for _, r in enriched.iterrows():
+        plt = normalize_text(r.get("platform", ""))
+        val = to_float(r.get("台幣市值"))
+        cost= to_float(r.get("台幣成本"))
+        div = to_float(r.get("累計已領配息"))
+        if plt in platform_val and val:
+            platform_val[plt] += val
+        if cost: total_cost_sum += cost
+        if div:  total_div_sum  += div
+
+    total = sum(platform_val.values())
+    from datetime import datetime, timezone, timedelta
+    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+
+    return {
+        "total_twd":           round(total, 0),
+        "tw_stock":            round(platform_val["台股"], 0),
+        "us_stock":            round(platform_val["美股"], 0),
+        "kifutong":            round(platform_val["基富通"], 0),
+        "scb":                 round(platform_val["渣打基金"], 0),
+        "taishin":             round(platform_val["台新基金"], 0),
+        "total_cost":          round(total_cost_sum, 0),
+        "total_pnl":           round(total - total_cost_sum, 0),
+        "cumulative_dividend": round(total_div_sum, 0),
+        "trigger":             trigger,
+        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ★ 歷史記錄 Tab
+# ════════════════════════════════════════════════════════════════════════════
+
+def _take_snapshot_now(trigger: str = "manual") -> dict:
+    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
+    if enriched is None or enriched.empty:
+        return {}
+
+    platform_val: dict[str, float] = {
+        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
+    }
+    total_cost_sum = 0.0
+    total_div_sum  = 0.0
+
+    for _, r in enriched.iterrows():
+        plt = normalize_text(r.get("platform", ""))
+        val = to_float(r.get("台幣市值"))
+        cost= to_float(r.get("台幣成本"))
+        div = to_float(r.get("累計已領配息"))
+        if plt in platform_val and val:
+            platform_val[plt] += val
+        if cost: total_cost_sum += cost
+        if div:  total_div_sum  += div
+
+    total = sum(platform_val.values())
+    from datetime import datetime, timezone, timedelta
+    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+
+    return {
+        "total_twd":           round(total, 0),
+        "tw_stock":            round(platform_val["台股"], 0),
+        "us_stock":            round(platform_val["美股"], 0),
+        "kifutong":            round(platform_val["基富通"], 0),
+        "scb":                 round(platform_val["渣打基金"], 0),
+        "taishin":             round(platform_val["台新基金"], 0),
+        "total_cost":          round(total_cost_sum, 0),
+        "total_pnl":           round(total - total_cost_sum, 0),
+        "cumulative_dividend": round(total_div_sum, 0),
+        "trigger":             trigger,
+        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+    }
+
+
+def render_history_tab() -> None:
     """📊 歷史市值"""
     st.subheader("📊 歷史市值走勢")
 
+    # ── 手動記錄按鈕 ──
     col_btn, col_info = st.columns([1, 4])
     if col_btn.button("📸 立即記錄當下市值", key="manual_snapshot_btn"):
         try:
-            data = _take_snapshot_now("manual", enriched_df)
+            data = _take_snapshot_now("manual")
             if data:
                 supabase_client().table("portfolio_snapshots").insert(data).execute()
                 st.success(f"✅ 已記錄！總市值：{money(data['total_twd'])}")
                 st.rerun()
             else:
-                st.error("無法取得市值，請先在總覽頁確認數字正常後再記錄。")
+                st.error("無法取得市值，請先更新即時價。")
         except Exception as e:
             st.error(f"記錄失敗：{e}")
     col_info.caption("排程：每天 08:00 / 20:00 自動記錄。也可以手動點按鈕立即記錄。")
@@ -2808,30 +2896,7 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
-    # ── 即時各平台市值小卡（和總覽一致）──
-    if not enriched_df.empty:
-        st.markdown("#### 📊 即時各平台市值")
-        platform_map = [
-            ("📈 台股",   "台股"),
-            ("🇺🇸 美股", "美股"),
-            ("🟧 基富通", "基富通"),
-            ("🏦 渣打基金","渣打基金"),
-            ("🟥 台新基金","台新基金"),
-        ]
-        card_cols = st.columns(5)
-        for i, (label, platform) in enumerate(platform_map):
-            p_rows = enriched_df[enriched_df["platform"] == platform]
-            val = float(p_rows["台幣市值"].fillna(0).sum())
-            cost = float(p_rows["台幣成本"].fillna(0).sum())
-            pnl = val - cost
-            with card_cols[i]:
-                st.metric(label, f"{val:,.0f}")
-                st.caption(f"成本 {cost:,.0f}")
-        total_val = float(enriched_df["台幣市值"].fillna(0).sum())
-        total_cost = float(enriched_df["台幣成本"].fillna(0).sum())
-        st.caption(f"即時總市值：{total_val:,.0f}　總成本：{total_cost:,.0f}　市值損益：{total_val - total_cost:,.0f}")
-        st.markdown("---")
-        
+    # ── 明細表（愈新愈上）──
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
@@ -2861,6 +2926,30 @@ def render_history_tab(enriched_df: pd.DataFrame) -> None:
         height=min(42 * len(df_show) + 44, 600),
         column_config=col_cfg
     )
+
+
+ESTIMATED_DIVIDEND_COLUMNS = [
+    "平台",
+    "基金名稱",
+    "幣別",
+    "目前單位數",
+    "除息日期",
+    "配息金額",
+    "預估配息金額",
+]
+
+ACTUAL_DIVIDEND_COLUMNS = [
+    "平台",
+    "基金名稱",
+    "幣別",
+    "配息單位數",
+    "發放日期",
+    "配息金額",
+    "實際配息金額",
+    "勾選確認",
+    "累計配息金額",
+]
+
 
 def _fund_name_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str, str, str], str]:
     lookup: dict[tuple[str, str, str], str] = {}
@@ -2985,36 +3074,16 @@ def _latest_past_record(records: list[dict[str, Any]], date_col: str) -> dict[st
     return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
 
 
-ESTIMATED_DIVIDEND_COLUMNS = [
-    "平台",
-    "基金名稱",
-    "幣別",
-    "目前單位數",
-    "除息日期",
-    "配息金額",
-    "預估配息金額",
-]
-
-ACTUAL_DIVIDEND_COLUMNS = [
-    "平台",
-    "基金名稱",
-    "幣別",
-    "配息單位數",
-    "發放日期",
-    "配息金額",
-    "實際配息金額",
-    "勾選確認",
-    "累計配息金額",
-]
-
-
 def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if enriched_df is None or enriched_df.empty:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
+
     funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
     if funds.empty:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
+
     history_index = _dividend_history_index(_combined_dividend_records())
+
     funds["_dividend_key"] = funds.apply(
         lambda r: "|".join([
             normalize_text(r.get("platform", "")),
@@ -3023,6 +3092,7 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         ]),
         axis=1,
     )
+
     rows: list[dict[str, Any]] = []
     for _, grp in funds.groupby("_dividend_key", dropna=False):
         first = grp.iloc[0]
@@ -3033,10 +3103,12 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         units = sum(normalize_number(r.get("市值股數", r.get("units", 0)), 0) for _, r in grp.iterrows())
         if units <= 0:
             continue
+
         history_rows = _history_records_for(history_index, fund_code, platform, currency)
         latest_history = _latest_past_record(history_rows, "ex_date")
         gas = _get_gas_data(fund_code) if fund_code else {}
         ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
+
         div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
         if div_per_unit <= 0:
             div_per_unit = _first_positive(grp.get("monthly_dividend_per_unit", pd.Series(dtype=float)).tolist())
@@ -3066,13 +3138,7 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "預估配息金額": total_amount if div_per_unit > 0 else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
-    if not rows:
-        return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
-    df_out = pd.DataFrame(rows)
-    for col in ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]:
-        if col not in df_out.columns:
-            df_out[col] = None
-    return df_out[ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]].sort_values(["平台", "基金名稱"])
+    return pd.DataFrame(rows, columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]).sort_values(["平台", "基金名稱"])
 
 
 def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
@@ -3406,7 +3472,7 @@ def infer_asset_from_pasted(raw_platform: str, raw_currency: str, name: str) -> 
             "fund_code": fund_code, "fund_pattern": fund_pattern, "currency": currency,
             "original_units": 0, "units": 0, "corporate_action": "", "avg_cost": 0,
             "total_cost_input": 0, "monthly_dividend_per_unit": 0, "purchase_ym": "",
-            "dividend_received_total": 0, "dividend_note": "",
+            "dividend_received_original_total": 0, "dividend_received_total": 0, "dividend_note": "",
             "note": f"依原始清單重建：{raw_platform} / {raw_currency}"}
 
 
@@ -3421,7 +3487,8 @@ def build_reset_seed_df_from_pasted(pasted_text: str) -> pd.DataFrame:
         return pd.DataFrame()
     cols = ["sort_order", "原始平台", "原始幣別", "platform", "asset_type", "name", "ticker", "fund_code",
             "fund_pattern", "currency", "total_cost_input", "original_units", "units", "avg_cost",
-            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total", "dividend_note", "corporate_action", "note"]
+            "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original_total",
+            "dividend_received_total", "dividend_note", "corporate_action", "note"]
     return pd.DataFrame(rows)[cols]
 
 
@@ -3445,7 +3512,8 @@ def rebuild_positions_from_seed_df(seed_df: pd.DataFrame) -> int:
         return 0
     insert_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "fund_pattern",
                    "currency", "original_units", "units", "corporate_action", "avg_cost", "total_cost_input",
-                   "monthly_dividend_per_unit", "purchase_ym", "dividend_received_total", "dividend_note", "note"]
+                   "monthly_dividend_per_unit", "purchase_ym", "dividend_received_original_total",
+                   "dividend_received_total", "dividend_note", "note"]
     sb = supabase_client()
     count = 0
     for _, r in seed_df.iterrows():
@@ -3463,7 +3531,8 @@ def force_zero_all_positions() -> int:
     sb = supabase_client()
     count = 0
     zero_payload = {"original_units": 0, "units": 0, "avg_cost": 0, "total_cost_input": 0,
-                    "monthly_dividend_per_unit": 0, "dividend_received_total": 0, "dividend_note": "", "corporate_action": ""}
+                    "monthly_dividend_per_unit": 0, "dividend_received_original_total": 0,
+                    "dividend_received_total": 0, "dividend_note": "", "corporate_action": ""}
     for _, r in current.iterrows():
         rid = r.get("id")
         if pd.isna(rid):
@@ -3508,18 +3577,15 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出", "借入", "借出", "代墊"]
-CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "轉帳/換匯", "投資", "保險", "借款/代墊", "收入", "支出", "信用卡", "其他"]
+CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
-LIABILITY_CATEGORIES = ["借款/代墊", "信用卡"]
-TRANSFER_ACCOUNT_CATEGORIES = {"現金", "銀行", "外幣", "轉帳/換匯", "投資", "保險", "借款/代墊", "收入", "支出", "信用卡", "其他"}
+LIABILITY_CATEGORIES = ["借款/代墊"]
+TRANSFER_ACCOUNT_CATEGORIES = {"銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
 TRANSFER_ACCOUNT_ROLES = {
     "account_balance", "foreign_cash_balance", "foreign_account_balance",
     "insurance_balance", "investment_transfer_or_balance",
     "loan_payable", "loan_or_investment_outflow",
-    "income", "interest_income", "investment_income", "insurance_rebate",
-    "fx_transfer",
 }
-ACCOUNT_BALANCE_ROLES = TRANSFER_ACCOUNT_ROLES
 
 CASH_SUBJECT_ALIASES = {
     "food": "零用金-餐費",
@@ -3588,17 +3654,9 @@ def canonical_cash_subject(subject: Any, occurrence_counts: dict[str, int] | Non
     return CASH_SUBJECT_ALIASES.get(item, item)
 
 
-def _is_account_balance_rule(rule: dict[str, str]) -> bool:
-    subject = normalize_text(rule.get("科目", ""))
-    role = normalize_text(rule.get("資料角色", ""))
-    return subject == "零用金" or role in ACCOUNT_BALANCE_ROLES
-
-
 def _is_transfer_account_rule(rule: dict[str, str]) -> bool:
-    if not _is_account_balance_rule(rule):
-        return False
-    category = _cash_account_category(rule)
-    return category in TRANSFER_ACCOUNT_CATEGORIES
+    role = normalize_text(rule.get("資料角色", ""))
+    return role in TRANSFER_ACCOUNT_ROLES
 
 
 def _unique_keep_order(values: list[Any]) -> list[str]:
@@ -3615,25 +3673,6 @@ def _unique_keep_order(values: list[Any]) -> list[str]:
 
 def cash_subject_options() -> list[str]:
     return cash_subject_catalog_df()["科目"].dropna().astype(str).tolist()
-
-
-def cash_custom_subject_label() -> str:
-    return "自訂項目（手動輸入）"
-
-
-def cash_transaction_subject_options() -> list[str]:
-    return cash_subject_options() + [cash_custom_subject_label()]
-
-
-def cash_transfer_subject_options() -> list[str]:
-    subjects: list[str] = []
-    for subject in cash_subject_options():
-        rule = classify_cash_subject(subject)
-        role = normalize_text(rule.get("資料角色", ""))
-        if role == "summary":
-            continue
-        subjects.append(subject)
-    return subjects
 
 
 def _cash_subject_currency(subject: str) -> str:
@@ -3663,8 +3702,6 @@ def _cash_account_category(rule: dict[str, str]) -> str:
     category = normalize_text(rule.get("大類", ""))
     if subject == "零用金":
         return "現金"
-    if subject.startswith("信用卡-"):
-        return "信用卡"
     if role == "advance_expense":
         return "支出"
     if category.startswith("支出"):
@@ -3720,7 +3757,7 @@ def cash_account_preset_rows() -> list[dict[str, Any]]:
         subject = normalize_text(rule.get("科目", ""))
         role = normalize_text(rule.get("資料角色", ""))
         rule_dict = rule.to_dict()
-        if role == "summary" or not _is_account_balance_rule(rule_dict):
+        if role == "summary" or not _is_transfer_account_rule(rule_dict):
             continue
         if subject in seen:
             continue
@@ -3796,130 +3833,23 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if row.empty:
         return str(acct_id)
     r = row.iloc[0]
-    return _acct_display_label(accts, acct_id)
+    return f"{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})"
 
 
-def _acct_subject_from_row(row: pd.Series) -> str:
-    note = normalize_text(row.get("note", ""))
-    match = re.search(r"(?:預設科目|匯入\s+2026細帳\s+[^：]+)：(.+)", note)
-    if match:
-        return normalize_text(match.group(1))
-
-    category = normalize_text(row.get("category", ""))
-    bank = normalize_text(row.get("bank", ""))
-    name = normalize_text(row.get("name", ""))
-    if bank == "外幣現金" and name:
-        return name
-    if bank == "零用金":
-        return "零用金"
-    if category == "信用卡" and name:
-        return f"信用卡-{name}"
-    if name in {"主帳戶", "投資帳戶", "保單", "往來帳戶"} and bank:
-        return bank
-    if bank and name:
-        return f"{bank}-{name}" if not name.startswith(bank) else name
-    return bank or name or "未命名科目"
-
-
-def _acct_display_label(accts: pd.DataFrame, acct_id: Any) -> str:
-    if acct_id is None or pd.isna(acct_id):
-        return "（無）"
-    try:
-        row = accts[accts["id"] == int(float(acct_id))]
-    except Exception:
-        return str(acct_id)
-    if row.empty:
-        return str(acct_id)
-    r = row.iloc[0]
-    subject = _acct_subject_from_row(r)
-    currency = normalize_text(r.get("currency", "TWD"), "TWD")
-    return f"{subject} ({currency})"
-
-
-def _acct_options(accts: pd.DataFrame) -> list[int]:
-    opts: list[int] = []
+def _acct_options(accts: pd.DataFrame) -> list[str]:
+    opts: list[str] = []
     if accts.empty:
         return opts
     for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        rid = r.get("id")
-        if pd.isna(rid):
-            continue
-        opts.append(int(float(rid)))
+        opts.append(f"{r.get('id')}｜{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})")
     return opts
 
 
-def _subject_account_key(subject: str) -> tuple[str, str, str, str]:
-    fields = _cash_transfer_account_fields(subject)
-    return (
-        normalize_text(fields.get("類別", "其他"), "其他"),
-        normalize_text(fields.get("銀行/平台", "")),
-        normalize_text(fields.get("帳戶名稱", "")),
-        normalize_text(fields.get("幣別", "TWD"), "TWD"),
-    )
-
-
-def _account_row_key(row: pd.Series) -> tuple[str, str, str, str]:
-    return (
-        normalize_text(row.get("category", "")),
-        normalize_text(row.get("bank", "")),
-        normalize_text(row.get("name", "")),
-        normalize_text(row.get("currency", "")),
-    )
-
-
-def _find_account_id_for_subject(accts: pd.DataFrame, subject: str) -> int | None:
-    subject = normalize_text(subject)
-    if not subject or accts.empty:
-        return None
-    target_key = _subject_account_key(subject)
-    for _, row in _active_accounts(accts).iterrows():
-        rid = row.get("id")
-        if pd.isna(rid):
-            continue
-        if _acct_subject_from_row(row) == subject or _account_row_key(row) == target_key:
-            return int(float(rid))
-    return None
-
-
-def ensure_account_for_subject(subject: str, accts: pd.DataFrame) -> int | None:
-    subject = normalize_text(subject)
-    if not subject:
-        return None
-    existing_id = _find_account_id_for_subject(accts, subject)
-    if existing_id is not None:
-        return existing_id
-
-    fields = _cash_transfer_account_fields(subject)
-    if not fields.get("銀行/平台") or not fields.get("帳戶名稱"):
-        return None
-
-    next_order = 1
-    if not accts.empty and "sort_order" in accts.columns:
-        next_order = int(normalize_number(accts["sort_order"].max(), 0)) + 1
-    payload = {
-        "sort_order": next_order,
-        "category": fields["類別"],
-        "bank": fields["銀行/平台"],
-        "name": fields["帳戶名稱"],
-        "currency": fields["幣別"],
-        "balance": 0,
-        "note": f"預設科目：{subject}",
-        "is_active": True,
-    }
-    result = supabase_client().table("accounts").insert(payload).execute()
-    st.cache_data.clear()
-    data = result.data or []
-    if data and data[0].get("id") is not None:
-        return int(float(data[0]["id"]))
-    refreshed = load_accounts()
-    return _find_account_id_for_subject(refreshed, subject)
-
-
-def _id_from_option(opt: Any) -> int | None:
-    if opt is None or opt == "（無）":
+def _id_from_option(opt: str) -> int | None:
+    if not opt or opt == "（無）":
         return None
     try:
-        return int(float(opt))
+        return int(str(opt).split("｜")[0])
     except Exception:
         return None
 
@@ -3993,99 +3923,6 @@ def cash_import_month_options(ledger: pd.DataFrame) -> list[str]:
     return _unique_keep_order([normalize_sheet_month_label(col) for col in month_columns(ledger)])
 
 
-def cash_display_month_label(month_label: str) -> str:
-    return normalize_text(month_label).replace("-", "/")
-
-
-def cash_default_month_index(months: list[str]) -> int:
-    if not months:
-        return 0
-    current_month = tw_now().strftime("%Y-%m")
-    valid_indexes = [idx for idx, month in enumerate(months) if normalize_text(month) <= current_month]
-    return valid_indexes[-1] if valid_indexes else len(months) - 1
-
-
-def cash_month_column_config(columns: list[str]) -> dict[str, Any]:
-    return {
-        col: st.column_config.NumberColumn(col, format="%,.0f")
-        for col in columns
-        if re.fullmatch(r"\d{4}/\d{2}", str(col))
-    }
-
-
-def build_cash_ledger_wide_table(
-    ledger: pd.DataFrame,
-    months: list[str] | None = None,
-    row_kind: str = "all",
-) -> pd.DataFrame:
-    if ledger.empty:
-        return pd.DataFrame()
-
-    months = months or cash_import_month_options(ledger)
-    month_col_by_label = {
-        normalize_sheet_month_label(col): col
-        for col in month_columns(ledger)
-        if normalize_sheet_month_label(col)
-    }
-    label_col = ledger.columns[0]
-    occurrence_counts: dict[str, int] = {}
-    rows: list[dict[str, Any]] = []
-
-    for _, sheet_row in ledger.iterrows():
-        raw_subject = normalize_text(sheet_row.get(label_col, ""))
-        if not raw_subject:
-            continue
-        subject = canonical_cash_subject(raw_subject, occurrence_counts)
-        rule = classify_cash_subject(subject)
-        role = normalize_text(rule.get("資料角色", ""))
-        is_account = _is_account_balance_rule(rule)
-        if row_kind == "accounts" and not is_account:
-            continue
-        if row_kind == "transactions" and (is_account or role in {"summary", "unknown"}):
-            continue
-
-        out: dict[str, Any] = {"科目": subject}
-        for month in months:
-            source_col = month_col_by_label.get(month)
-            amount = parse_sheet_number(sheet_row.get(source_col)) if source_col else None
-            out[cash_display_month_label(month)] = amount
-        rows.append(out)
-
-    return pd.DataFrame(rows)
-
-
-def build_cash_ledger_complete_table(ledger: pd.DataFrame, months: list[str] | None = None) -> pd.DataFrame:
-    if ledger.empty:
-        return pd.DataFrame()
-
-    out = ledger.copy()
-    rename_map = {}
-    for col in out.columns:
-        month_label = normalize_sheet_month_label(col)
-        if month_label:
-            rename_map[col] = cash_display_month_label(month_label)
-    if rename_map:
-        out = out.rename(columns=rename_map)
-    return out
-
-
-def count_cash_ledger_month_cells(ledger: pd.DataFrame, months: list[str]) -> int:
-    if ledger.empty:
-        return 0
-    month_col_by_label = {
-        normalize_sheet_month_label(col): col
-        for col in month_columns(ledger)
-        if normalize_sheet_month_label(col)
-    }
-    count = 0
-    for _, sheet_row in ledger.iterrows():
-        for month in months:
-            source_col = month_col_by_label.get(month)
-            if source_col and parse_sheet_number(sheet_row.get(source_col)) is not None:
-                count += 1
-    return count
-
-
 def _cash_import_preview_columns() -> list[str]:
     return ["匯入", "可互轉", "月份", "原始科目", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "餘額", "台幣換算", "資料角色", "略過原因", "備註"]
 
@@ -4094,8 +3931,8 @@ def _cash_subject_account_fields(subject: str) -> dict[str, str]:
     rule = classify_cash_subject(subject)
     category = _cash_account_category(rule)
     bank, name = _cash_account_bank_name(subject, category)
-    is_account = _is_account_balance_rule(rule)
-    is_transfer_endpoint = _is_transfer_account_rule(rule)
+    is_account = _is_transfer_account_rule(rule)
+    is_transfer_endpoint = is_account and category in TRANSFER_ACCOUNT_CATEGORIES
     return {
         "科目": subject,
         "類別": category,
@@ -4107,29 +3944,6 @@ def _cash_subject_account_fields(subject: str) -> dict[str, str]:
         "可互轉": "是" if is_transfer_endpoint else "否",
         "備註": normalize_text(rule.get("備註", "")),
     }
-
-
-def _cash_transfer_account_fields(subject: str) -> dict[str, str]:
-    fields = _cash_subject_account_fields(subject)
-    role = normalize_text(fields.get("資料角色", ""))
-    if not normalize_text(subject) or role in {"summary", "unknown"}:
-        return fields
-    if fields.get("匯入帳戶") == "是":
-        fields["可互轉"] = "是"
-        return fields
-
-    rule = classify_cash_subject(subject)
-    category = _cash_account_category(rule)
-    bank, name = _cash_account_bank_name(subject, category)
-    fields.update({
-        "類別": category,
-        "銀行/平台": bank,
-        "帳戶名稱": name,
-        "幣別": _cash_subject_currency(subject),
-        "匯入帳戶": "否",
-        "可互轉": "是",
-    })
-    return fields
 
 
 def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.DataFrame:
@@ -4160,9 +3974,6 @@ def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.Data
         fx_val, _ = fetch_fx(fields["幣別"])
         if role == "summary":
             skip_reason = "彙總/公式列，不匯入為帳戶"
-        elif role == "unknown":
-            should_import = False
-            skip_reason = "未在正式科目清單，不匯入"
         elif not should_import:
             skip_reason = "支出/收入分類，只留作交易分類，不建立帳戶"
         else:
@@ -4260,294 +4071,9 @@ def apply_cash_import_preview(preview: pd.DataFrame, update_existing: bool = Tru
     return inserted, updated, skipped
 
 
-def _cash_month_end_date(month_label: str) -> str:
-    try:
-        year_text, month_text = normalize_text(month_label).split("-", 1)
-        year = int(year_text)
-        month = int(month_text)
-        if month == 12:
-            next_month = datetime(year + 1, 1, 1)
-        else:
-            next_month = datetime(year, month + 1, 1)
-        return (next_month - timedelta(days=1)).date().isoformat()
-    except Exception:
-        return tw_now().date().isoformat()
-
-
-def _cash_ledger_transaction_type(role: str) -> str:
-    role = normalize_text(role)
-    if role == "interest_income":
-        return "利息收入"
-    if role in {"income", "investment_income", "insurance_rebate"}:
-        return "收入"
-    if role == "credit_card_expense":
-        return "信用卡消費"
-    if role == "advance_expense":
-        return "代墊"
-    if role == "insurance_expense":
-        return "支出"
-    if role == "expense":
-        return "支出"
-    return "轉帳"
-
-
-def _cash_ledger_transaction_import_columns() -> list[str]:
-    return ["匯入", "月份", "交易日期", "原始科目", "科目", "交易類型", "金額", "幣別", "匯率", "台幣金額", "資料角色", "略過原因", "備註"]
-
-
-def build_cash_ledger_transaction_preview(
-    ledger: pd.DataFrame,
-    start_month: str,
-    end_month: str,
-) -> pd.DataFrame:
-    if ledger.empty:
-        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
-
-    months = cash_import_month_options(ledger)
-    if start_month not in months or end_month not in months:
-        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
-    start_idx = months.index(start_month)
-    end_idx = months.index(end_month)
-    if start_idx > end_idx:
-        start_idx, end_idx = end_idx, start_idx
-    selected_months = set(months[start_idx:end_idx + 1])
-
-    label_col = ledger.columns[0]
-    occurrence_counts: dict[str, int] = {}
-    rows: list[dict[str, Any]] = []
-    for _, sheet_row in ledger.iterrows():
-        raw_subject = normalize_text(sheet_row.get(label_col, ""))
-        if not raw_subject or raw_subject in {"合計", "總計"}:
-            continue
-        subject = canonical_cash_subject(raw_subject, occurrence_counts)
-        rule = classify_cash_subject(subject)
-        role = normalize_text(rule.get("資料角色", ""))
-        is_account = _is_account_balance_rule(rule)
-        is_summary = role == "summary"
-
-        for col in month_columns(ledger):
-            month_label = normalize_sheet_month_label(col)
-            if month_label not in selected_months:
-                continue
-            amount = parse_sheet_number(sheet_row.get(col))
-            if amount is None or amount == 0:
-                continue
-            currency = _cash_subject_currency(subject)
-            fx_val, _ = fetch_fx(currency)
-            fx_val = fx_val or 1.0
-            should_import = not is_summary and not is_account and role != "unknown"
-            if is_summary:
-                skip_reason = "彙總/公式列，不匯入交易"
-            elif is_account:
-                skip_reason = "帳戶餘額列，請用帳戶餘額匯入"
-            elif role == "unknown":
-                skip_reason = "未在正式科目清單，不匯入"
-            else:
-                skip_reason = ""
-            marker = f"[2026細帳匯入:{month_label}:{subject}]"
-            rows.append({
-                "匯入": should_import,
-                "月份": month_label,
-                "交易日期": _cash_month_end_date(month_label),
-                "原始科目": raw_subject,
-                "科目": subject,
-                "交易類型": _cash_ledger_transaction_type(role),
-                "金額": abs(float(amount)),
-                "幣別": currency,
-                "匯率": fx_val,
-                "台幣金額": round(abs(float(amount)) * fx_val, 0),
-                "資料角色": role,
-                "略過原因": skip_reason,
-                "備註": f"{marker} 原始科目:{raw_subject}",
-            })
-
-    if not rows:
-        return pd.DataFrame(columns=_cash_ledger_transaction_import_columns())
-    return pd.DataFrame(rows)[_cash_ledger_transaction_import_columns()].sort_values(["匯入", "月份", "科目"], ascending=[False, True, True])
-
-
-def apply_cash_ledger_transaction_preview(
-    preview: pd.DataFrame,
-    skip_existing: bool = True,
-) -> tuple[int, int]:
-    if preview.empty:
-        return 0, 0
-    existing_notes: set[str] = set()
-    if skip_existing:
-        try:
-            existing = supabase_client().table("transactions").select("note").execute().data or []
-            existing_notes = {normalize_text(row.get("note", "")) for row in existing}
-        except Exception:
-            existing_notes = set()
-
-    sb = supabase_client()
-    inserted = 0
-    skipped = 0
-    rows = preview[preview["匯入"] == True].copy()
-    for _, row in rows.iterrows():
-        note = normalize_text(row.get("備註", ""))
-        if skip_existing and note in existing_notes:
-            skipped += 1
-            continue
-        payload = {
-            "txn_date": normalize_text(row.get("交易日期", "")) or tw_now().date().isoformat(),
-            "txn_type": normalize_text(row.get("交易類型", "")),
-            "from_account_id": None,
-            "to_account_id": None,
-            "amount": normalize_number(row.get("金額", 0), 0),
-            "currency": normalize_text(row.get("幣別", "TWD"), "TWD"),
-            "fx_rate": normalize_number(row.get("匯率", 1), 1),
-            "twd_amount": round(normalize_number(row.get("台幣金額", 0), 0), 0),
-            "description": normalize_text(row.get("科目", "")),
-            "category": normalize_text(row.get("科目", "")),
-            "note": note,
-        }
-        sb.table("transactions").insert(payload).execute()
-        existing_notes.add(note)
-        inserted += 1
-    return inserted, skipped
-
-
-def _safe_int_id(value: Any) -> int | None:
-    try:
-        if value is None or pd.isna(value):
-            return None
-        text = str(value).strip()
-        if not text:
-            return None
-        return int(float(text))
-    except Exception:
-        return None
-
-
-def _cash_parse_txn_date(value: Any):
-    try:
-        parsed = pd.to_datetime(value)
-        if pd.isna(parsed):
-            return None
-        return parsed.date()
-    except Exception:
-        return None
-
-
-def _cash_flow_year_for_date(value: Any) -> int | None:
-    parsed = _cash_parse_txn_date(value)
-    if parsed is None:
-        return None
-    return parsed.year + 1 if parsed.month == 12 else parsed.year
-
-
-def cash_monthly_flow_year_options(txns: pd.DataFrame) -> list[int]:
-    years: list[int] = []
-    if txns is not None and not txns.empty and "txn_date" in txns.columns:
-        for value in txns["txn_date"].dropna().tolist():
-            year = _cash_flow_year_for_date(value)
-            if year is not None:
-                years.append(year)
-    current_year = tw_now().year
-    return sorted(set(years + [current_year]))
-
-
-def cash_monthly_flow_months(year: int) -> list[str]:
-    return [f"{year - 1}-12"] + [f"{year}-{month:02d}" for month in range(1, 13)]
-
-
-def _cash_account_subject_lookup(accts: pd.DataFrame) -> dict[int, str]:
-    lookup: dict[int, str] = {}
-    if accts is None or accts.empty:
-        return lookup
-    for _, row in accts.iterrows():
-        rid = _safe_int_id(row.get("id"))
-        if rid is None:
-            continue
-        lookup[rid] = _acct_subject_from_row(row)
-    return lookup
-
-
-def _cash_flow_category_subject(category: Any) -> str:
-    subject = normalize_text(category)
-    if not subject:
-        return ""
-    if subject in {"轉帳", "收入", "支出", "利息收入", "利息支出", "投資買入", "投資賣出", "借入", "借出", "代墊"}:
-        return ""
-    rule = classify_cash_subject(subject)
-    role = normalize_text(rule.get("資料角色", ""))
-    if role == "summary":
-        return ""
-    return subject
-
-
-def build_cash_monthly_flow_table(txns: pd.DataFrame, accts: pd.DataFrame, flow_year: int) -> pd.DataFrame:
-    months = cash_monthly_flow_months(flow_year)
-    display_months = [cash_display_month_label(month) for month in months]
-    columns = ["科目"] + display_months + ["合計"]
-    if txns is None or txns.empty:
-        return pd.DataFrame(columns=columns)
-
-    account_subjects = _cash_account_subject_lookup(accts)
-    rows: list[dict[str, Any]] = []
-    for _, txn in txns.iterrows():
-        parsed = _cash_parse_txn_date(txn.get("txn_date"))
-        if parsed is None:
-            continue
-        month = f"{parsed.year}-{parsed.month:02d}"
-        if month not in months:
-            continue
-
-        amount_twd = normalize_number(txn.get("twd_amount", 0), 0)
-        if amount_twd == 0:
-            amount_twd = normalize_number(txn.get("amount", 0), 0) * normalize_number(txn.get("fx_rate", 1), 1)
-        amount_twd = abs(float(amount_twd))
-        if amount_twd == 0:
-            continue
-
-        from_id = _safe_int_id(txn.get("from_account_id"))
-        to_id = _safe_int_id(txn.get("to_account_id"))
-        if from_id is not None:
-            rows.append({
-                "科目": account_subjects.get(from_id, f"帳戶ID {from_id}"),
-                "月份": month,
-                "金額": -amount_twd,
-            })
-        if to_id is not None:
-            rows.append({
-                "科目": account_subjects.get(to_id, f"帳戶ID {to_id}"),
-                "月份": month,
-                "金額": amount_twd,
-            })
-
-        category_subject = _cash_flow_category_subject(txn.get("category", ""))
-        if category_subject and (to_id is None or (from_id is None and to_id is None)):
-            rows.append({
-                "科目": category_subject,
-                "月份": month,
-                "金額": amount_twd,
-            })
-
-    if not rows:
-        return pd.DataFrame(columns=columns)
-
-    long_df = pd.DataFrame(rows)
-    pivot = (
-        long_df.groupby(["科目", "月份"], as_index=False)["金額"]
-        .sum()
-        .pivot(index="科目", columns="月份", values="金額")
-        .reindex(columns=months, fill_value=0)
-        .fillna(0)
-    )
-    pivot["合計"] = pivot.sum(axis=1)
-    pivot = pivot.reset_index()
-
-    subject_order = {subject: idx for idx, subject in enumerate(cash_subject_options())}
-    pivot["_order"] = pivot["科目"].apply(lambda s: subject_order.get(normalize_text(s), 9999))
-    pivot = pivot.sort_values(["_order", "科目"]).drop(columns=["_order"])
-    pivot = pivot.rename(columns={month: cash_display_month_label(month) for month in months})
-    return pivot[columns]
-
-
 def render_cash_import_section() -> None:
-    st.markdown("#### 📥 匯入 2026細帳")
-    st.caption("直接讀取 2026細帳原始欄位：A 欄是科目，B 欄開始是 2025/12、2026/01...。帳戶餘額用單一月份建立/更新 accounts；支出、收入、信用卡、配息等非帳戶列可批次匯入 transactions。")
+    st.markdown("#### 📥 匯入目前資料")
+    st.caption("從 2026細帳選一個月份匯入帳戶目前餘額；轉帳來源/目標只列銀行、外幣、保險、投資、借款/代墊。零用金明細、信用卡消費、收入與彙總列只保留為交易分類。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -4575,115 +4101,43 @@ def render_cash_import_section() -> None:
     if not months:
         st.warning("找不到月份欄位，請確認欄名格式像 2026-01 或 2026/01。")
         return
-    default_month_idx = cash_default_month_index(months)
-    complete_tab, balance_tab, txn_tab = st.tabs(["完整 2026細帳", "帳戶餘額", "歷史交易"])
+    selected_month = st.selectbox("選擇要匯入的目前月份", months, index=len(months) - 1, key="cash_import_month")
+    preview = build_cash_import_preview(ledger, selected_month)
+    if preview.empty:
+        st.info("這個月份沒有可匯入資料。")
+        return
 
-    with complete_tab:
-        complete_df = build_cash_ledger_complete_table(ledger, months)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("完整列數", f"{len(complete_df):,}")
-        c2.metric("完整欄數", f"{len(complete_df.columns):,}")
-        c3.metric("月份資料格", f"{count_cash_ledger_month_cells(ledger, months):,}")
-        st.caption("這裡維持 2026細帳原始列數和欄數，不加欄、不刪列；只把月份欄名顯示成 YYYY/MM。")
-        st.dataframe(
-            complete_df,
-            use_container_width=True,
-            hide_index=True,
-            height=min(42 * len(complete_df) + 44, 680),
-        )
+    importable = preview[preview["匯入"] == True]
+    skipped = preview[preview["匯入"] == False]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("可匯入科目", f"{len(importable):,}")
+    c2.metric("分類/彙總不匯入", f"{len(skipped):,}")
+    c3.metric("匯入台幣換算", money(importable["台幣換算"].fillna(0).sum() if not importable.empty else 0))
 
-    with balance_tab:
-        selected_month = st.selectbox(
-            "選擇帳戶餘額月份",
-            months,
-            index=default_month_idx,
-            format_func=cash_display_month_label,
-            key="cash_import_month",
-        )
-        preview = build_cash_import_preview(ledger, selected_month)
-        if preview.empty:
-            st.info("這個月份沒有可匯入資料。")
-        else:
-            importable = preview[preview["匯入"] == True]
-            skipped = preview[preview["匯入"] == False]
-            c1, c2, c3 = st.columns(3)
-            c1.metric("可匯入帳戶", f"{len(importable):,}")
-            c2.metric("分類/彙總不匯入", f"{len(skipped):,}")
-            c3.metric("匯入台幣換算", money(importable["台幣換算"].fillna(0).sum() if not importable.empty else 0))
+    edited_preview = st.data_editor(
+        preview,
+        use_container_width=True,
+        hide_index=True,
+        height=min(42 * len(preview) + 44, 620),
+        disabled=[col for col in preview.columns if col != "匯入"],
+        column_config={
+            "匯入": st.column_config.CheckboxColumn("匯入"),
+            "餘額": st.column_config.NumberColumn("餘額", format="%,.4f"),
+            "台幣換算": st.column_config.NumberColumn("台幣換算", format="%,.0f"),
+        },
+        key="cash_import_preview_editor",
+    )
 
-            wide_accounts = build_cash_ledger_wide_table(ledger, months, row_kind="accounts")
-            st.caption("預覽使用原本 2026細帳欄位形式；匯入時只會使用你上方選定的帳戶餘額月份。")
-            st.dataframe(
-                wide_accounts,
-                use_container_width=True,
-                hide_index=True,
-                height=min(42 * len(wide_accounts) + 44, 620),
-                column_config=cash_month_column_config(wide_accounts.columns.astype(str).tolist()),
-            )
-
-            update_existing = st.checkbox("若帳戶已存在，更新目前餘額", value=True, key="cash_import_update_existing")
-            confirm = st.checkbox("確認匯入/更新 accounts 帳戶餘額", key="cash_import_confirm")
-            if st.button("匯入帳戶餘額", disabled=not confirm, key="apply_cash_import"):
-                try:
-                    inserted, updated, skipped_count = apply_cash_import_preview(preview, update_existing=update_existing)
-                    st.success(f"匯入完成：新增 {inserted} 筆，更新 {updated} 筆，略過 {skipped_count} 筆。")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"匯入失敗：{e}")
-
-    with txn_tab:
-        c1, c2 = st.columns(2)
-        start_month = c1.selectbox(
-            "匯入起始月份",
-            months,
-            index=0,
-            format_func=cash_display_month_label,
-            key="cash_txn_import_start_month",
-        )
-        end_month = c2.selectbox(
-            "匯入結束月份",
-            months,
-            index=default_month_idx,
-            format_func=cash_display_month_label,
-            key="cash_txn_import_end_month",
-        )
-        txn_preview = build_cash_ledger_transaction_preview(ledger, start_month, end_month)
-        if txn_preview.empty:
-            st.info("選取月份沒有可匯入的交易資料。")
-        else:
-            importable_txn = txn_preview[txn_preview["匯入"] == True]
-            skipped_txn = txn_preview[txn_preview["匯入"] == False]
-            k1, k2, k3 = st.columns(3)
-            k1.metric("可匯入交易", f"{len(importable_txn):,}")
-            k2.metric("帳戶/彙總不匯入", f"{len(skipped_txn):,}")
-            k3.metric("交易台幣合計", money(importable_txn["台幣金額"].fillna(0).sum() if not importable_txn.empty else 0))
-
-            start_idx = months.index(start_month)
-            end_idx = months.index(end_month)
-            if start_idx > end_idx:
-                start_idx, end_idx = end_idx, start_idx
-            selected_months = months[start_idx:end_idx + 1]
-            wide_txns = build_cash_ledger_wide_table(ledger, selected_months, row_kind="transactions")
-            st.caption("預覽使用原本 2026細帳欄位形式；匯入時會依上方月份範圍建立歷史交易。")
-            st.dataframe(
-                wide_txns,
-                use_container_width=True,
-                hide_index=True,
-                height=min(42 * len(wide_txns) + 44, 620),
-                column_config=cash_month_column_config(wide_txns.columns.astype(str).tolist()),
-            )
-
-            skip_existing = st.checkbox("略過已匯入過的 2026細帳交易", value=True, key="cash_txn_skip_existing")
-            confirm_txn = st.checkbox("確認匯入 transactions 歷史交易", key="cash_txn_import_confirm")
-            if st.button("匯入歷史交易", disabled=not confirm_txn, key="apply_cash_txn_import"):
-                try:
-                    inserted, skipped_count = apply_cash_ledger_transaction_preview(txn_preview, skip_existing=skip_existing)
-                    st.success(f"交易匯入完成：新增 {inserted} 筆，略過 {skipped_count} 筆。")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"交易匯入失敗：{e}")
+    update_existing = st.checkbox("若科目已存在，更新目前餘額", value=True, key="cash_import_update_existing")
+    confirm = st.checkbox("確認匯入/更新 accounts 科目餘額", key="cash_import_confirm")
+    if st.button("匯入目前資料", disabled=not confirm, key="apply_cash_import"):
+        try:
+            inserted, updated, skipped_count = apply_cash_import_preview(edited_preview, update_existing=update_existing)
+            st.success(f"匯入完成：新增 {inserted} 筆，更新 {updated} 筆，略過 {skipped_count} 筆。")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"匯入失敗：{e}")
 
 
 def render_cashflow_tab() -> None:
@@ -4774,55 +4228,46 @@ def render_cashflow_tab() -> None:
     with tab2:
         st.markdown("#### ➕ 新增一筆交易")
         if accts.empty:
-            st.info("尚無帳戶；選來源/目標科目新增交易時，會自動建立對應帳戶。")
+            st.warning("請先到「帳戶管理」建立帳戶。")
+        else:
+            acct_opts = ["（無）"] + _acct_options(accts)
+            subject_opts = cash_subject_options()
+            default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
+            st.caption("來源/目標是帳戶互轉；轉入零用金或信用卡時，請在「分類 / 支出項目」選對應科目，並可填轉帳註記。")
+            with st.form("new_txn_form"):
+                c1, c2, c3 = st.columns(3)
+                txn_date = c1.date_input("日期", value=pd.Timestamp.today())
+                txn_type = c2.selectbox("類型", TXN_TYPES)
+                txn_subject = c3.selectbox("分類 / 支出項目", subject_opts, index=default_subject_idx)
+                rule = classify_cash_subject(txn_subject)
+                role = normalize_text(rule.get("資料角色", ""))
+                st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
 
-        transfer_subject_opts = ["（無）"] + cash_transfer_subject_options()
-        subject_opts = cash_transaction_subject_options()
-        default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
-        st.caption("來源/目標使用正式科目名稱。A 轉 B 10000 時，月份流向會顯示 A -10000、B +10000。")
-        with st.form("new_txn_form"):
-            c1, c2, c3 = st.columns(3)
-            txn_date = c1.date_input("日期", value=pd.Timestamp.today())
-            txn_type = c2.selectbox("類型", TXN_TYPES)
-            selected_subject = c3.selectbox("分類 / 支出項目", subject_opts, index=default_subject_idx)
-            custom_subject = ""
-            if selected_subject == cash_custom_subject_label():
-                custom_subject = st.text_input("自訂分類 / 支出項目", key="custom_txn_subject")
-            txn_subject = normalize_text(custom_subject) if selected_subject == cash_custom_subject_label() else selected_subject
-            rule = classify_cash_subject(txn_subject)
-            role = normalize_text(rule.get("資料角色", ""))
-            st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
+                c4, c5 = st.columns(2)
+                from_opt = c4.selectbox("來源科目（扣款方）", acct_opts, key="from_acct")
+                to_opt = c5.selectbox("目標科目（入帳方）", acct_opts, key="to_acct")
 
-            c4, c5 = st.columns(2)
-            from_opt = c4.selectbox("來源科目（扣款方）", transfer_subject_opts, key="from_acct")
-            to_opt = c5.selectbox("目標科目（入帳方）", transfer_subject_opts, key="to_acct")
+                c6, c7, c8 = st.columns(3)
+                amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
+                currency = c7.selectbox("幣別", CASH_CURRENCIES, index=0)
+                default_fx, _ = fetch_fx(currency)
+                fx_rate_input = c8.number_input("匯率（原幣→台幣）", value=float(default_fx or 1.0), format="%.4f", min_value=0.0)
 
-            c6, c7, c8 = st.columns(3)
-            amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
-            currency = c7.selectbox("幣別", CASH_CURRENCIES, index=0)
-            default_fx, _ = fetch_fx(currency)
-            fx_rate_input = c8.number_input("匯率（原幣→台幣）", value=float(default_fx or 1.0), format="%.4f", min_value=0.0)
+                twd_est = amount * fx_rate_input
+                st.caption(f"估算台幣金額：**{money(twd_est)}**")
+                desc = st.text_input("說明", value=txn_subject)
+                note = st.text_input("轉帳註記 / 備註")
 
-            twd_est = amount * fx_rate_input
-            st.caption(f"估算台幣金額：**{money(twd_est)}**")
-            desc = st.text_input("說明", value=txn_subject)
-            note = st.text_input("轉帳註記 / 備註")
-
-            if st.form_submit_button("💾 新增交易"):
-                record_only_allowed = role in {"expense", "advance_expense", "credit_card_expense", "insurance_expense"}
-                if amount <= 0:
-                    st.error("金額必須大於 0")
-                elif not txn_subject:
-                    st.error("請選擇或輸入分類 / 支出項目")
-                elif from_opt != "（無）" and to_opt != "（無）" and from_opt == to_opt:
-                    st.error("來源和目標不能是同一個科目")
-                else:
-                    from_id = ensure_account_for_subject(from_opt, accts) if from_opt != "（無）" else None
-                    accts_after_from = load_accounts() if from_id else accts
-                    to_id = ensure_account_for_subject(to_opt, accts_after_from) if to_opt != "（無）" else None
-                    latest_accts = load_accounts() if from_id or to_id else accts
-                    if from_id is None and to_id is None and not record_only_allowed:
+                if st.form_submit_button("💾 新增交易"):
+                    from_id = _id_from_option(from_opt)
+                    to_id = _id_from_option(to_opt)
+                    record_only_allowed = role in {"expense", "advance_expense", "credit_card_expense", "insurance_expense"}
+                    if amount <= 0:
+                        st.error("金額必須大於 0")
+                    elif from_id is None and to_id is None and not record_only_allowed:
                         st.error("來源和目標科目至少填一個")
+                    elif from_id is not None and to_id is not None and from_id == to_id:
+                        st.error("來源和目標不能是同一個科目")
                     else:
                         try:
                             sb = supabase_client()
@@ -4841,14 +4286,14 @@ def render_cashflow_tab() -> None:
                             }).execute()
 
                             if from_id:
-                                from_row = latest_accts[latest_accts["id"] == from_id].iloc[0]
+                                from_row = accts[accts["id"] == from_id].iloc[0]
                                 from_amount = _amount_in_account_currency(
                                     amount, currency, normalize_text(from_row.get("currency", "TWD")), fx_rate_input
                                 )
                                 new_bal = normalize_number(from_row.get("balance", 0), 0) - from_amount
                                 sb.table("accounts").update({"balance": new_bal}).eq("id", from_id).execute()
                             if to_id:
-                                to_row = latest_accts[latest_accts["id"] == to_id].iloc[0]
+                                to_row = accts[accts["id"] == to_id].iloc[0]
                                 to_amount = _amount_in_account_currency(
                                     amount, currency, normalize_text(to_row.get("currency", "TWD")), fx_rate_input
                                 )
@@ -4886,27 +4331,6 @@ def render_cashflow_tab() -> None:
             if sel_subject != "全部":
                 show = show[show["分類"] == sel_subject]
 
-            st.markdown("#### 2026細帳式月份流向")
-            flow_years = cash_monthly_flow_year_options(txns)
-            default_flow_idx = flow_years.index(tw_now().year) if tw_now().year in flow_years else len(flow_years) - 1
-            flow_year = st.selectbox("流向年份", flow_years, index=default_flow_idx, key="cash_monthly_flow_year")
-            flow_df = build_cash_monthly_flow_table(txns, accts, int(flow_year))
-            if flow_df.empty:
-                st.info("目前沒有可彙總的月份流向。")
-            else:
-                st.caption("依交易的來源/目標展開：扣款方為負數，入帳方為正數；沒有目標科目的零用金/信用卡支出會記到分類科目。")
-                st.dataframe(
-                    flow_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(42 * len(flow_df) + 44, 520),
-                    column_config={
-                        **cash_month_column_config(flow_df.columns.astype(str).tolist()),
-                        "合計": st.column_config.NumberColumn("合計", format="%,.0f"),
-                    },
-                )
-
-            st.markdown("#### 最近 200 筆交易明細")
             st.dataframe(
                 show,
                 use_container_width=True,
@@ -5007,7 +4431,7 @@ def render_cashflow_tab() -> None:
                         st.error(f"新增失敗：{e}")
 
         with st.expander("一鍵建立缺少的預設帳戶"):
-            st.caption("會建立帳戶餘額科目；來源/目標互轉使用正式科目名稱，支援銀行、外幣、轉帳/換匯、保險、投資、借款/代墊、收入與悠遊付/一卡通。零用金細項與信用卡消費仍作分類；已存在者會略過。")
+            st.caption("會建立帳戶餘額科目；來源/目標互轉只列銀行、外幣、保險、投資、借款/代墊。現金類可做總覽但不列入互轉，支出/收入/信用卡消費只作分類；已存在者會略過。")
             st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
             confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
             if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
@@ -5039,6 +4463,7 @@ st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
     st.code("""
 alter table positions add column if not exists purchase_ym text default '';
+alter table positions add column if not exists dividend_received_original_total numeric default 0;
 alter table positions add column if not exists dividend_received_total numeric default 0;
 alter table positions add column if not exists dividend_note text default '';
 alter table positions add column if not exists dividend_pay_date text default '';
@@ -5107,23 +4532,6 @@ except Exception as e:
 
 enriched = enrich(positions)
 
-# 寫入 latest_portfolio_values（debug 版）
-try:
-    platform_map = {"台股": "tw_stock", "美股": "us_stock",
-                    "基富通": "kifutong", "渣打基金": "scb", "台新基金": "taishin"}
-    _row = {"id": 1}
-    for _plt, _key in platform_map.items():
-        _p = enriched[enriched["platform"] == _plt]
-        _row[_key] = round(float(_p["台幣市值"].fillna(0).sum()), 0)
-    _row["total_twd"] = sum(_row[k] for k in platform_map.values())
-    _row["total_cost"] = round(float(enriched["台幣成本"].fillna(0).sum()), 0)
-    _row["cumulative_dividend"] = round(float(enriched["累計已領配息"].fillna(0).sum()), 0)
-    _row["updated_at"] = datetime.now(timezone.utc).isoformat()
-    supabase_client().table("latest_portfolio_values").upsert(_row).execute()
-    st.toast(f"✅ cache 寫入：{_row['total_twd']:,.0f}")
-except Exception as _e:
-    st.warning(f"cache 失敗：{_e}")
-
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
@@ -5162,7 +4570,7 @@ tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台�
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
              "即時價格/淨值", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
-             "價差損益", "價差損益率", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
+             "價差損益", "價差損益率", "累計配息原幣", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
              "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
@@ -5211,7 +4619,8 @@ for idx, platform in enumerate(PLATFORMS, start=1):
                 "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%,.0f"),
                 "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%,.0f"),
                 "價差損益":         st.column_config.NumberColumn("市值損益",   format="%,.0f"),
-                "累計已領配息":     st.column_config.NumberColumn("累積配息",   format="%,.0f"),
+                "累計配息原幣":     st.column_config.NumberColumn("累積配息原幣", format="%,.2f"),
+                "累計已領配息":     st.column_config.NumberColumn("累積配息台幣", format="%,.0f"),
                 "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
                 "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
                 "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%,.4f"),
@@ -5271,7 +4680,7 @@ with tabs[7]:
         price_test_section()
 
 with tabs[8]:
-    render_history_tab(enriched)
+    render_history_tab()
 
 with tabs[9]:
     render_dividend_log_tab(enriched)
