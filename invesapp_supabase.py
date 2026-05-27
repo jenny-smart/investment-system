@@ -355,6 +355,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
         "purchase_ym": "", "dividend_received_total": 0.0, "dividend_note": "", "note": "",
         "is_reinvest": False,
+        "dividend_received_original": 0.0,
     }
     out = df.copy()
     for col, default in defaults.items():
