@@ -5105,7 +5105,7 @@ try:
 except Exception as e:
     st.error(f"Supabase 讀取失敗：{e}"); st.stop()
 
-enriched = pd.DataFrame()  # 先空的，讓頁面顯示出來
+enriched = enrich(positions)
 
 # 寫入 latest_portfolio_values（debug 版）
 try:
@@ -5120,6 +5120,7 @@ try:
     _row["cumulative_dividend"] = round(float(enriched["累計已領配息"].fillna(0).sum()), 0)
     _row["updated_at"] = datetime.now(timezone.utc).isoformat()
     supabase_client().table("latest_portfolio_values").upsert(_row).execute()
+    st.toast(f"✅ cache 寫入：{_row['total_twd']:,.0f}")
 except Exception as _e:
     st.warning(f"cache 失敗：{_e}")
 
@@ -5166,11 +5167,6 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
-    if st.button("🔄 載入即時報價", key="load_enriched"):
-        with st.spinner("抓取報價中，約需 2-3 分鐘..."):
-            enriched = enrich(positions)
-        st.session_state["enriched"] = enriched
-    enriched = st.session_state.get("enriched", pd.DataFrame())
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
