@@ -937,8 +937,21 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
         return None, f"匯率抓取失敗:{currency}"
     return float(price), status
 
-
-dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
+def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
+    original_units = normalize_number(r.get("original_units", 0), 0)
+    units = normalize_number(r.get("units", 0), 0)
+    avg_cost = normalize_number(r.get("avg_cost", 0), 0)
+    total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
+    note = normalize_text(r.get("note", ""))
+    is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
+    market_units = units if units > 0 or is_closed else original_units
+    cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
+    value_original_currency = market_units * latest_price if latest_price is not None else None
+    twd_cost = cost_original_currency * fx if fx is not None else None
+    twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
+    pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
+    pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
+    dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 0)
     
     # 原幣累計配息 × 即時匯率 → 覆蓋台幣累計配息
     div_original = normalize_number(r.get("dividend_received_original", 0), 0)
@@ -947,14 +960,16 @@ dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 
     else:
         dividend_received_twd = dividend_received_total
         div_original = None
-
     total_pnl_with_dividend = pnl + dividend_received_twd if pnl is not None else None
     total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
     is_reinvest = bool(r.get("is_reinvest", False))
     return {
-        "成本原幣": cost_original_currency, "市值原幣": value_original_currency,
-        "台幣成本": twd_cost, "台幣市值": twd_value,
-        "價差損益": pnl, "價差損益率": pnl_rate,
+        "成本原幣": cost_original_currency,
+        "市值原幣": value_original_currency,
+        "台幣成本": twd_cost,
+        "台幣市值": twd_value,
+        "價差損益": pnl,
+        "價差損益率": pnl_rate,
         "累計已領配息": dividend_received_twd,
         "累計已領配息原幣": div_original,
         "含息總損益": total_pnl_with_dividend,
@@ -963,6 +978,9 @@ dividend_received_total = normalize_number(r.get("dividend_received_total", 0), 
         "損益": total_pnl_with_dividend,
         "損益率": total_pnl_rate_with_dividend,
     }
+
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
