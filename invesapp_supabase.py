@@ -3069,6 +3069,8 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "除息日期": ex_date,
             "配息金額": div_per_unit if div_per_unit > 0 else None,
             "預估配息金額": total_amount if div_per_unit > 0 else None,
+            "匯率": round(fx, 4) if div_per_unit > 0 else None,
+            "預估配息台幣": round(total_amount * fx, 0) if div_per_unit > 0 else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
     if not rows:
@@ -3162,6 +3164,8 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
         "目前單位數": st.column_config.NumberColumn("目前單位數", format="%,.4f"),
         "配息金額": st.column_config.NumberColumn("配息金額", format="%,.6f"),
         "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%,.2f"),
+        "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
+        "預估配息台幣": st.column_config.NumberColumn("預估配息台幣", format="%,.0f"),
     }
     st.dataframe(
         display_df,
