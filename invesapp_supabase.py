@@ -1027,6 +1027,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             out["fund_code"] = fund_code
             out["fund_pattern"] = fund_pattern
         out.update(calc)
+        out["累計配息匯率"] = fx if calc.get("累計已領配息原幣") is not None else None
         out.update({
             "即時價格/淨值": price,
             "匯率": fx,
@@ -5239,7 +5240,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
                 "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%,.0f"),
                 "價差損益":         st.column_config.NumberColumn("市值損益",   format="%,.0f"),
                 "累計已領配息原幣": st.column_config.NumberColumn("累積配息原幣", format="%,.2f"),
-                "匯率":             st.column_config.NumberColumn("匯率",         format="%,.4f"),
+                "累積配息匯率":     st.column_config.NumberColumn("累積配息匯率", format="%,.4f"),
                 "累計已領配息":     st.column_config.NumberColumn("累積配息",   format="%,.0f"),
                 "含息總損益":       st.column_config.NumberColumn("總損益",     format="%,.0f"),
                 "每月配息":         st.column_config.NumberColumn("月配息",     format="%,.0f"),
