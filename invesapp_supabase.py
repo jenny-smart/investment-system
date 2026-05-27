@@ -956,14 +956,14 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     # 原幣累計配息 × 即時匯率 → 覆蓋台幣累計配息
     div_original = normalize_number(r.get("dividend_received_original", 0), 0)
     currency = normalize_text(r.get("currency", "TWD")).upper()
+
     if div_original > 0 and fx is not None and fx > 0:
         dividend_received_twd = round(div_original * fx, 0)
-    elif currency == "TWD" and dividend_received_total > 0:
-        div_original = dividend_received_total
-        dividend_received_twd = dividend_received_total
+    elif currency == "TWD":
+        div_original = normalize_number(r.get("dividend_received_total", 0), 0)
+        dividend_received_twd = round(div_original, 0)
     else:
-        dividend_received_twd = dividend_received_total
-        div_original = None
+        dividend_received_twd = 0
     total_pnl_with_dividend = pnl + dividend_received_twd if pnl is not None else None
     total_pnl_rate_with_dividend = total_pnl_with_dividend / twd_cost if total_pnl_with_dividend is not None and twd_cost else None
     is_reinvest = bool(r.get("is_reinvest", False))
@@ -2145,8 +2145,12 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     p_rows = p_rows.copy()
     p_rows["_merge_key"] = key_series
 
-    sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計已領配息", "每月配息",
-                  "units", "original_units", "total_cost_input", "dividend_received_total"]
+    sum_cols = [
+        "台幣成本", "台幣市值", "含息總損益", "累計已領配息",
+        "累計已領配息原幣",
+        "每月配息", "units", "original_units",
+        "total_cost_input", "dividend_received_total"
+    ]
     first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
                   "即時價格/淨值", "匯率", "platform", "asset_type", "id"]
 
