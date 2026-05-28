@@ -236,7 +236,7 @@ st.markdown("""
 <style>
 h2, h3, h4 { font-size: 1rem !important; font-weight: 600 !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
-.block-container { padding-top:0.6rem; max-width:1600px; }
+.block-container { padding-top:2.5rem; max-width:1600px; }
 .app-page-title {
     display: block !important;
     margin: 0.2rem 0 0.35rem 0 !important;
