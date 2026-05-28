@@ -4663,7 +4663,7 @@ total_rate  = total_pnl / total_cost if total_cost else None
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="hero">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns(7)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     tw_missing = []
     if not enriched.empty:
         tw_no_price = enriched[
