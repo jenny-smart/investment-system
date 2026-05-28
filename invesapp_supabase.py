@@ -234,11 +234,20 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
-h1, h2, h3, h4 { font-size: 1rem !important; font-weight: 600 !important; }
-h4.app-heading { font-size: 17px !important; font-weight: 700 !important; }
-.app-title { font-size: 17px !important; font-weight: 700 !important; color: #1e293b !important; padding: 6px 0 2px !important; display: block !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
 .block-container { padding-top:0.6rem; max-width:1600px; }
+.app-page-title {
+    display: block !important;
+    margin: 0.2rem 0 0.35rem 0 !important;
+    color: #1e293b !important;
+    font-size: 30px !important;
+    line-height: 1.25 !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+}
+@media (max-width: 640px) {
+    .app-page-title { font-size: 24px !important; }
+}
 .hero { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
 [data-testid="stMetric"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:12px !important; padding:16px 18px !important; box-shadow:0 1px 4px rgba(0,0,0,.05) !important; }
 [data-testid="stMetricValue"] { font-size:1.35rem !important; font-weight:700 !important; }
@@ -2033,8 +2042,8 @@ def editable_platform_table(platform_name: str, current_positions: pd.DataFrame,
             "platform": st.column_config.SelectboxColumn("平台", options=PLATFORMS, required=True),
             "asset_type": st.column_config.SelectboxColumn("類型", options=ASSET_TYPES, required=True),
             "currency": st.column_config.SelectboxColumn("幣別", options=CURRENCIES, required=True),
-            "dividend_received_original_total": st.column_config.NumberColumn("累計配息原幣", format="%.4f"),
-            "dividend_received_total": st.column_config.NumberColumn("累計配息台幣舊欄", format="%.0f"),
+            "dividend_received_original_total": st.column_config.NumberColumn("累計配息原幣", format="localized"),
+            "dividend_received_total": st.column_config.NumberColumn("累計配息台幣舊欄", format="localized"),
             "is_reinvest": st.column_config.CheckboxColumn("配息再投入"),
         }, key=editor_key,
     )
@@ -2702,7 +2711,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             cur   = normalize_text(fr.get("currency","TWD")).upper()
             if not fc or units <= 0:
                 continue
-            # 取 GAS 配息金額（有快取）
+            # 取 GAS 每單位配息（有快取）
             mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
             if not mdiv_per_unit:
                 continue
@@ -2718,7 +2727,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
 
         col_a, col_b = st.columns(2)
         if est_monthly_div > 0:
-            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次配息金額 × 目前單位數）")
+            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次每單位配息 × 目前單位數）")
         if this_month_paid > 0:
             col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
 
@@ -2747,7 +2756,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
                     done_codes.add(fc)
                     updated += 1
             if updated:
-                st.success(f"已更新 {updated} 檔基金每月配息金額。")
+                st.success(f"已更新 {updated} 檔基金每單位月配息。")
                 st.cache_data.clear()
             else:
                 st.info("沒有需要回填的基金每月配息。")
@@ -2977,8 +2986,10 @@ ESTIMATED_DIVIDEND_COLUMNS = [
     "幣別",
     "目前單位數",
     "除息日期",
-    "配息金額",
-    "預估配息金額",
+    "每單位配息",
+    "預估配息原幣",
+    "匯率",
+    "預估配息台幣",
 ]
 
 ACTUAL_DIVIDEND_COLUMNS = [
@@ -2987,10 +2998,13 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "幣別",
     "配息單位數",
     "發放日期",
-    "配息金額",
-    "實際配息金額",
-    "勾選確認",
-    "累計配息金額",
+    "每單位配息",
+    "實際配息原幣",
+    "匯率",
+    "實際配息台幣",
+    "確認入帳",
+    "累計配息原幣",
+    "累計配息台幣",
 ]
 
 
@@ -3177,8 +3191,10 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "幣別": currency,
             "目前單位數": units,
             "除息日期": ex_date,
-            "配息金額": div_per_unit if div_per_unit > 0 else None,
-            "預估配息金額": total_amount if div_per_unit > 0 else None,
+            "每單位配息": div_per_unit if div_per_unit > 0 else None,
+            "預估配息原幣": total_amount if div_per_unit > 0 else None,
+            "匯率": fx,
+            "預估配息台幣": total_amount * fx if div_per_unit > 0 else None,
             "_預估配息台幣": total_amount * fx if div_per_unit > 0 else 0,
         })
     return pd.DataFrame(rows, columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"]).sort_values(["平台", "基金名稱"])
@@ -3227,19 +3243,25 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "幣別": currency,
             "配息單位數": units,
             "發放日期": _format_dividend_date(record.get("pay_date", "")),
-            "配息金額": display_div if display_div > 0 else None,
-            "實際配息金額": total_amount if is_paid or actual_div > 0 else None,
-            "勾選確認": is_paid,
+            "每單位配息": display_div if display_div > 0 else None,
+            "實際配息原幣": total_amount if total_amount is not None else None,
+            "匯率": fx,
+            "實際配息台幣": twd_total if twd_total > 0 else None,
+            "確認入帳": is_paid,
             "_確認前": is_paid,
             "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
+            "_累計用配息台幣": twd_total if is_paid else 0,
             "_實際配息台幣": twd_total,
+            "_fund_code": fund_code,
+            "_platform": platform,
+            "_currency": currency,
             "_id": record.get("id"),
             "_source_table": record.get("_source_table", "fund_dividends"),
             "_fx_rate": fx,
             "_sort_date": _parse_dividend_date(record.get("pay_date", "")),
         })
 
-    internal_cols = ["_確認前", "_累計用配息金額", "_實際配息台幣", "_id", "_source_table", "_fx_rate", "_sort_date"]
+    internal_cols = ["_確認前", "_累計用配息金額", "_累計用配息台幣", "_實際配息台幣", "_fund_code", "_platform", "_currency", "_id", "_source_table", "_fx_rate", "_sort_date"]
     columns = ACTUAL_DIVIDEND_COLUMNS + internal_cols
     if not rows:
         return pd.DataFrame(columns=columns)
@@ -3247,11 +3269,12 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
     df = df.sort_values(["平台", "基金名稱", "幣別", "_sort_date"], ascending=True).reset_index(drop=True)
-    df["累計配息金額"] = (
+    df["累計配息原幣"] = (
         df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息金額"]
         .cumsum()
         .round(2)
     )
+    df["累計配息台幣"] = (df["累計配息原幣"] * df["匯率"]).round(0)
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
 
@@ -3264,8 +3287,10 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
     col_cfg = {
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
         "目前單位數": st.column_config.NumberColumn("目前單位數", format="%.4f"),
-        "配息金額": st.column_config.NumberColumn("配息金額", format="%.6f"),
-        "預估配息金額": st.column_config.NumberColumn("預估配息金額", format="%.2f"),
+        "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
+        "預估配息原幣": st.column_config.NumberColumn("預估配息原幣", format="localized"),
+        "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
+        "預估配息台幣": st.column_config.NumberColumn("預估配息台幣", format="localized"),
     }
     st.dataframe(
         display_df,
@@ -3276,6 +3301,45 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
     )
 
 
+def update_position_dividend_original_total(
+    fund_code: str,
+    platform: str,
+    currency: str,
+    delta_original: float,
+) -> bool:
+    delta_original = normalize_number(delta_original, 0)
+    if not fund_code or delta_original == 0:
+        return False
+    try:
+        rows = supabase_client().table("positions").select(
+            "id,sort_order,fund_code,platform,currency,dividend_received_original_total"
+        ).eq("platform", platform).eq("currency", currency).execute().data or []
+    except Exception:
+        rows = []
+    matched = [
+        row for row in rows
+        if normalize_text(row.get("fund_code", "")).lower() == normalize_text(fund_code).lower()
+    ]
+    if not matched:
+        return False
+    matched = sorted(
+        matched,
+        key=lambda row: (
+            normalize_number(row.get("sort_order", 999999), 999999),
+            normalize_number(row.get("id", 999999), 999999),
+        ),
+    )
+    primary = matched[0]
+    primary_id = int(float(primary["id"]))
+    current_total = normalize_number(primary.get("dividend_received_original_total", 0), 0)
+    new_total = max(0, current_total + delta_original)
+    supabase_client().table("positions").update({
+        "dividend_received_original_total": new_total,
+        "dividend_received_total": 0,
+    }).eq("id", primary_id).execute()
+    return True
+
+
 def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> None:
     if df.empty:
         st.info("目前沒有實際配息記錄。")
@@ -3283,11 +3347,14 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     display_df = df[ACTUAL_DIVIDEND_COLUMNS].copy()
     col_cfg = {
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
-        "配息單位數": st.column_config.NumberColumn("配息單位數", format="%.4f"),
-        "配息金額": st.column_config.NumberColumn("配息金額", format="%.6f"),
-        "實際配息金額": st.column_config.NumberColumn("實際配息金額", format="%.2f"),
-        "勾選確認": st.column_config.CheckboxColumn("勾選確認"),
-        "累計配息金額": st.column_config.NumberColumn("累計配息金額", format="%.2f"),
+        "配息單位數": st.column_config.NumberColumn("配息單位數", format="localized"),
+        "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
+        "實際配息原幣": st.column_config.NumberColumn("實際配息原幣", format="localized"),
+        "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
+        "實際配息台幣": st.column_config.NumberColumn("實際配息台幣", format="localized"),
+        "確認入帳": st.column_config.CheckboxColumn("確認入帳"),
+        "累計配息原幣": st.column_config.NumberColumn("累計配息原幣", format="localized"),
+        "累計配息台幣": st.column_config.NumberColumn("累計配息台幣", format="localized"),
     }
     edited = st.data_editor(
         display_df,
@@ -3295,15 +3362,15 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         hide_index=True,
         height=min(42 * len(display_df) + 44, height_cap),
         column_config=col_cfg,
-        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "勾選確認"],
+        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
         key="actual_dividend_editor",
     )
-    if st.button("💾 儲存勾選確認", key="save_actual_dividend_confirm"):
+    if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
         for idx, row in edited.iterrows():
             old_confirmed = normalize_bool(df.iloc[idx].get("_確認前", False), False)
-            new_confirmed = normalize_bool(row.get("勾選確認", False), False)
+            new_confirmed = normalize_bool(row.get("確認入帳", False), False)
             if old_confirmed == new_confirmed:
                 continue
             row_id = df.iloc[idx].get("_id")
@@ -3311,8 +3378,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             if not row_id:
                 continue
             units = normalize_number(row.get("配息單位數", 0), 0)
-            div_amount = normalize_number(row.get("配息金額", 0), 0)
-            total_amount = normalize_number(row.get("實際配息金額", 0), 0)
+            div_amount = normalize_number(row.get("每單位配息", 0), 0)
+            total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
             if total_amount <= 0 and units > 0 and div_amount > 0:
                 total_amount = units * div_amount
             actual_div = total_amount / units if total_amount > 0 and units > 0 else div_amount
@@ -3325,6 +3392,14 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             if source_table == "fund_dividends":
                 payload["updated_at"] = "now()"
             sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
+            if total_amount > 0:
+                delta_original = total_amount if new_confirmed else -total_amount
+                update_position_dividend_original_total(
+                    normalize_text(df.iloc[idx].get("_fund_code", "")),
+                    normalize_text(df.iloc[idx].get("_platform", "")),
+                    normalize_text(df.iloc[idx].get("_currency", "")),
+                    delta_original,
+                )
             updated += 1
         if updated:
             st.success(f"已更新 {updated} 筆確認狀態。")
@@ -3352,7 +3427,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
         actual_df = actual_df[actual_df["平台"] == selected_platform]
 
     est_twd = estimate_df["_預估配息台幣"].fillna(0).sum() if "_預估配息台幣" in estimate_df else 0
-    paid_df = actual_df[actual_df["勾選確認"] == True] if "勾選確認" in actual_df else pd.DataFrame()
+    paid_df = actual_df[actual_df["確認入帳"] == True] if "確認入帳" in actual_df else pd.DataFrame()
     paid_twd = paid_df["_實際配息台幣"].fillna(0).sum() if not paid_df.empty and "_實際配息台幣" in paid_df else 0
     c1, c2, c3 = st.columns(3)
     c1.metric("預估配息折台幣", money(est_twd))
@@ -3360,11 +3435,11 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     c3.metric("配息記錄筆數", f"{len(actual_df):,}")
 
     st.markdown("#### 預估配息表")
-    st.caption("目前單位數 × 最近一次每單位配息金額；除息日期取離今天最近且小於今天的日期。")
+    st.caption("目前單位數 × 最近一次每單位配息金額 = 預估配息原幣；再乘匯率得到預估配息台幣。除息日期取離今天最近且小於今天的日期。")
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("實際發生時記錄；累計配息金額依平台、基金、幣別分組累計，未勾選確認的列不列入累計。")
+    st.caption("實際配息依發放日記錄；勾選確認入帳後，實際配息原幣會加入持倉的累計配息原幣，並以匯率換算累計配息台幣。")
     render_actual_dividend_table(actual_df)
 
     st.markdown("---")
@@ -3381,13 +3456,13 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
             m_ex_date  = c4.text_input("除息日（YYYY/MM/DD）", key="mdl_ex_date")
             m_pay_date = c5.text_input("發放日（YYYY/MM/DD）", key="mdl_pay_date")
             c6, c7, c8, c9 = st.columns(4)
-            m_div_amt = c6.number_input("配息金額（每單位）", value=0.0, format="%.6f", key="mdl_div_amt")
+            m_div_amt = c6.number_input("每單位配息", value=0.0, format="%.6f", key="mdl_div_amt")
             m_units = c7.number_input("配息單位數", value=0.0, format="%.4f", key="mdl_units")
-            m_actual_total = c8.number_input("實際配息金額（原幣）", value=0.0, format="%.2f", key="mdl_actual_total")
+            m_actual_total = c8.number_input("實際配息原幣", value=0.0, format="%.2f", key="mdl_actual_total")
             m_fx = c9.number_input("匯率", value=1.0, format="%.4f", key="mdl_fx")
             m_total = m_actual_total if m_actual_total > 0 else m_units * m_div_amt
-            st.caption(f"總配息金額：**{money(m_total, 2)} {m_currency}**｜折台幣：**{money(m_total * m_fx)}**")
-            m_is_paid = st.checkbox("已發放（加入實際配息）", key="mdl_is_paid")
+            st.caption(f"總配息原幣：**{money(m_total, 2)} {m_currency}**｜換算台幣：**{money(m_total * m_fx)}**")
+            m_is_paid = st.checkbox("確認入帳（加入累計配息原幣）", key="mdl_is_paid")
             m_note = st.text_input("備註", key="mdl_note")
 
             if st.form_submit_button("💾 新增"):
@@ -3413,6 +3488,13 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
                             "note": m_note or "手動新增",
                         }
                         supabase_client().table("dividend_log").insert(payload).execute()
+                        if m_is_paid and m_total > 0:
+                            update_position_dividend_original_total(
+                                m_fund_code,
+                                m_platform,
+                                m_currency,
+                                m_total,
+                            )
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
@@ -4500,7 +4582,7 @@ def render_cashflow_tab() -> None:
 # APP 主體（標題移到 hero 區塊外，避免被蓋住）
 # ════════════════════════════════════════════════════════════════════════════
 
-st.markdown("#### 📈 Jenny 投資即時市值系統")
+st.markdown('<div class="app-page-title">📈 Jenny 投資即時市值系統</div>', unsafe_allow_html=True)
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
