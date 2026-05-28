@@ -241,7 +241,7 @@ st.markdown("""
     margin: 0.2rem 0 0.35rem 0 !important;
     color: #1e293b !important;
     font-size: 26px !important;
-    line-height: 1.25 !important;
+    line-height: 1 !important;
     font-weight: 800 !important;
     letter-spacing: 0 !important;
 }
