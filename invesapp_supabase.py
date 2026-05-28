@@ -234,6 +234,8 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
+# 在 st.markdown(""" <style> ... </style> """) 裡加這行
+h1, h2, h3 { font-size: inherit !important; font-weight: inherit !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
 .block-container { padding-top:0.6rem; max-width:1600px; }
 .hero { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
@@ -4497,7 +4499,7 @@ def render_cashflow_tab() -> None:
 # APP 主體（標題移到 hero 區塊外，避免被蓋住）
 # ════════════════════════════════════════════════════════════════════════════
 
-st.markdown('<p style="font-size:18px;font-weight:700;margin:0.4rem 0 0.2rem">📈 Jenny 投資即時市值系統</p>', unsafe_allow_html=True)
+st.markdown('<div style="font-size:17px;font-weight:700;padding:6px 0 2px">📈 Jenny 投資即時市值系統</div>', unsafe_allow_html=True)
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
