@@ -4684,7 +4684,7 @@ with st.container():
     c3.metric("總損益（市值）", signed_money(total_pnl_all))
     c4.metric("累計配息", money(total_div_received))
     c5.metric("預估每月配息", money(total_div))
-    c6.metric("投資筆數", f"{len(positions):,}")
+    
     if c7.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
