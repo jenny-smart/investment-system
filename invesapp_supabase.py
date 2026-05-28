@@ -234,7 +234,6 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
-# 在 st.markdown(""" <style> ... </style> """) 裡加這行
 h1, h2, h3 { font-size: inherit !important; font-weight: inherit !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
 .block-container { padding-top:0.6rem; max-width:1600px; }
