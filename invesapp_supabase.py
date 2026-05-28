@@ -4720,7 +4720,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
         # ── 第一排：全局KPI ──
-        g1, g2, g3, g4 = st.columns(5)
+        g1, g2, g3, g4 = st.columns(4)
         g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
         g2.metric("總台幣成本", money(total_cost))
         g3.metric("預估每月配息", money(total_div))
