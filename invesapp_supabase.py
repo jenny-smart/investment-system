@@ -2929,7 +2929,7 @@ def render_history_tab() -> None:
     # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("id,snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
