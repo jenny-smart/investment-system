@@ -28,7 +28,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install packages
-        run: pip install supabase
+        run: pip install supabase yfinance requests
 
       - name: Run snapshot
         run: python record_snapshot.py
