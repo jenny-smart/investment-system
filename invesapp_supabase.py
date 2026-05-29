@@ -4660,6 +4660,32 @@ total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "�
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
 
+# ── 寫入 latest_portfolio_values 供排程讀取 ──────────────────────────────
+try:
+    _platform_val = {}
+    if not enriched.empty:
+        for _plt in ["台股", "美股", "基富通", "渣打基金", "台新基金"]:
+            _platform_val[_plt] = float(
+                enriched[enriched["platform"] == _plt]["台幣市值"].fillna(0).sum()
+            )
+    total_pnl_all   = total_value - total_cost
+    total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
+    _tw_now_str = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    supabase_client().table("latest_portfolio_values").upsert({
+        "id":                  1,
+        "total_twd":           round(total_value, 0),
+        "tw_stock":            round(_platform_val.get("台股", 0), 0),
+        "us_stock":            round(_platform_val.get("美股", 0), 0),
+        "kifutong":            round(_platform_val.get("基富通", 0), 0),
+        "scb":                 round(_platform_val.get("渣打基金", 0), 0),
+        "taishin":             round(_platform_val.get("台新基金", 0), 0),
+        "total_cost":          round(total_cost, 0),
+        "cumulative_dividend": round(total_div_received, 0),
+        "updated_at":          _tw_now_str,
+    }, on_conflict="id").execute()
+except Exception:
+    pass
+
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="hero">', unsafe_allow_html=True)
