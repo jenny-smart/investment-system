@@ -2976,6 +2976,49 @@ def render_history_tab() -> None:
         column_config=col_cfg
     )
 
+# ── 刪除歷史記錄 ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🗑️ 刪除歷史記錄")
+
+    # 重新讀取供刪除用（不受上方 df 篩選影響）
+    try:
+        del_rows = supabase_client().table("portfolio_snapshots") \
+            .select("id,snapshot_at,total_twd,tw_stock,total_cost,cumulative_dividend,trigger,note") \
+            .order("snapshot_at", desc=True) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取失敗：{e}")
+        del_rows = []
+
+    if del_rows:
+        del_df = pd.DataFrame(del_rows)
+        del_df["snapshot_at"] = pd.to_datetime(del_df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+        del_df["選項"] = (
+            del_df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+            + "｜" + del_df["trigger"].fillna("")
+            + "｜總市值 " + del_df["total_twd"].apply(lambda x: f"{x:,.0f}")
+            + "｜累計配息 " + del_df["cumulative_dividend"].apply(lambda x: f"{x:,.0f}")
+        )
+
+        col_a, col_b = st.columns([3, 1])
+        selected = col_a.multiselect(
+            "選擇要刪除的記錄（可多選）",
+            options=del_df["選項"].tolist(),
+            key="del_snapshot_select",
+        )
+
+        if selected:
+            selected_ids = del_df[del_df["選項"].isin(selected)]["id"].tolist()
+            st.warning(f"即將刪除 {len(selected_ids)} 筆記錄，請確認後按刪除。")
+            if col_b.button("🗑️ 確認刪除", key="confirm_del_snapshots"):
+                try:
+                    for sid in selected_ids:
+                        supabase_client().table("portfolio_snapshots") \
+                            .delete().eq("id", int(sid)).execute()
+                    st.success(f"已刪除 {len(selected_ids)} 筆。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"刪除失敗：{e}")
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
