@@ -3453,6 +3453,50 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
 
+    # ── 配息操作按鈕 ──
+    action_col1, action_col2 = st.columns([1, 1])
+    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
+        try:
+            source_positions = globals().get("positions", pd.DataFrame())
+            n = auto_dividend_update(source_positions)
+            if n > 0:
+                st.success(f"配息更新完成：{n} 筆")
+                st.cache_data.clear()
+            else:
+                st.info("目前沒有需要認列或快照的配息。")
+        except Exception as exc:
+            st.warning(f"配息更新失敗：{exc}")
+
+    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
+        source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
+        fund_rows = source[
+            (source["asset_type"] == "基金") &
+            (source["fund_code"].fillna("") != "") &
+            (source["monthly_dividend_per_unit"].fillna(0) == 0)
+        ]
+        if not fund_rows.empty:
+            sb       = supabase_client()
+            updated  = 0
+            done_codes: set[str] = set()
+            for _, fr in fund_rows.iterrows():
+                fc = normalize_text(fr.get("fund_code", ""))
+                if not fc or fc in done_codes:
+                    continue
+                mdiv = _get_gas_monthly_div(fc)
+                if mdiv and mdiv > 0:
+                    sb.table("positions").update(
+                        {"monthly_dividend_per_unit": mdiv}
+                    ).eq("fund_code", fc).execute()
+                    done_codes.add(fc)
+                    updated += 1
+            if updated:
+                st.success(f"已更新 {updated} 檔基金每單位月配息。")
+                st.cache_data.clear()
+            else:
+                st.info("沒有需要回填的基金每月配息。")
+        else:
+            st.info("沒有需要回填的基金每月配息。")
+
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
