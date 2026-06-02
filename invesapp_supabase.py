@@ -2687,6 +2687,37 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         st.info("目前沒有資料。")
         return
 
+    # ── 頂部 5 個 KPI ──
+    summary = enriched.groupby("platform", dropna=False).agg(
+        台幣成本     =("台幣成本",      "sum"),
+        台幣市值     =("台幣市值",      "sum"),
+        含息總損益   =("含息總損益",    "sum"),
+        累計已領配息 =("累計已領配息",  "sum"),
+        每月配息     =("每月配息",      "sum"),
+        價格缺漏     =("即時價格/淨值", lambda s: int(s.isna().sum())),
+        筆數         =("id",            "count"),
+    ).reset_index()
+    summary["含息總損益率"] = summary.apply(
+        lambda r: r["含息總損益"] / r["台幣成本"] if r["台幣成本"] else None, axis=1
+    )
+    summary["_order"] = summary["platform"].apply(
+        lambda x: OVERVIEW_ORDER.index(x) if x in OVERVIEW_ORDER else 999
+    )
+    summary = summary.sort_values("_order")
+
+    card_cols = st.columns(5)
+    for i, (_, r) in enumerate(summary.iterrows()):
+        p    = r["platform"]
+        miss = int(r["價格缺漏"])
+        warn = f" ⚠️{miss}缺" if miss else ""
+        with card_cols[i % 5]:
+            st.metric(
+                f"{PLATFORM_ICONS.get(p, '💼')} {p}{warn}",
+                money(r["台幣市值"] or 0),
+                delta=f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}",
+            )
+            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
+
     # ── 匯率列 ──
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("#### 💱 即時匯率")
