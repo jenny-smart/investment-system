@@ -2444,7 +2444,7 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
         no_price[key_col] = no_price[key_col].fillna("")
         no_uniq  = no_price.drop_duplicates(subset=[key_col] if key_col in no_price.columns else ["name"])
 
-        with st.expander(f"🔧 {platform}：手動補填即時價"):
+            with st.expander(f"🔧 {platform}：手動補填即時價"):
             st.caption("自動抓取失敗時，手動填入現值（原幣）。儲存後按「🔄 更新即時價」重算。")
             with st.form(f"manual_price_form_{platform}"):
                 manual_vals: dict[int, float] = {}
