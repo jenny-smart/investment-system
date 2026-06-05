@@ -3321,7 +3321,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         actual_div = normalize_number(record.get("actual_div_amount", 0), 0)
         fx = normalize_number(record.get("fx_rate", 1), 1)
 
-        group = fund_groups.get((fund_code, platform, currency))
+        group = _find_fund_group(fund_groups, fund_code, platform, currency)
         current_acc_original = 0.0
         current_acc_twd = 0.0
         if group is not None:
