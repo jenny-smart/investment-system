@@ -4702,7 +4702,7 @@ def render_cashflow_tab() -> None:
 # APP 主體（標題移到 hero 區塊外，避免被蓋住）
 # ════════════════════════════════════════════════════════════════════════════
 
-st.markdown('<div class="app-page-title">📈 Jenny 投資即時市值系統</div>', unsafe_allow_html=True)
+st.title("📈 Jenny 投資即時市值系統")
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
