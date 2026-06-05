@@ -4787,9 +4787,8 @@ total_rate  = total_pnl / total_cost if total_cost else None
 
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
-    st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5 = st.columns(5)
-    # 顯示缺報價的台股名稱
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     tw_missing = []
     if not enriched.empty:
         tw_no_price = enriched[
@@ -4802,12 +4801,14 @@ with st.container():
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
     c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
-    # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
     c2.metric("總台幣成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
-    c3.metric("預估每月配息", money(total_div))
-    c4.metric("投資筆數",     f"{len(positions):,}")
+    total_pnl_all = total_value - total_cost
+    total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
+    c3.metric("總損益（市值）", signed_money(total_pnl_all))
+    c4.metric("累計配息", money(total_div_received))
+    c5.metric("預估每月配息", money(total_div))
     if c5.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
     st.markdown("</div></div>", unsafe_allow_html=True)
@@ -4847,8 +4848,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
         g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
         g2.metric("總台幣成本", money(total_cost))
         g3.metric("預估每月配息", money(total_div))
-        g4.metric("投資筆數", f"{len(positions):,}")
-        if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
+        if g4.button("🔄 更新即時價", key=f"refresh_{platform}"):
             st.cache_data.clear(); st.rerun()
         view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
         if view.empty:
