@@ -3605,7 +3605,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
 
-        with st.expander("配息累計除錯", expanded=False):
+    with st.expander("配息累計除錯", expanded=False):
         debug_cols = [
             "平台", "基金名稱", "幣別", "_fund_code", "_platform", "_currency",
             "_目前累計配息原幣", "_目前累計配息台幣", "_source_table",
