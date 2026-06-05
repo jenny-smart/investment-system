@@ -3272,8 +3272,14 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         estimated_div = normalize_number(record.get("div_amount", 0), 0)
         is_paid = normalize_bool(record.get("is_paid", False), False)
         actual_div = normalize_number(record.get("actual_div_amount", 0), 0)
+        fx = normalize_number(record.get("fx_rate", 1), 1)
 
         group = fund_groups.get((fund_code, platform, currency))
+        current_acc_original = 0.0
+        current_acc_twd = 0.0
+        if group is not None:
+            current_acc_original, current_acc_twd = _fund_current_dividend_totals(group, fx)
+
         if group is not None and _is_current_month_date(ex_date):
             calc_current_units, calc_month_purchase_units, calc_dividend_units = _fund_current_month_dividend_units(group, ex_date)
             current_units = calc_current_units
@@ -3286,7 +3292,6 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         display_div = actual_div if actual_div > 0 else estimated_div
         total_amount = units * display_div if units >= 0 and display_div > 0 else None
 
-        fx = normalize_number(record.get("fx_rate", 1), 1)
         twd_total = normalize_number(record.get("twd_total", 0), 0)
         if twd_total <= 0 and total_amount is not None:
             twd_total = total_amount * fx
@@ -3310,6 +3315,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
             "_累計用配息台幣": twd_total if is_paid else 0,
             "_實際配息台幣": twd_total,
+            "_目前累計配息原幣": current_acc_original,
+            "_目前累計配息台幣": current_acc_twd,
             "_fund_code": fund_code,
             "_platform": platform,
             "_currency": currency,
@@ -3323,6 +3330,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
 
     internal_cols = [
         "_確認前", "_累計用配息金額", "_累計用配息台幣", "_實際配息台幣",
+        "_目前累計配息原幣", "_目前累計配息台幣",
         "_fund_code", "_platform", "_currency", "_id", "_source_table",
         "_fx_rate", "_ex_date", "_fund_name", "_sort_date",
     ]
@@ -3333,16 +3341,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
     df = df.sort_values(["平台", "基金名稱", "幣別", "_sort_date"], ascending=True).reset_index(drop=True)
-    df["累計配息原幣"] = (
-        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息金額"]
-        .cumsum()
-        .round(2)
-    )
-    df["累計配息台幣"] = (
-        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息台幣"]
-        .cumsum()
-        .round(0)
-    )
+    df["累計配息原幣"] = df["_目前累計配息原幣"].round(2)
+    df["累計配息台幣"] = df["_目前累計配息台幣"].round(0)
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
 
@@ -3414,11 +3414,11 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     display_df = df[ACTUAL_DIVIDEND_COLUMNS].copy()
     col_cfg = {
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
-        "配息單位數": st.column_config.NumberColumn("配息單位數", format="localized"),
-        "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
         "目前單位數": st.column_config.NumberColumn("目前單位數", format="localized"),
         "當月購買單位數": st.column_config.NumberColumn("當月購買單位數", format="localized"),
+        "配息單位數": st.column_config.NumberColumn("配息單位數", format="localized"),
         "除息日期": st.column_config.TextColumn("除息日期"),
+        "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
         "實際配息原幣": st.column_config.NumberColumn("實際配息原幣", format="localized"),
         "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
         "實際配息台幣": st.column_config.NumberColumn("實際配息台幣", format="localized"),
@@ -3435,7 +3435,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
         key="actual_dividend_editor",
     )
-    if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
+        if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
         for pos, (_, row) in enumerate(edited.iterrows()):
