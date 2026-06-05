@@ -24,7 +24,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-06-05-v36-current-month-ex-dividend-confirm"
+APP_VERSION = "2026-05-28-v35-dividend-original-nonblocking"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -1178,7 +1178,7 @@ def parse_sheet_number(value: Any) -> float | None:
 
 def normalize_sheet_month_label(label: Any) -> str:
     text = str(label).strip()
-    match = re.fullmatch(r"(20\d{2})[-/](\d{1,2})(?:[-/]\d{1,2})?", text)
+    match = re.fullmatch(r"(20\d{2})-/(?:[-/]\d{1,2})?", text)
     if not match:
         return ""
     return f"{match.group(1)}-{int(match.group(2)):02d}"
@@ -2452,7 +2452,7 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
                 for _, row in no_uniq.iterrows():
                     ca, cb = st.columns([3, 1])
                     code   = str(row.get("ticker") or row.get("fund_code") or "")
-                    ca.markdown(f"**{row['name']}**　`{code}`　幣別：{row.get('currency','')}")
+                    ca.markdown(f"**{row['name']}**　{code}　幣別：{row.get('currency','')}")
                     manual_vals[int(row["id"])] = cb.number_input(
                         "現值（原幣）", value=0.0, step=0.0001, format="%.4f",
                         key=f"mp_{platform}_{int(row['id'])}"
@@ -2526,89 +2526,154 @@ def _fund_name_from_rows(rows: list[pd.Series]) -> str:
 
 def auto_dividend_update(positions: pd.DataFrame) -> int:
     """
-    手動執行配息候選更新：
-    - 只看當月除息日，不再依發放日自動認列。
-    - 配息單位數 = 目前單位數 - 當月購買單位數。
-    - 僅寫入/更新未確認的 fund_dividends 候選；實際入帳由使用者在配息記錄表勾選。
+    每次頁面載入自動執行：
+    1. 【快照】今天在 [ex_date-1天, ex_date+2天] 且 fund_dividends 還沒有這筆
+       → 加總同基金所有 units → 寫入 fund_dividends
+    2. 【認列】pay_date <= 今天 且 is_paid=False
+       → twd_total = units_at_ex × actual_div_amount × fx_rate
+       → is_paid = True
+       → dividend_received_original_total += units_at_ex × actual_div_amount（只加到排序第一筆）
     回傳：更新筆數
     """
+    from datetime import date as dt_date
+    today_str = dt_date.today().strftime("%Y/%m/%d")
+    today = dt_date.today()
+
     positions = ensure_columns(pd.DataFrame(positions))
+
     if positions.empty:
         return 0
 
     sb = supabase_client()
     updated = 0
 
+    # 取得所有已有記錄的 fund_dividends
     try:
-        existing_rows = sb.table("fund_dividends").select(
-            "fund_code,fund_name,platform,currency,ex_date,pay_date,is_paid,units_at_ex,div_amount,actual_div_amount,fx_rate,twd_total,id"
-        ).execute()
+        existing_rows = sb.table("fund_dividends").select("fund_code,fund_name,platform,currency,ex_date,pay_date,is_paid,units_at_ex,div_amount,actual_div_amount,fx_rate,twd_total,id").execute()
         existing = {
-            (r["fund_code"], r["platform"], r["currency"], _dividend_key_date(r.get("ex_date", ""))): r
+            (r["fund_code"], r["platform"], r["currency"], r["ex_date"]): r
             for r in (existing_rows.data or [])
         }
     except Exception:
         existing = {}
 
+    # 按基金分組處理
     fund_groups: dict[tuple, list[pd.Series]] = {}
     for _, r in positions.iterrows():
-        if normalize_text(r.get("asset_type", "")) != "基金":
+        if normalize_text(r.get("asset_type","")) != "基金":
             continue
-        fc = normalize_text(r.get("fund_code", ""))
-        plt = normalize_text(r.get("platform", ""))
-        cur = normalize_text(r.get("currency", "TWD"))
+        fc  = normalize_text(r.get("fund_code",""))
+        plt = normalize_text(r.get("platform",""))
+        cur = normalize_text(r.get("currency","TWD"))
         if not fc:
             continue
-        fund_groups.setdefault((fc, plt, cur), []).append(r)
+        key = (fc, plt, cur)
+        fund_groups.setdefault(key, []).append(r)
 
     for (fc, plt, cur), rows in fund_groups.items():
         gas = _get_gas_data(fc)
-        ex_date = gas.get("ex_date")
-        div_amt = gas.get("monthly_div")
-        if not ex_date or not div_amt or not _is_current_month_date(ex_date):
+        ex_date  = gas.get("ex_date")   # YYYY/MM/DD
+        pay_date = gas.get("pay_date")  # YYYY/MM/DD
+        div_amt  = gas.get("monthly_div")
+
+        if not ex_date or not div_amt:
             continue
 
+        # 取即時匯率
         fx_val, _ = fetch_fx(cur)
         fx_val = fx_val or 1.0
-        exist_key = (fc, plt, cur, _dividend_key_date(ex_date))
+
+        exist_key = (fc, plt, cur, ex_date)
         exist_row = existing.get(exist_key)
 
-        current_units = sum(_position_dividend_units(r) for r in rows)
-        month_purchase_units = sum(
-            _position_dividend_units(r)
-            for r in rows
-            if _same_month(r.get("purchase_ym", ""), ex_date)
-        )
-        total_units = max(0.0, current_units - month_purchase_units)
-        if current_units <= 0:
+        # ── Step 1：快照（除息日前後3天內，且還沒有記錄）──
+        diff = _date_diff_days(ex_date)
+        if diff is not None and -1 <= diff <= 2 and not exist_row:
+            # 加總這個基金所有持倉的單位數
+            total_units = sum(
+                _position_dividend_units(r)
+                for r in rows
+                if _position_counts_on_ex_date(r, ex_date)
+            )
+            if total_units > 0:
+                try:
+                    sb.table("fund_dividends").insert({
+                        "fund_code":   fc,
+                        "fund_name":   _fund_name_from_rows(rows),
+                        "platform":    plt,
+                        "currency":    cur,
+                        "ex_date":     ex_date,
+                        "pay_date":    pay_date,
+                        "div_amount":  float(div_amt),
+                        "actual_div_amount": 0,
+                        "units_at_ex": float(total_units),
+                        "fx_rate":     float(fx_val),
+                        "twd_total":   0,
+                        "is_paid":     False,
+                    }).execute()
+                    exist_row = {
+                        "fund_code": fc, "platform": plt, "currency": cur,
+                        "ex_date": ex_date, "pay_date": pay_date,
+                        "div_amount": div_amt, "units_at_ex": total_units,
+                        "actual_div_amount": 0, "fx_rate": fx_val, "is_paid": False,
+                    }
+                    updated += 1
+                except Exception:
+                    pass  # 唯一鍵衝突表示已存在
+
+        # ── Step 2：認列（發放日已到，且 is_paid=False）──
+        if not exist_row:
+            continue
+        if exist_row.get("is_paid"):
+            continue
+        if not pay_date:
             continue
 
-        payload = {
-            "fund_code": fc,
-            "fund_name": _fund_name_from_rows(rows),
-            "platform": plt,
-            "currency": cur,
-            "ex_date": ex_date,
-            "pay_date": "",
-            "div_amount": float(div_amt),
-            "actual_div_amount": 0,
-            "units_at_ex": float(total_units),
-            "fx_rate": float(fx_val),
-            "twd_total": 0,
-            "is_paid": False,
-            "note": f"當月除息候選：目前 {current_units:.4f} - 當月買入 {month_purchase_units:.4f}",
-        }
+        diff_pay = _date_diff_days(pay_date)
+        if diff_pay is None or diff_pay > 0:
+            continue  # 發放日還沒到
+
+        # 計算台幣配息總額
+        units_at_ex = float(exist_row.get("units_at_ex") or 0)
+        fx_at_ex    = float(exist_row.get("fx_rate") or fx_val)
+        div_amount  = float(exist_row.get("div_amount") or div_amt)
+        actual_div_amount = float(exist_row.get("actual_div_amount") or div_amount)
+        twd_total   = units_at_ex * actual_div_amount * fx_at_ex
+
+        if twd_total <= 0:
+            continue
+
+        # 更新 fund_dividends
         try:
-            if not exist_row:
-                sb.table("fund_dividends").insert(payload).execute()
-                updated += 1
-            elif not normalize_bool(exist_row.get("is_paid", False), False):
-                row_id = exist_row.get("id")
-                if row_id:
-                    update_payload = dict(payload)
-                    update_payload["updated_at"] = "now()"
-                    sb.table("fund_dividends").update(update_payload).eq("id", int(row_id)).execute()
-                    updated += 1
+            row_id = exist_row.get("id")
+            if row_id:
+                sb.table("fund_dividends").update({
+                    "is_paid":   True,
+                    "twd_total": twd_total,
+                    "actual_div_amount": actual_div_amount,
+                    "fx_rate":   fx_at_ex,
+                    "updated_at": "now()",
+                }).eq("id", int(row_id)).execute()
+
+            # 加到 positions 的原幣累積配息（只加到同基金排序第一筆）
+            pos_rows = sorted(
+                rows,
+                key=lambda r: (
+                    normalize_number(r.get("sort_order", 999999), 999999),
+                    normalize_number(r.get("id", 999999), 999999),
+                ),
+            )
+            primary_id = int(float(pos_rows[0].get("id")))
+            original_total = units_at_ex * actual_div_amount
+            cur_original_total = normalize_number(pos_rows[0].get("dividend_received_original_total", 0), 0)
+            cur_total = normalize_number(pos_rows[0].get("dividend_received_total", 0), 0)
+            sb.table("positions").update({
+                "dividend_received_original_total": cur_original_total + original_total,
+                "dividend_received_total": cur_total + twd_total,
+                "dividend_pay_date": pay_date,
+            }).eq("id", primary_id).execute()
+
+            updated += 1
         except Exception:
             pass
 
@@ -2621,82 +2686,6 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
     if enriched.empty:
         st.info("目前沒有資料。")
         return
-
-    action_col1, action_col2 = st.columns([1, 1])
-    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
-        try:
-            source_positions = globals().get("positions", pd.DataFrame())
-            n = auto_dividend_update(source_positions)
-            if n > 0:
-                st.success(f"配息更新完成：{n} 筆")
-                st.cache_data.clear()
-            else:
-                st.info("目前沒有需要認列或快照的配息。")
-        except Exception as exc:
-            st.warning(f"配息更新失敗：{exc}")
-
-    # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
-    # 即時計算，不寫回 Supabase，只用於顯示
-    if not enriched.empty:
-        est_monthly_div = 0.0
-        fx_cache_local: dict[str, float] = {}
-        for _, fr in enriched.iterrows():
-            if normalize_text(fr.get("asset_type","")) != "基金":
-                continue
-            fc    = normalize_text(fr.get("fund_code",""))
-            units = normalize_number(fr.get("市值股數", fr.get("units", 0)), 0)
-            cur   = normalize_text(fr.get("currency","TWD")).upper()
-            if not fc or units <= 0:
-                continue
-            # 取 GAS 每單位配息（有快取）
-            mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
-            if not mdiv_per_unit:
-                continue
-            # 取匯率
-            if cur not in fx_cache_local:
-                fx_val, _ = fetch_fx(cur)
-                fx_cache_local[cur] = fx_val or 1.0
-            fx_val = fx_cache_local[cur]
-            est_monthly_div += units * mdiv_per_unit * fx_val
-        # 本月已認列配息若需要精算，按上方配息按鈕後到配息記錄頁查看；
-        # 總覽避免額外 Supabase 查詢，減少初次載入卡住。
-        this_month_paid = 0.0
-
-        col_a, col_b = st.columns(2)
-        if est_monthly_div > 0:
-            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次每單位配息 × 目前單位數）")
-        if this_month_paid > 0:
-            col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
-
-    # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
-    # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
-    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
-        fund_rows = enriched[
-            (enriched["asset_type"] == "基金") &
-            (enriched["fund_code"].fillna("") != "") &
-            (enriched["monthly_dividend_per_unit"].fillna(0) == 0)
-        ]
-        if not fund_rows.empty:
-            sb       = supabase_client()
-            updated  = 0
-            done_codes: set[str] = set()
-            for _, fr in fund_rows.iterrows():
-                fc = normalize_text(fr.get("fund_code", ""))
-                if not fc or fc in done_codes:
-                    continue
-                mdiv = _get_gas_monthly_div(fc)
-                if mdiv and mdiv > 0:
-                    # 更新 Supabase 裡所有相同 fund_code 的列
-                    sb.table("positions").update(
-                        {"monthly_dividend_per_unit": mdiv}
-                    ).eq("fund_code", fc).execute()
-                    done_codes.add(fc)
-                    updated += 1
-            if updated:
-                st.success(f"已更新 {updated} 檔基金每單位月配息。")
-                st.cache_data.clear()
-            else:
-                st.info("沒有需要回填的基金每月配息。")
 
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
@@ -2764,42 +2753,37 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
+    """直接使用已計算好的全域 enriched 數值，與總覽 hero bar 保持一致"""
+    global enriched, total_value, total_cost, total_pnl_all, total_div_received
+
     if enriched is None or enriched.empty:
         return {}
 
     platform_val: dict[str, float] = {
         "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
     }
-    total_cost_sum = 0.0
-    total_div_sum  = 0.0
 
     for _, r in enriched.iterrows():
         plt = normalize_text(r.get("platform", ""))
         val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
         if plt in platform_val and val:
             platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
 
-    total = sum(platform_val.values())
     from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
     return {
-        "total_twd":           round(total, 0),
+        "total_twd":           round(total_value, 0),
         "tw_stock":            round(platform_val["台股"], 0),
         "us_stock":            round(platform_val["美股"], 0),
         "kifutong":            round(platform_val["基富通"], 0),
         "scb":                 round(platform_val["渣打基金"], 0),
         "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
-        "cumulative_dividend": round(total_div_sum, 0),
+        "total_cost":          round(total_cost, 0),
+        "total_pnl":           round(total_value - total_cost, 0),
+        "cumulative_dividend": round(total_div_received, 0),
         "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+        "note":                f"手動快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
     }
 
 
@@ -2869,7 +2853,7 @@ def render_history_tab() -> None:
     # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("id,snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
@@ -2916,6 +2900,49 @@ def render_history_tab() -> None:
         column_config=col_cfg
     )
 
+    # ── 刪除歷史記錄 ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🗑️ 刪除歷史記錄")
+
+    # 重新讀取供刪除用（不受上方 df 篩選影響）
+    try:
+        del_rows = supabase_client().table("portfolio_snapshots") \
+            .select("id,snapshot_at,total_twd,tw_stock,total_cost,cumulative_dividend,trigger,note") \
+            .order("snapshot_at", desc=True) \
+            .execute().data or []
+    except Exception as e:
+        st.error(f"讀取失敗：{e}")
+        del_rows = []
+
+    if del_rows:
+        del_df = pd.DataFrame(del_rows)
+        del_df["snapshot_at"] = pd.to_datetime(del_df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+        del_df["選項"] = (
+            del_df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+            + "｜" + del_df["trigger"].fillna("")
+            + "｜總市值 " + del_df["total_twd"].apply(lambda x: f"{x:,.0f}")
+            + "｜累計配息 " + del_df["cumulative_dividend"].apply(lambda x: f"{x:,.0f}")
+        )
+
+        col_a, col_b = st.columns([3, 1])
+        selected = col_a.multiselect(
+            "選擇要刪除的記錄（可多選）",
+            options=del_df["選項"].tolist(),
+            key="del_snapshot_select",
+        )
+
+        if selected:
+            selected_ids = del_df[del_df["選項"].isin(selected)]["id"].tolist()
+            st.warning(f"即將刪除 {len(selected_ids)} 筆記錄，請確認後按刪除。")
+            if col_b.button("🗑️ 確認刪除", key="confirm_del_snapshots"):
+                try:
+                    for sid in selected_ids:
+                        supabase_client().table("portfolio_snapshots") \
+                            .delete().eq("id", int(sid)).execute()
+                    st.success(f"已刪除 {len(selected_ids)} 筆。")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"刪除失敗：{e}")
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
@@ -2933,10 +2960,8 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "平台",
     "基金名稱",
     "幣別",
-    "目前單位數",
-    "當月購買單位數",
     "配息單位數",
-    "除息日期",
+    "發放日期",
     "每單位配息",
     "實際配息原幣",
     "匯率",
@@ -2979,11 +3004,6 @@ def _format_dividend_date(value: Any) -> str:
         return normalize_text(value, "—") or "—"
     return parsed.strftime("%Y/%m/%d")
 
-def _dividend_key_date(value: Any) -> str:
-    parsed = _parse_dividend_date(value)
-    if parsed is None:
-        return normalize_text(value, "")
-    return parsed.strftime("%Y/%m/%d")
 
 def _latest_past_date(values: list[Any]) -> str:
     today = tw_now().date()
@@ -3005,7 +3025,7 @@ def _combined_dividend_records() -> list[dict[str, Any]]:
             normalize_text(r.get("fund_code", "")),
             normalize_text(r.get("platform", "")),
             normalize_text(r.get("currency", "")),
-            _dividend_key_date(r.get("ex_date", "")),
+            normalize_text(r.get("ex_date", "")),
         )
         for r in records
     }
@@ -3014,7 +3034,7 @@ def _combined_dividend_records() -> list[dict[str, Any]]:
             normalize_text(record.get("fund_code", "")),
             normalize_text(record.get("platform", "")),
             normalize_text(record.get("currency", "")),
-            _dividend_key_date(record.get("ex_date", "")),
+            normalize_text(record.get("ex_date", "")),
         )
         if key not in existing_keys:
             copy = dict(record)
@@ -3074,115 +3094,6 @@ def _latest_past_record(records: list[dict[str, Any]], date_col: str) -> dict[st
         return None
     return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
 
-def _is_current_month_date(value: Any) -> bool:
-    parsed = _parse_dividend_date(value)
-    if parsed is None:
-        return False
-    today = tw_now().date()
-    return parsed.year == today.year and parsed.month == today.month
-
-
-def _same_month(left: Any, right: Any) -> bool:
-    left_dt = _parse_dividend_date(left)
-    right_dt = _parse_dividend_date(right)
-    if left_dt is None or right_dt is None:
-        return False
-    return left_dt.year == right_dt.year and left_dt.month == right_dt.month
-
-
-def _fund_group_key_from_row(row: pd.Series) -> tuple[str, str, str] | None:
-    fund_code = normalize_text(row.get("fund_code", ""))
-    platform = normalize_text(row.get("platform", ""))
-    currency = normalize_text(row.get("currency", ""))
-    if not fund_code:
-        return None
-    return (fund_code, platform, currency)
-
-
-def _fund_group_rows(enriched_df: pd.DataFrame | None) -> dict[tuple[str, str, str], pd.DataFrame]:
-    if enriched_df is None or enriched_df.empty:
-        return {}
-    funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
-    if funds.empty:
-        return {}
-    groups: dict[tuple[str, str, str], list[pd.Series]] = {}
-    for _, row in funds.iterrows():
-        key = _fund_group_key_from_row(row)
-        if key is None:
-            continue
-        groups.setdefault(key, []).append(row)
-    return {key: pd.DataFrame(rows) for key, rows in groups.items()}
-
-
-def _fund_current_month_dividend_units(grp: pd.DataFrame, ex_date: Any) -> tuple[float, float, float]:
-    current_units = 0.0
-    month_purchase_units = 0.0
-    for _, row in grp.iterrows():
-        row_units = _position_dividend_units(row)
-        current_units += row_units
-        if _same_month(row.get("purchase_ym", ""), ex_date):
-            month_purchase_units += row_units
-    dividend_units = max(0.0, current_units - month_purchase_units)
-    return current_units, month_purchase_units, dividend_units
-
-
-def _group_first_positive(grp: pd.DataFrame, column: str) -> float:
-    if column not in grp:
-        return 0.0
-    return _first_positive(grp[column].tolist())
-
-
-def _current_month_dividend_candidates(
-    enriched_df: pd.DataFrame | None,
-    existing_keys: set[tuple[str, str, str, str]],
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for (fund_code, platform, currency), grp in _fund_group_rows(enriched_df).items():
-        gas = _get_gas_data(fund_code) if fund_code else {}
-        ex_date = normalize_text(gas.get("ex_date", ""))
-        if not ex_date or not _is_current_month_date(ex_date):
-            continue
-        key = (fund_code, platform, currency, _dividend_key_date(ex_date))
-        if key in existing_keys:
-            continue
-
-        div_per_unit = _group_first_positive(grp, "每單位月配息估算")
-        if div_per_unit <= 0:
-            div_per_unit = _group_first_positive(grp, "monthly_dividend_per_unit")
-        if div_per_unit <= 0:
-            div_per_unit = normalize_number(gas.get("monthly_div"), 0)
-        if div_per_unit <= 0:
-            continue
-
-        current_units, month_purchase_units, dividend_units = _fund_current_month_dividend_units(grp, ex_date)
-        if current_units <= 0:
-            continue
-
-        fx = _group_first_positive(grp, "匯率")
-        if fx <= 0:
-            fx, _ = fetch_fx(currency)
-            fx = fx or 1.0
-
-        total_amount = dividend_units * div_per_unit
-        candidates.append({
-            "fund_code": fund_code,
-            "fund_name": _fund_name_from_rows([r for _, r in grp.iterrows()]),
-            "platform": platform,
-            "currency": currency,
-            "ex_date": ex_date,
-            "pay_date": "",
-            "div_amount": div_per_unit,
-            "actual_div_amount": 0,
-            "units_at_ex": dividend_units,
-            "fx_rate": fx,
-            "twd_total": total_amount * fx,
-            "is_paid": False,
-            "note": "當月除息候選",
-            "_source_table": "dividend_log_candidate",
-            "_current_units": current_units,
-            "_month_purchase_units": month_purchase_units,
-        })
-    return candidates
 
 def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if enriched_df is None or enriched_df.empty:
@@ -3263,24 +3174,12 @@ def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
 def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     name_lookup = _fund_name_lookup(enriched_df)
     records = _combined_dividend_records()
-    existing_keys = {
-        (
-            normalize_text(record.get("fund_code", "")),
-            normalize_text(record.get("platform", "")),
-            normalize_text(record.get("currency", "")),
-            _dividend_key_date(record.get("ex_date", "")),
-        )
-        for record in records
-    }
-    records = records + _current_month_dividend_candidates(enriched_df, existing_keys)
-    fund_groups = _fund_group_rows(enriched_df)
 
     rows: list[dict[str, Any]] = []
     for record in records:
         fund_code = normalize_text(record.get("fund_code", ""))
         platform = normalize_text(record.get("platform", ""))
         currency = normalize_text(record.get("currency", ""))
-        ex_date = normalize_text(record.get("ex_date", ""))
         name = (
             normalize_text(record.get("fund_name", ""))
             or name_lookup.get((fund_code, platform, currency), "")
@@ -3288,42 +3187,26 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             or name_lookup.get((fund_code, "", ""), "")
             or fund_code
         )
-
         units = normalize_number(record.get("units_at_ex", 0), 0)
-        current_units = normalize_number(record.get("_current_units", None), None)
-        month_purchase_units = normalize_number(record.get("_month_purchase_units", None), None)
         estimated_div = normalize_number(record.get("div_amount", 0), 0)
         is_paid = normalize_bool(record.get("is_paid", False), False)
         actual_div = normalize_number(record.get("actual_div_amount", 0), 0)
-
-        group = fund_groups.get((fund_code, platform, currency))
-        if group is not None and _is_current_month_date(ex_date):
-            calc_current_units, calc_month_purchase_units, calc_dividend_units = _fund_current_month_dividend_units(group, ex_date)
-            current_units = calc_current_units
-            month_purchase_units = calc_month_purchase_units
-            if not is_paid:
-                units = calc_dividend_units
-
         if is_paid and actual_div <= 0:
             actual_div = estimated_div
         display_div = actual_div if actual_div > 0 else estimated_div
-        total_amount = units * display_div if units >= 0 and display_div > 0 else None
-
+        total_amount = units * display_div if units > 0 and display_div > 0 else None
         fx = normalize_number(record.get("fx_rate", 1), 1)
         twd_total = normalize_number(record.get("twd_total", 0), 0)
         if twd_total <= 0 and total_amount is not None:
             twd_total = total_amount * fx
         if total_amount is None and twd_total > 0 and fx > 0:
             total_amount = twd_total / fx
-
         rows.append({
             "平台": platform,
             "基金名稱": name,
             "幣別": currency,
-            "目前單位數": current_units,
-            "當月購買單位數": month_purchase_units,
             "配息單位數": units,
-            "除息日期": _format_dividend_date(ex_date),
+            "發放日期": _format_dividend_date(record.get("pay_date", "")),
             "每單位配息": display_div if display_div > 0 else None,
             "實際配息原幣": total_amount if total_amount is not None else None,
             "匯率": fx,
@@ -3339,16 +3222,10 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "_id": record.get("id"),
             "_source_table": record.get("_source_table", "fund_dividends"),
             "_fx_rate": fx,
-            "_ex_date": ex_date,
-            "_fund_name": name,
-            "_sort_date": _parse_dividend_date(ex_date),
+            "_sort_date": _parse_dividend_date(record.get("pay_date", "")),
         })
 
-    internal_cols = [
-        "_確認前", "_累計用配息金額", "_累計用配息台幣", "_實際配息台幣",
-        "_fund_code", "_platform", "_currency", "_id", "_source_table",
-        "_fx_rate", "_ex_date", "_fund_name", "_sort_date",
-    ]
+    internal_cols = ["_確認前", "_累計用配息金額", "_累計用配息台幣", "_實際配息台幣", "_fund_code", "_platform", "_currency", "_id", "_source_table", "_fx_rate", "_sort_date"]
     columns = ACTUAL_DIVIDEND_COLUMNS + internal_cols
     if not rows:
         return pd.DataFrame(columns=columns)
@@ -3361,11 +3238,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         .cumsum()
         .round(2)
     )
-    df["累計配息台幣"] = (
-        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息台幣"]
-        .cumsum()
-        .round(0)
-    )
+    df["累計配息台幣"] = (df["累計配息原幣"] * df["匯率"]).round(0)
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
 
@@ -3440,9 +3313,6 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "基金名稱": st.column_config.TextColumn("基金名稱", width="large"),
         "配息單位數": st.column_config.NumberColumn("配息單位數", format="localized"),
         "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
-        "目前單位數": st.column_config.NumberColumn("目前單位數", format="localized"),
-        "當月購買單位數": st.column_config.NumberColumn("當月購買單位數", format="localized"),
-        "除息日期": st.column_config.TextColumn("除息日期"),
         "實際配息原幣": st.column_config.NumberColumn("實際配息原幣", format="localized"),
         "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
         "實際配息台幣": st.column_config.NumberColumn("實際配息台幣", format="localized"),
@@ -3462,67 +3332,39 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
-        for pos, (_, row) in enumerate(edited.iterrows()):
-            source_row = df.iloc[pos]
-            old_confirmed = normalize_bool(source_row.get("_確認前", False), False)
+        for idx, row in edited.iterrows():
+            old_confirmed = normalize_bool(df.iloc[idx].get("_確認前", False), False)
             new_confirmed = normalize_bool(row.get("確認入帳", False), False)
             if old_confirmed == new_confirmed:
                 continue
-
-            row_id = source_row.get("_id")
-            source_table = normalize_text(source_row.get("_source_table", "fund_dividends"), "fund_dividends")
+            row_id = df.iloc[idx].get("_id")
+            source_table = normalize_text(df.iloc[idx].get("_source_table", "fund_dividends"), "fund_dividends")
+            if not row_id:
+                continue
             units = normalize_number(row.get("配息單位數", 0), 0)
             div_amount = normalize_number(row.get("每單位配息", 0), 0)
             total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
             if total_amount <= 0 and units > 0 and div_amount > 0:
                 total_amount = units * div_amount
             actual_div = total_amount / units if total_amount > 0 and units > 0 else div_amount
-            fx = normalize_number(source_row.get("_fx_rate", 1), 1)
-
+            fx = normalize_number(df.iloc[idx].get("_fx_rate", 1), 1)
             payload = {
                 "is_paid": new_confirmed,
                 "actual_div_amount": actual_div,
                 "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
             }
-
-            row_id_text = normalize_text(row_id, "")
-            has_row_id = row_id is not None and row_id_text not in {"", "nan", "None"}
-            if source_table == "dividend_log_candidate":
-                if not new_confirmed:
-                    continue
-                insert_payload = {
-                    "fund_code": normalize_text(source_row.get("_fund_code", "")),
-                    "fund_name": normalize_text(source_row.get("_fund_name", row.get("基金名稱", ""))),
-                    "platform": normalize_text(source_row.get("_platform", "")),
-                    "currency": normalize_text(source_row.get("_currency", "")),
-                    "ex_date": normalize_text(source_row.get("_ex_date", row.get("除息日期", ""))),
-                    "pay_date": "",
-                    "div_amount": div_amount,
-                    "actual_div_amount": actual_div,
-                    "units_at_ex": units,
-                    "fx_rate": fx,
-                    "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
-                    "is_paid": True,
-                    "note": f"當月除息確認入帳 {tw_now().strftime('%Y/%m/%d')}",
-                }
-                sb.table("dividend_log").insert(insert_payload).execute()
-            elif has_row_id:
-                if source_table == "fund_dividends":
-                    payload["updated_at"] = "now()"
-                sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
-            else:
-                continue
-
+            if source_table == "fund_dividends":
+                payload["updated_at"] = "now()"
+            sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
             if total_amount > 0:
                 delta_original = total_amount if new_confirmed else -total_amount
                 update_position_dividend_original_total(
-                    normalize_text(source_row.get("_fund_code", "")),
-                    normalize_text(source_row.get("_platform", "")),
-                    normalize_text(source_row.get("_currency", "")),
+                    normalize_text(df.iloc[idx].get("_fund_code", "")),
+                    normalize_text(df.iloc[idx].get("_platform", "")),
+                    normalize_text(df.iloc[idx].get("_currency", "")),
                     delta_original,
                 )
             updated += 1
-
         if updated:
             st.success(f"已更新 {updated} 筆確認狀態。")
             st.cache_data.clear()
@@ -3535,6 +3377,50 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
 
+    # ── 配息操作按鈕 ──
+    action_col1, action_col2 = st.columns([1, 1])
+    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
+        try:
+            source_positions = globals().get("positions", pd.DataFrame())
+            n = auto_dividend_update(source_positions)
+            if n > 0:
+                st.success(f"配息更新完成：{n} 筆")
+                st.cache_data.clear()
+            else:
+                st.info("目前沒有需要認列或快照的配息。")
+        except Exception as exc:
+            st.warning(f"配息更新失敗：{exc}")
+
+    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
+        source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
+        fund_rows = source[
+            (source["asset_type"] == "基金") &
+            (source["fund_code"].fillna("") != "") &
+            (source["monthly_dividend_per_unit"].fillna(0) == 0)
+        ]
+        if not fund_rows.empty:
+            sb       = supabase_client()
+            updated  = 0
+            done_codes: set[str] = set()
+            for _, fr in fund_rows.iterrows():
+                fc = normalize_text(fr.get("fund_code", ""))
+                if not fc or fc in done_codes:
+                    continue
+                mdiv = _get_gas_monthly_div(fc)
+                if mdiv and mdiv > 0:
+                    sb.table("positions").update(
+                        {"monthly_dividend_per_unit": mdiv}
+                    ).eq("fund_code", fc).execute()
+                    done_codes.add(fc)
+                    updated += 1
+            if updated:
+                st.success(f"已更新 {updated} 檔基金每單位月配息。")
+                st.cache_data.clear()
+            else:
+                st.info("沒有需要回填的基金每月配息。")
+        else:
+            st.info("沒有需要回填的基金每月配息。")
+
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
@@ -3545,8 +3431,8 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     )
     selected_platform = st.selectbox("篩選平台", ["全部"] + platforms, key="div_record_platform")
     if selected_platform != "全部":
-        estimate_df = estimate_df[estimate_df["平台"] == selected_platform].reset_index(drop=True)
-        actual_df = actual_df[actual_df["平台"] == selected_platform].reset_index(drop=True)
+        estimate_df = estimate_df[estimate_df["平台"] == selected_platform]
+        actual_df = actual_df[actual_df["平台"] == selected_platform]
 
     est_twd = estimate_df["_預估配息台幣"].fillna(0).sum() if "_預估配息台幣" in estimate_df else 0
     paid_df = actual_df[actual_df["確認入帳"] == True] if "確認入帳" in actual_df else pd.DataFrame()
@@ -3561,13 +3447,13 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("實際配息改依當月除息日列出；配息單位數 = 目前單位數 - 當月購買單位數。勾選確認入帳後，實際配息原幣會加入持倉累計配息。")
+    st.caption("實際配息依發放日記錄；勾選確認入帳後，實際配息原幣會加入持倉的累計配息原幣，並以匯率換算累計配息台幣。")
     render_actual_dividend_table(actual_df)
 
     st.markdown("---")
 
     with st.expander("➕ 手動新增配息記錄（補填歷史）"):
-        st.caption("用於補填歷史配息；實際配息留 0 時，確認入帳記錄會用每單位配息 × 配息單位數代入。")
+        st.caption("用於補填歷史配息；實際配息留 0 時，已發放記錄會用預估配息代入。")
         with st.form("manual_div_log"):
             c1, c2, c3 = st.columns(3)
             m_platform  = c1.selectbox("平台", PLATFORMS[2:], key="mdl_platform")
@@ -4785,6 +4671,32 @@ total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "�
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
 
+# ── 寫入 latest_portfolio_values 供排程讀取 ──────────────────────────────
+try:
+    _platform_val = {}
+    if not enriched.empty:
+        for _plt in ["台股", "美股", "基富通", "渣打基金", "台新基金"]:
+            _platform_val[_plt] = float(
+                enriched[enriched["platform"] == _plt]["台幣市值"].fillna(0).sum()
+            )
+    total_pnl_all   = total_value - total_cost
+    total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
+    _tw_now_str = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+    supabase_client().table("latest_portfolio_values").upsert({
+        "id":                  1,
+        "total_twd":           round(total_value, 0),
+        "tw_stock":            round(_platform_val.get("台股", 0), 0),
+        "us_stock":            round(_platform_val.get("美股", 0), 0),
+        "kifutong":            round(_platform_val.get("基富通", 0), 0),
+        "scb":                 round(_platform_val.get("渣打基金", 0), 0),
+        "taishin":             round(_platform_val.get("台新基金", 0), 0),
+        "total_cost":          round(total_cost, 0),
+        "cumulative_dividend": round(total_div_received, 0),
+        "updated_at":          _tw_now_str,
+    }, on_conflict="id").execute()
+except Exception:
+    pass
+
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="hero">', unsafe_allow_html=True)
@@ -4809,9 +4721,10 @@ with st.container():
     c3.metric("總損益（市值）", signed_money(total_pnl_all))
     c4.metric("累計配息", money(total_div_received))
     c5.metric("預估每月配息", money(total_div))
-    if c5.button("🔄 更新即時價"):
+    
+    if c6.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
-    st.markdown("</div></div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表", "💵 現金流"])
 
@@ -4844,7 +4757,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
         # ── 第一排：全局KPI ──
-        g1, g2, g3, g4, g5 = st.columns(5)
+        g1, g2, g3, g4 = st.columns(4)
         g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
         g2.metric("總台幣成本", money(total_cost))
         g3.metric("預估每月配息", money(total_div))
