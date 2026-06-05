@@ -234,6 +234,7 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
+h1 a { display: none !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
 .block-container { padding-top:0.6rem; max-width:1600px; }
 .app-page-title {
