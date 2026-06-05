@@ -24,7 +24,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-05-28-v35-dividend-original-nonblocking"
+APP_VERSION = "2026-06-05-v36-current-month-ex-dividend-confirm"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -2996,8 +2996,10 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "平台",
     "基金名稱",
     "幣別",
+    "目前單位數",
+    "當月購買單位數",
     "配息單位數",
-    "發放日期",
+    "除息日期",
     "每單位配息",
     "實際配息原幣",
     "匯率",
