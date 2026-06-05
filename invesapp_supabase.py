@@ -3605,18 +3605,18 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
 
-    with st.expander("配息累計除錯", expanded=False):
+        with st.expander("配息累計除錯", expanded=False):
         debug_cols = [
             "平台", "基金名稱", "幣別", "_fund_code", "_platform", "_currency",
             "_目前累計配息原幣", "_目前累計配息台幣", "_source_table",
         ]
-     existing_debug_cols = [col for col in debug_cols if col in actual_df.columns]
-     st.dataframe(actual_df[existing_debug_cols], use_container_width=True, hide_index=True)
+        existing_debug_cols = [col for col in debug_cols if col in actual_df.columns]
+        st.dataframe(actual_df[existing_debug_cols], use_container_width=True, hide_index=True)
 
-     platforms = sorted(
+    platforms = sorted(
         set(estimate_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
         | set(actual_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
-        )
+    )
     selected_platform = st.selectbox("篩選平台", ["全部"] + platforms, key="div_record_platform")
     if selected_platform != "全部":
         estimate_df = estimate_df[estimate_df["平台"] == selected_platform].reset_index(drop=True)
@@ -3625,6 +3625,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     est_twd = estimate_df["_預估配息台幣"].fillna(0).sum() if "_預估配息台幣" in estimate_df else 0
     paid_df = actual_df[actual_df["確認入帳"] == True] if "確認入帳" in actual_df else pd.DataFrame()
     paid_twd = paid_df["_實際配息台幣"].fillna(0).sum() if not paid_df.empty and "_實際配息台幣" in paid_df else 0
+
     c1, c2, c3 = st.columns(3)
     c1.metric("預估配息折台幣", money(est_twd))
     c2.metric("已確認實際配息折台幣", money(paid_twd))
@@ -3644,20 +3645,24 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
         st.caption("用於補填歷史配息；實際配息留 0 時，確認入帳記錄會用每單位配息 × 配息單位數代入。")
         with st.form("manual_div_log"):
             c1, c2, c3 = st.columns(3)
-            m_platform  = c1.selectbox("平台", PLATFORMS[2:], key="mdl_platform")
-            m_currency  = c2.selectbox("幣別", CURRENCIES[1:], key="mdl_currency")
+            m_platform = c1.selectbox("平台", PLATFORMS[2:], key="mdl_platform")
+            m_currency = c2.selectbox("幣別", CURRENCIES[1:], key="mdl_currency")
             m_fund_code = c3.text_input("基金代號", key="mdl_fund_code")
             m_fund_name = st.text_input("基金名稱", key="mdl_fund_name")
+
             c4, c5 = st.columns(2)
-            m_ex_date  = c4.text_input("除息日（YYYY/MM/DD）", key="mdl_ex_date")
+            m_ex_date = c4.text_input("除息日（YYYY/MM/DD）", key="mdl_ex_date")
             m_pay_date = c5.text_input("發放日（YYYY/MM/DD）", key="mdl_pay_date")
+
             c6, c7, c8, c9 = st.columns(4)
             m_div_amt = c6.number_input("每單位配息", value=0.0, format="%.6f", key="mdl_div_amt")
             m_units = c7.number_input("配息單位數", value=0.0, format="%.4f", key="mdl_units")
             m_actual_total = c8.number_input("實際配息原幣", value=0.0, format="%.2f", key="mdl_actual_total")
             m_fx = c9.number_input("匯率", value=1.0, format="%.4f", key="mdl_fx")
+
             m_total = m_actual_total if m_actual_total > 0 else m_units * m_div_amt
             st.caption(f"總配息原幣：**{money(m_total, 2)} {m_currency}**｜換算台幣：**{money(m_total * m_fx)}**")
+
             m_is_paid = st.checkbox("確認入帳（加入累計配息原幣）", key="mdl_is_paid")
             m_note = st.text_input("備註", key="mdl_note")
 
@@ -3684,6 +3689,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
                             "note": m_note or "手動新增",
                         }
                         supabase_client().table("dividend_log").insert(payload).execute()
+
                         if m_is_paid and m_total > 0:
                             update_position_dividend_original_total(
                                 m_fund_code,
@@ -3691,7 +3697,9 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
                                 m_currency,
                                 m_total,
                             )
-                        st.success("已新增！"); st.rerun()
+
+                        st.success("已新增！")
+                        st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
                         
