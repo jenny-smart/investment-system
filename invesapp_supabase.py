@@ -3606,17 +3606,17 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     actual_df = build_actual_dividend_table(source)
 
     with st.expander("配息累計除錯", expanded=False):
-    debug_cols = [
-        "平台", "基金名稱", "幣別", "_fund_code", "_platform", "_currency",
-        "_目前累計配息原幣", "_目前累計配息台幣", "_source_table",
-    ]
-    existing_debug_cols = [col for col in debug_cols if col in actual_df.columns]
-    st.dataframe(actual_df[existing_debug_cols], use_container_width=True, hide_index=True)
+        debug_cols = [
+            "平台", "基金名稱", "幣別", "_fund_code", "_platform", "_currency",
+            "_目前累計配息原幣", "_目前累計配息台幣", "_source_table",
+        ]
+     existing_debug_cols = [col for col in debug_cols if col in actual_df.columns]
+     st.dataframe(actual_df[existing_debug_cols], use_container_width=True, hide_index=True)
 
-    platforms = sorted(
+     platforms = sorted(
         set(estimate_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
         | set(actual_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
-    )
+        )
     selected_platform = st.selectbox("篩選平台", ["全部"] + platforms, key="div_record_platform")
     if selected_platform != "全部":
         estimate_df = estimate_df[estimate_df["平台"] == selected_platform].reset_index(drop=True)
