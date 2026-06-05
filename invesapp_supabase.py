@@ -3073,6 +3073,39 @@ def _fund_group_rows(enriched_df: pd.DataFrame | None) -> dict[tuple[str, str, s
     return {key: pd.DataFrame(rows) for key, rows in groups.items()}
 
 
+def _find_fund_group(
+    fund_groups: dict[tuple[str, str, str], pd.DataFrame],
+    fund_code: str,
+    platform: str,
+    currency: str,
+) -> pd.DataFrame | None:
+    direct_key = (fund_code, platform, currency)
+    if direct_key in fund_groups:
+        return fund_groups[direct_key]
+
+    target_code = normalize_text(fund_code).lower()
+    target_platform = normalize_text(platform)
+    target_currency = normalize_text(currency).upper()
+
+    for (code, plt, cur), grp in fund_groups.items():
+        if (
+            normalize_text(code).lower() == target_code
+            and normalize_text(plt) == target_platform
+            and normalize_text(cur).upper() == target_currency
+        ):
+            return grp
+
+    for (code, _, cur), grp in fund_groups.items():
+        if normalize_text(code).lower() == target_code and normalize_text(cur).upper() == target_currency:
+            return grp
+
+    for (code, _, _), grp in fund_groups.items():
+        if normalize_text(code).lower() == target_code:
+            return grp
+
+    return None
+
+
 def _fund_current_month_dividend_units(grp: pd.DataFrame, ex_date: Any) -> tuple[float, float, float]:
     current_units = 0.0
     month_purchase_units = 0.0
@@ -3092,19 +3125,33 @@ def _group_first_positive(grp: pd.DataFrame, column: str) -> float:
 
 
 def _fund_current_dividend_totals(grp: pd.DataFrame, fx: float) -> tuple[float, float]:
+    if grp is None or grp.empty:
+        return 0.0, 0.0
+
+    source = grp
+    if "累積配息主列" in grp.columns:
+        primary = grp[grp["累積配息主列"].apply(lambda value: normalize_bool(value, False))]
+        if not primary.empty:
+            source = primary
+
     original_total = 0.0
     twd_total = 0.0
-    for _, row in grp.iterrows():
-        original_total += normalize_number(
-            row.get("累計配息原幣", row.get("dividend_received_original_total", 0)),
-            0,
+    for _, row in source.iterrows():
+        original = max(
+            normalize_number(row.get("累計配息原幣", 0), 0),
+            normalize_number(row.get("dividend_received_original_total", 0), 0),
         )
-        twd_total += normalize_number(
-            row.get("累計已領配息", row.get("dividend_received_total", 0)),
-            0,
+        twd = max(
+            normalize_number(row.get("累計已領配息", 0), 0),
+            normalize_number(row.get("dividend_received_total", 0), 0),
         )
-    if twd_total <= 0 and original_total > 0:
-        twd_total = original_total * fx
+
+        if twd <= 0 and original > 0 and fx > 0:
+            twd = original * fx
+
+        original_total += original
+        twd_total += twd
+
     return original_total, twd_total
 
 
@@ -3159,6 +3206,7 @@ def _current_month_dividend_candidates(
             "_month_purchase_units": month_purchase_units,
         })
     return candidates
+
 
 def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if enriched_df is None or enriched_df.empty:
