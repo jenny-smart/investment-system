@@ -3092,6 +3092,23 @@ def _group_first_positive(grp: pd.DataFrame, column: str) -> float:
     return _first_positive(grp[column].tolist())
 
 
+def _fund_current_dividend_totals(grp: pd.DataFrame, fx: float) -> tuple[float, float]:
+    original_total = 0.0
+    twd_total = 0.0
+    for _, row in grp.iterrows():
+        original_total += normalize_number(
+            row.get("累計配息原幣", row.get("dividend_received_original_total", 0)),
+            0,
+        )
+        twd_total += normalize_number(
+            row.get("累計已領配息", row.get("dividend_received_total", 0)),
+            0,
+        )
+    if twd_total <= 0 and original_total > 0:
+        twd_total = original_total * fx
+    return original_total, twd_total
+
+
 def _current_month_dividend_candidates(
     enriched_df: pd.DataFrame | None,
     existing_keys: set[tuple[str, str, str, str]],
