@@ -234,16 +234,14 @@ st.set_page_config(
 # ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
 st.markdown("""
 <style>
-h1 { font-size: 1.4rem !important; font-weight: 700 !important; }
-h2, h3, h4 { font-size: 1rem !important; font-weight: 600 !important; }
 .stApp { background:#f8fafc; color:#1e293b; }
-.block-container { padding-top:2.5rem; max-width:1600px; }
+.block-container { padding-top:0.6rem; max-width:1600px; }
 .app-page-title {
     display: block !important;
     margin: 0.2rem 0 0.35rem 0 !important;
     color: #1e293b !important;
     font-size: 30px !important;
-    line-height: 1.5 !important;
+    line-height: 1.25 !important;
     font-weight: 800 !important;
     letter-spacing: 0 !important;
 }
@@ -2687,6 +2685,82 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         st.info("目前沒有資料。")
         return
 
+    action_col1, action_col2 = st.columns([1, 1])
+    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
+        try:
+            source_positions = globals().get("positions", pd.DataFrame())
+            n = auto_dividend_update(source_positions)
+            if n > 0:
+                st.success(f"配息更新完成：{n} 筆")
+                st.cache_data.clear()
+            else:
+                st.info("目前沒有需要認列或快照的配息。")
+        except Exception as exc:
+            st.warning(f"配息更新失敗：{exc}")
+
+    # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
+    # 即時計算，不寫回 Supabase，只用於顯示
+    if not enriched.empty:
+        est_monthly_div = 0.0
+        fx_cache_local: dict[str, float] = {}
+        for _, fr in enriched.iterrows():
+            if normalize_text(fr.get("asset_type","")) != "基金":
+                continue
+            fc    = normalize_text(fr.get("fund_code",""))
+            units = normalize_number(fr.get("市值股數", fr.get("units", 0)), 0)
+            cur   = normalize_text(fr.get("currency","TWD")).upper()
+            if not fc or units <= 0:
+                continue
+            # 取 GAS 每單位配息（有快取）
+            mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
+            if not mdiv_per_unit:
+                continue
+            # 取匯率
+            if cur not in fx_cache_local:
+                fx_val, _ = fetch_fx(cur)
+                fx_cache_local[cur] = fx_val or 1.0
+            fx_val = fx_cache_local[cur]
+            est_monthly_div += units * mdiv_per_unit * fx_val
+        # 本月已認列配息若需要精算，按上方配息按鈕後到配息記錄頁查看；
+        # 總覽避免額外 Supabase 查詢，減少初次載入卡住。
+        this_month_paid = 0.0
+
+        col_a, col_b = st.columns(2)
+        if est_monthly_div > 0:
+            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次每單位配息 × 目前單位數）")
+        if this_month_paid > 0:
+            col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
+
+    # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
+    # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
+    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
+        fund_rows = enriched[
+            (enriched["asset_type"] == "基金") &
+            (enriched["fund_code"].fillna("") != "") &
+            (enriched["monthly_dividend_per_unit"].fillna(0) == 0)
+        ]
+        if not fund_rows.empty:
+            sb       = supabase_client()
+            updated  = 0
+            done_codes: set[str] = set()
+            for _, fr in fund_rows.iterrows():
+                fc = normalize_text(fr.get("fund_code", ""))
+                if not fc or fc in done_codes:
+                    continue
+                mdiv = _get_gas_monthly_div(fc)
+                if mdiv and mdiv > 0:
+                    # 更新 Supabase 裡所有相同 fund_code 的列
+                    sb.table("positions").update(
+                        {"monthly_dividend_per_unit": mdiv}
+                    ).eq("fund_code", fc).execute()
+                    done_codes.add(fc)
+                    updated += 1
+            if updated:
+                st.success(f"已更新 {updated} 檔基金每單位月配息。")
+                st.cache_data.clear()
+            else:
+                st.info("沒有需要回填的基金每月配息。")
+
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
         台幣成本     =("台幣成本",      "sum"),
@@ -2753,37 +2827,42 @@ def render_fx_overview_cards() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """直接使用已計算好的全域 enriched 數值，與總覽 hero bar 保持一致"""
-    global enriched, total_value, total_cost, total_pnl_all, total_div_received
-
+    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
     if enriched is None or enriched.empty:
         return {}
 
     platform_val: dict[str, float] = {
         "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
     }
+    total_cost_sum = 0.0
+    total_div_sum  = 0.0
 
     for _, r in enriched.iterrows():
         plt = normalize_text(r.get("platform", ""))
         val = to_float(r.get("台幣市值"))
+        cost= to_float(r.get("台幣成本"))
+        div = to_float(r.get("累計已領配息"))
         if plt in platform_val and val:
             platform_val[plt] += val
+        if cost: total_cost_sum += cost
+        if div:  total_div_sum  += div
 
+    total = sum(platform_val.values())
     from datetime import datetime, timezone, timedelta
-    tw_now_dt = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 
     return {
-        "total_twd":           round(total_value, 0),
+        "total_twd":           round(total, 0),
         "tw_stock":            round(platform_val["台股"], 0),
         "us_stock":            round(platform_val["美股"], 0),
         "kifutong":            round(platform_val["基富通"], 0),
         "scb":                 round(platform_val["渣打基金"], 0),
         "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost, 0),
-        "total_pnl":           round(total_value - total_cost, 0),
-        "cumulative_dividend": round(total_div_received, 0),
+        "total_cost":          round(total_cost_sum, 0),
+        "total_pnl":           round(total - total_cost_sum, 0),
+        "cumulative_dividend": round(total_div_sum, 0),
         "trigger":             trigger,
-        "note":                f"手動快照 {tw_now_dt.strftime('%Y-%m-%d %H:%M')}",
+        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
     }
 
 
@@ -2853,7 +2932,7 @@ def render_history_tab() -> None:
     # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("id,snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
@@ -2900,49 +2979,6 @@ def render_history_tab() -> None:
         column_config=col_cfg
     )
 
-    # ── 刪除歷史記錄 ──────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("#### 🗑️ 刪除歷史記錄")
-
-    # 重新讀取供刪除用（不受上方 df 篩選影響）
-    try:
-        del_rows = supabase_client().table("portfolio_snapshots") \
-            .select("id,snapshot_at,total_twd,tw_stock,total_cost,cumulative_dividend,trigger,note") \
-            .order("snapshot_at", desc=True) \
-            .execute().data or []
-    except Exception as e:
-        st.error(f"讀取失敗：{e}")
-        del_rows = []
-
-    if del_rows:
-        del_df = pd.DataFrame(del_rows)
-        del_df["snapshot_at"] = pd.to_datetime(del_df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
-        del_df["選項"] = (
-            del_df["snapshot_at"].dt.strftime("%m/%d %H:%M")
-            + "｜" + del_df["trigger"].fillna("")
-            + "｜總市值 " + del_df["total_twd"].apply(lambda x: f"{x:,.0f}")
-            + "｜累計配息 " + del_df["cumulative_dividend"].apply(lambda x: f"{x:,.0f}")
-        )
-
-        col_a, col_b = st.columns([3, 1])
-        selected = col_a.multiselect(
-            "選擇要刪除的記錄（可多選）",
-            options=del_df["選項"].tolist(),
-            key="del_snapshot_select",
-        )
-
-        if selected:
-            selected_ids = del_df[del_df["選項"].isin(selected)]["id"].tolist()
-            st.warning(f"即將刪除 {len(selected_ids)} 筆記錄，請確認後按刪除。")
-            if col_b.button("🗑️ 確認刪除", key="confirm_del_snapshots"):
-                try:
-                    for sid in selected_ids:
-                        supabase_client().table("portfolio_snapshots") \
-                            .delete().eq("id", int(sid)).execute()
-                    st.success(f"已刪除 {len(selected_ids)} 筆。")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"刪除失敗：{e}")
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
@@ -3376,50 +3412,6 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
-
-    # ── 配息操作按鈕 ──
-    action_col1, action_col2 = st.columns([1, 1])
-    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
-        try:
-            source_positions = globals().get("positions", pd.DataFrame())
-            n = auto_dividend_update(source_positions)
-            if n > 0:
-                st.success(f"配息更新完成：{n} 筆")
-                st.cache_data.clear()
-            else:
-                st.info("目前沒有需要認列或快照的配息。")
-        except Exception as exc:
-            st.warning(f"配息更新失敗：{exc}")
-
-    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
-        source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
-        fund_rows = source[
-            (source["asset_type"] == "基金") &
-            (source["fund_code"].fillna("") != "") &
-            (source["monthly_dividend_per_unit"].fillna(0) == 0)
-        ]
-        if not fund_rows.empty:
-            sb       = supabase_client()
-            updated  = 0
-            done_codes: set[str] = set()
-            for _, fr in fund_rows.iterrows():
-                fc = normalize_text(fr.get("fund_code", ""))
-                if not fc or fc in done_codes:
-                    continue
-                mdiv = _get_gas_monthly_div(fc)
-                if mdiv and mdiv > 0:
-                    sb.table("positions").update(
-                        {"monthly_dividend_per_unit": mdiv}
-                    ).eq("fund_code", fc).execute()
-                    done_codes.add(fc)
-                    updated += 1
-            if updated:
-                st.success(f"已更新 {updated} 檔基金每單位月配息。")
-                st.cache_data.clear()
-            else:
-                st.info("沒有需要回填的基金每月配息。")
-        else:
-            st.info("沒有需要回填的基金每月配息。")
 
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
     estimate_df = build_estimated_dividend_table(source)
@@ -4590,7 +4582,7 @@ def render_cashflow_tab() -> None:
 # APP 主體（標題移到 hero 區塊外，避免被蓋住）
 # ════════════════════════════════════════════════════════════════════════════
 
-st.title("📈 Jenny 投資即時市值系統")
+st.markdown('<div class="app-page-title">📈 Jenny 投資即時市值系統</div>', unsafe_allow_html=True)
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
@@ -4671,36 +4663,11 @@ total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "�
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
 
-# ── 寫入 latest_portfolio_values 供排程讀取 ──────────────────────────────
-try:
-    _platform_val = {}
-    if not enriched.empty:
-        for _plt in ["台股", "美股", "基富通", "渣打基金", "台新基金"]:
-            _platform_val[_plt] = float(
-                enriched[enriched["platform"] == _plt]["台幣市值"].fillna(0).sum()
-            )
-    total_pnl_all   = total_value - total_cost
-    total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
-    _tw_now_str = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-    supabase_client().table("latest_portfolio_values").upsert({
-        "id":                  1,
-        "total_twd":           round(total_value, 0),
-        "tw_stock":            round(_platform_val.get("台股", 0), 0),
-        "us_stock":            round(_platform_val.get("美股", 0), 0),
-        "kifutong":            round(_platform_val.get("基富通", 0), 0),
-        "scb":                 round(_platform_val.get("渣打基金", 0), 0),
-        "taishin":             round(_platform_val.get("台新基金", 0), 0),
-        "total_cost":          round(total_cost, 0),
-        "cumulative_dividend": round(total_div_received, 0),
-        "updated_at":          _tw_now_str,
-    }, on_conflict="id").execute()
-except Exception:
-    pass
-
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
-    st.markdown('<div class="hero">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    # 顯示缺報價的台股名稱
     tw_missing = []
     if not enriched.empty:
         tw_no_price = enriched[
@@ -4713,18 +4680,15 @@ with st.container():
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
     c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
+    # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
     c2.metric("總台幣成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
-    total_pnl_all = total_value - total_cost
-    total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
-    c3.metric("總損益（市值）", signed_money(total_pnl_all))
-    c4.metric("累計配息", money(total_div_received))
-    c5.metric("預估每月配息", money(total_div))
-    
-    if c6.button("🔄 更新即時價"):
+    c3.metric("預估每月配息", money(total_div))
+    c4.metric("投資筆數",     f"{len(positions):,}")
+    if c5.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div></div>", unsafe_allow_html=True)
 
 tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📒 線上總表", "💵 現金流"])
 
@@ -4757,11 +4721,12 @@ for idx, platform in enumerate(PLATFORMS, start=1):
     with tabs[idx]:
         st.subheader(platform)
         # ── 第一排：全局KPI ──
-        g1, g2, g3, g4 = st.columns(4)
+        g1, g2, g3, g4, g5 = st.columns(5)
         g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
         g2.metric("總台幣成本", money(total_cost))
         g3.metric("預估每月配息", money(total_div))
-        if g4.button("🔄 更新即時價", key=f"refresh_{platform}"):
+        g4.metric("投資筆數", f"{len(positions):,}")
+        if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
             st.cache_data.clear(); st.rerun()
         view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
         if view.empty:
