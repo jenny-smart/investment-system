@@ -3317,6 +3317,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         platform = normalize_text(record.get("platform", ""))
         currency = normalize_text(record.get("currency", ""))
         ex_date = normalize_text(record.get("ex_date", ""))
+        pay_date = normalize_text(record.get("pay_date", ""))
         name = (
             normalize_text(record.get("fund_name", ""))
             or name_lookup.get((fund_code, platform, currency), "")
@@ -3339,7 +3340,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         if group is not None:
             current_acc_original, current_acc_twd = _fund_current_dividend_totals(group, fx)
 
-        if group is not None and _is_current_month_date(ex_date):
+        if group is not None and _is_current_month_dividend_record(ex_date, pay_date):
             calc_current_units, calc_month_purchase_units, calc_dividend_units = _fund_current_month_dividend_units(group, ex_date)
             current_units = calc_current_units
             month_purchase_units = calc_month_purchase_units
@@ -3365,6 +3366,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "當月購買單位數": month_purchase_units,
             "配息單位數": units,
             "除息日期": _format_dividend_date(ex_date),
+            "發放日期": _format_dividend_date(pay_date),
             "每單位配息": display_div if display_div > 0 else None,
             "實際配息原幣": total_amount if total_amount is not None else None,
             "匯率": fx,
@@ -3383,6 +3385,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "_source_table": record.get("_source_table", "fund_dividends"),
             "_fx_rate": fx,
             "_ex_date": ex_date,
+            "_pay_date": pay_date,
             "_fund_name": name,
             "_sort_date": _parse_dividend_date(ex_date),
         })
@@ -3391,7 +3394,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         "_確認前", "_累計用配息金額", "_累計用配息台幣", "_實際配息台幣",
         "_目前累計配息原幣", "_目前累計配息台幣",
         "_fund_code", "_platform", "_currency", "_id", "_source_table",
-        "_fx_rate", "_ex_date", "_fund_name", "_sort_date",
+        "_fx_rate", "_ex_date", "_pay_date", "_fund_name", "_sort_date",
     ]
     columns = ACTUAL_DIVIDEND_COLUMNS + internal_cols
     if not rows:
