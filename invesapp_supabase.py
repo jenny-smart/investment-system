@@ -3480,6 +3480,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "當月購買單位數": st.column_config.NumberColumn("當月購買單位數", format="localized"),
         "配息單位數": st.column_config.NumberColumn("配息單位數", format="localized"),
         "除息日期": st.column_config.TextColumn("除息日期"),
+        "發放日期": st.column_config.TextColumn("發放日期"),
         "每單位配息": st.column_config.NumberColumn("每單位配息", format="%.6f"),
         "實際配息原幣": st.column_config.NumberColumn("實際配息原幣", format="localized"),
         "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
