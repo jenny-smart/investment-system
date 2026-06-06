@@ -2440,7 +2440,6 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     if not no_price.empty:
         is_stock = platform in ["台股", "美股"]
         key_col  = "ticker" if is_stock else "fund_code"
-        # 安全去重：先填空，再 drop_duplicates
         no_price[key_col] = no_price[key_col].fillna("")
         no_uniq  = no_price.drop_duplicates(subset=[key_col] if key_col in no_price.columns else ["name"])
 
@@ -2450,8 +2449,9 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
                 manual_vals: dict[int, float] = {}
                 for _, row in no_uniq.iterrows():
                     ca, cb = st.columns([3, 1])
-                    code   = str(row.get("ticker") or row.get("fund_code") or "")
+                    code = str(row.get("ticker") or row.get("fund_code") or "")
                     ca.markdown(f"**{row['name']}**　{code}　幣別：{row.get('currency','')}")
+
                     manual_vals[int(row["id"])] = cb.number_input(
                         "現值（原幣）", value=0.0, step=0.0001, format="%.4f",
                         key=f"mp_{platform}_{int(row['id'])}"
