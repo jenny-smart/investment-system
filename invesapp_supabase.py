@@ -3042,6 +3042,14 @@ def _is_current_month_date(value: Any) -> bool:
     return parsed.year == today.year and parsed.month == today.month
 
 
+def _is_current_month_dividend_record(ex_date: Any, pay_date: Any) -> bool:
+    if _is_current_month_date(pay_date):
+        return True
+    if normalize_text(pay_date, ""):
+        return False
+    return _is_current_month_date(ex_date)
+
+
 def _same_month(left: Any, right: Any) -> bool:
     left_dt = _parse_dividend_date(left)
     right_dt = _parse_dividend_date(right)
@@ -3164,7 +3172,10 @@ def _current_month_dividend_candidates(
     for (fund_code, platform, currency), grp in _fund_group_rows(enriched_df).items():
         gas = _get_gas_data(fund_code) if fund_code else {}
         ex_date = normalize_text(gas.get("ex_date", ""))
-        if not ex_date or not _is_current_month_date(ex_date):
+        pay_date = normalize_text(gas.get("pay_date", ""))
+        if not ex_date:
+            continue
+        if not _is_current_month_dividend_record(ex_date, pay_date):
             continue
         key = (fund_code, platform, currency, _dividend_key_date(ex_date))
         if key in existing_keys:
@@ -3194,14 +3205,14 @@ def _current_month_dividend_candidates(
             "platform": platform,
             "currency": currency,
             "ex_date": ex_date,
-            "pay_date": "",
+            "pay_date": pay_date,
             "div_amount": div_per_unit,
             "actual_div_amount": 0,
             "units_at_ex": dividend_units,
             "fx_rate": fx,
             "twd_total": total_amount * fx,
             "is_paid": False,
-            "note": "當月除息候選",
+            "note": "當月入帳候選",
             "_source_table": "dividend_log_candidate",
             "_current_units": current_units,
             "_month_purchase_units": month_purchase_units,
