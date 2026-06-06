@@ -2526,8 +2526,8 @@ def _fund_name_from_rows(rows: list[pd.Series]) -> str:
 def auto_dividend_update(positions: pd.DataFrame) -> int:
     """
     手動執行配息候選更新：
-    - 只看當月除息日，不再依發放日自動認列。
-    - 配息單位數 = 目前單位數 - 當月購買單位數。
+    - 候選列依當月發放日列出；若沒有發放日才 fallback 用除息日。
+    - 配息單位數仍用除息日計算。
     - 僅寫入/更新未確認的 fund_dividends 候選；實際入帳由使用者在配息記錄表勾選。
     回傳：更新筆數
     """
@@ -2563,8 +2563,9 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
     for (fc, plt, cur), rows in fund_groups.items():
         gas = _get_gas_data(fc)
         ex_date = gas.get("ex_date")
+        pay_date = gas.get("pay_date")
         div_amt = gas.get("monthly_div")
-        if not ex_date or not div_amt or not _is_current_month_date(ex_date):
+        if not ex_date or not div_amt or not _is_current_month_dividend_record(ex_date, pay_date):
             continue
 
         fx_val, _ = fetch_fx(cur)
@@ -2588,14 +2589,14 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
             "platform": plt,
             "currency": cur,
             "ex_date": ex_date,
-            "pay_date": "",
+            "pay_date": pay_date or "",
             "div_amount": float(div_amt),
             "actual_div_amount": 0,
             "units_at_ex": float(total_units),
             "fx_rate": float(fx_val),
             "twd_total": 0,
             "is_paid": False,
-            "note": f"當月除息候選：目前 {current_units:.4f} - 當月買入 {month_purchase_units:.4f}",
+            "note": f"當月入帳候選：目前 {current_units:.4f} - 當月買入 {month_purchase_units:.4f}",
         }
         try:
             if not exist_row:
@@ -3498,7 +3499,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
         key="actual_dividend_editor",
     )
-        if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
+    if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
         for pos, (_, row) in enumerate(edited.iterrows()):
@@ -3638,6 +3639,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
         estimate_df = estimate_df[estimate_df["平台"] == selected_platform].reset_index(drop=True)
         actual_df = actual_df[actual_df["平台"] == selected_platform].reset_index(drop=True)
 
+
     est_twd = estimate_df["_預估配息台幣"].fillna(0).sum() if "_預估配息台幣" in estimate_df else 0
     paid_df = actual_df[actual_df["確認入帳"] == True] if "確認入帳" in actual_df else pd.DataFrame()
     paid_twd = paid_df["_實際配息台幣"].fillna(0).sum() if not paid_df.empty and "_實際配息台幣" in paid_df else 0
@@ -3652,7 +3654,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("實際配息改依當月除息日列出；配息單位數 = 目前單位數 - 當月購買單位數。勾選確認入帳後，實際配息原幣會加入持倉累計配息。")
+    st.caption("實際配息依當月發放日列出；配息單位數仍用除息日計算。勾選確認入帳後，實際配息原幣會加入持倉累計配息。")
     render_actual_dividend_table(actual_df)
 
     st.markdown("---")
