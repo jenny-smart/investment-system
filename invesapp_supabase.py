@@ -3498,7 +3498,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
         key="actual_dividend_editor",
     )
-    if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
+        if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
         for pos, (_, row) in enumerate(edited.iterrows()):
@@ -3535,14 +3535,14 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                     "platform": normalize_text(source_row.get("_platform", "")),
                     "currency": normalize_text(source_row.get("_currency", "")),
                     "ex_date": normalize_text(source_row.get("_ex_date", row.get("除息日期", ""))),
-                    "pay_date": "",
+                    "pay_date": normalize_text(source_row.get("_pay_date", row.get("發放日期", ""))),
                     "div_amount": div_amount,
                     "actual_div_amount": actual_div,
                     "units_at_ex": units,
                     "fx_rate": fx,
                     "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
                     "is_paid": True,
-                    "note": f"當月除息確認入帳 {tw_now().strftime('%Y/%m/%d')}",
+                    "note": f"當月入帳確認 {tw_now().strftime('%Y/%m/%d')}",
                 }
                 sb.table("dividend_log").insert(insert_payload).execute()
             elif has_row_id:
