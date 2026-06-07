@@ -3612,6 +3612,97 @@ def render_position_dividend_total_fix_tool() -> None:
                 st.error("更新失敗。")
 
 
+def recalculate_all_dividend_totals() -> dict[str, int]:
+    """
+    從 fund_dividends + dividend_log 中，
+    取 is_paid=True 的記錄，依 (fund_code, platform, currency) 加總，
+    寫回 positions.dividend_received_original_total
+    """
+    sb = supabase_client()
+    
+    # 1. 讀取所有已確認配息記錄
+    paid_records = []
+    for table in ["fund_dividends", "dividend_log"]:
+        try:
+            rows = sb.table(table).select(
+                "fund_code,platform,currency,units_at_ex,div_amount,actual_div_amount,twd_total,is_paid"
+            ).eq("is_paid", True).execute().data or []
+            paid_records.extend(rows)
+        except Exception:
+            pass
+    
+    # 2. 依 (fund_code, platform, currency) 加總原幣配息
+    from collections import defaultdict
+    totals: dict[tuple, float] = defaultdict(float)
+    
+    for r in paid_records:
+        fc       = normalize_text(r.get("fund_code", ""))
+        platform = normalize_text(r.get("platform", ""))
+        currency = normalize_text(r.get("currency", ""))
+        units    = normalize_number(r.get("units_at_ex", 0), 0)
+        actual   = normalize_number(r.get("actual_div_amount", 0), 0)
+        div_amt  = normalize_number(r.get("div_amount", 0), 0)
+        
+        # 優先用 actual，fallback 用 div_amount × units
+        amount = actual * units if actual > 0 else div_amt * units
+        if fc and amount > 0:
+            totals[(fc, platform, currency)] += amount
+    
+    # 3. 讀取 positions，找主列，寫入正確累計值
+    positions_rows = sb.table("positions").select(
+        "id,sort_order,fund_code,platform,currency,asset_type"
+    ).execute().data or []
+    
+    # 先把所有基金持倉的 dividend_received_original_total 歸零
+    for row in positions_rows:
+        if normalize_text(row.get("asset_type", "")) == "基金":
+            sb.table("positions").update(
+                {"dividend_received_original_total": 0, "dividend_received_total": 0}
+            ).eq("id", int(row["id"])).execute()
+    
+    # 依加總結果，寫入主列
+    updated = 0
+    for (fc, platform, currency), total in totals.items():
+        ok = set_position_dividend_original_total_by_key(
+            fc, platform, currency, total, positions_rows
+        )
+        if ok:
+            updated += 1
+    
+    return {"groups_updated": updated, "total_records": len(paid_records)}
+
+
+def set_position_dividend_original_total_by_key(
+    fund_code: str, platform: str, currency: str,
+    target_total: float, positions_rows: list
+) -> bool:
+    """找同一基金的主列（sort_order 最小），寫入累計配息原幣"""
+    target_code = fund_code.lower()
+    target_platform = normalize_text(platform)
+    target_currency = normalize_text(currency).upper()
+    
+    matched = [
+        r for r in positions_rows
+        if normalize_text(r.get("fund_code", "")).lower() == target_code
+        and normalize_text(r.get("currency", "")).upper() == target_currency
+        and (not target_platform or normalize_text(r.get("platform", "")) == target_platform)
+        and normalize_text(r.get("asset_type", "")) == "基金"
+    ]
+    if not matched:
+        return False
+    
+    matched = sorted(matched, key=lambda r: (
+        normalize_number(r.get("sort_order", 999999), 999999),
+        normalize_number(r.get("id", 999999), 999999),
+    ))
+    
+    primary_id = int(float(matched[0]["id"]))
+    supabase_client().table("positions").update({
+        "dividend_received_original_total": round(target_total, 4),
+        "dividend_received_total": 0,
+    }).eq("id", primary_id).execute()
+    return True
+
 def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> None:
     if df.empty:
         st.info("目前沒有實際配息記錄。")
