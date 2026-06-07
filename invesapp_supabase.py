@@ -23,7 +23,7 @@ try:
 except Exception:
     HAS_BS4 = False
 
-APP_VERSION = "2026-06-06-v38-dividend-pay-date-month"
+APP_VERSION = "2026-06-07-v39-dividend-position-sync"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -2904,6 +2904,7 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "匯率",
     "實際配息台幣",
     "確認入帳",
+    "補同步",
     "累計配息原幣",
     "累計配息台幣",
 ]
@@ -3374,6 +3375,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "實際配息台幣": twd_total if twd_total > 0 else None,
             "確認入帳": is_paid,
             "_確認前": is_paid,
+            "補同步": False,
             "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
             "_累計用配息台幣": twd_total if is_paid else 0,
             "_實際配息台幣": twd_total,
@@ -3487,6 +3489,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "匯率": st.column_config.NumberColumn("匯率", format="%.4f"),
         "實際配息台幣": st.column_config.NumberColumn("實際配息台幣", format="localized"),
         "確認入帳": st.column_config.CheckboxColumn("確認入帳"),
+        "補同步": st.column_config.CheckboxColumn("補同步"),
         "累計配息原幣": st.column_config.NumberColumn("累計配息原幣", format="localized"),
         "累計配息台幣": st.column_config.NumberColumn("累計配息台幣", format="localized"),
     }
@@ -3496,7 +3499,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         hide_index=True,
         height=min(42 * len(display_df) + 44, height_cap),
         column_config=col_cfg,
-        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
+        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c not in {"確認入帳", "補同步"}],
         key="actual_dividend_editor",
     )
     if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
@@ -3506,8 +3509,14 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             source_row = df.iloc[pos]
             old_confirmed = normalize_bool(source_row.get("_確認前", False), False)
             new_confirmed = normalize_bool(row.get("確認入帳", False), False)
-            if old_confirmed == new_confirmed:
-                continue
+        force_sync = normalize_bool(row.get("補同步", False), False)
+
+        if old_confirmed == new_confirmed and not (new_confirmed and force_sync):
+            continue
+
+        if force_sync and not new_confirmed:
+            continue
+
 
             row_id = source_row.get("_id")
             source_table = normalize_text(source_row.get("_source_table", "fund_dividends"), "fund_dividends")
