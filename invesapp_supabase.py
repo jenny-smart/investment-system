@@ -3517,19 +3517,19 @@ def set_position_dividend_original_total(
     return True
 
 def render_position_dividend_total_fix_tool() -> None:
-    with st.expander("修正持倉累計配息原幣"):
+    with st.expander("修正持倉累計配息原幣", expanded=False):
         current = ensure_columns(load_positions())
         funds = current[current["asset_type"].astype(str) == "基金"].copy()
         if funds.empty:
             st.info("沒有基金持倉可修正。")
             return
 
+        funds["_id_num"] = funds["id"].apply(lambda v: int(float(v)) if not pd.isna(v) else 0)
         funds["_label"] = funds.apply(
             lambda r: (
-                f"ID {int(float(r['id']))}｜"
-                f"{r.get('platform', '')}｜{r.get('currency', '')}｜"
+                f"ID {r['_id_num']}｜{r.get('platform', '')}｜{r.get('currency', '')}｜"
                 f"{r.get('fund_code', '')}｜{r.get('name', '')}｜"
-                f"目前 {money(r.get('dividend_received_original_total', 0), 2)}"
+                f"目前 {money(r.get('dividend_received_original_total', 0), 4)}"
             ),
             axis=1,
         )
@@ -3537,36 +3537,38 @@ def render_position_dividend_total_fix_tool() -> None:
         choice = st.selectbox(
             "選擇要修正的持倉",
             [""] + funds["_label"].tolist(),
-            key="fix_position_dividend_total_choice",
+            key="fix_position_dividend_total_choice_v42",
         )
         if not choice:
+            st.info("先選一筆持倉，才會出現輸入框。")
             return
 
         selected = funds[funds["_label"] == choice].iloc[0]
+        position_id = int(selected["_id_num"])
         current_total = normalize_number(selected.get("dividend_received_original_total", 0), 0)
 
-        target_total = st.number_input(
-            "正確累計配息原幣",
-            value=float(current_total),
-            format="%.4f",
-            key="fix_position_dividend_total_value",
-        )
-        confirm = st.checkbox(
-            "我確認要把這筆持倉累計配息原幣改成上方數字",
-            key="fix_position_dividend_total_confirm",
-        )
-
-        if st.button(
-            "更新持倉累計配息原幣",
-            disabled=not confirm,
-            key="fix_position_dividend_total_button",
-        ):
-            ok = set_position_dividend_original_total(
-                int(float(selected["id"])),
-                target_total,
+        with st.form(f"fix_position_dividend_total_form_{position_id}"):
+            st.write(f"目前累計配息原幣：{money(current_total, 4)}")
+            target_total = st.number_input(
+                "正確累計配息原幣",
+                value=float(current_total),
+                format="%.4f",
+                key=f"fix_position_dividend_total_value_{position_id}",
             )
+            confirm = st.checkbox(
+                "我確認這是此持倉的正確累計配息原幣，不是最上方總額",
+                key=f"fix_position_dividend_total_confirm_{position_id}",
+            )
+            submitted = st.form_submit_button("更新這筆持倉累計配息原幣")
+
+        if submitted:
+            if not confirm:
+                st.warning("請先勾選確認。")
+                return
+
+            ok = set_position_dividend_original_total(position_id, target_total)
             if ok:
-                st.success("已更新持倉累計配息原幣。")
+                st.success(f"已把 ID {position_id} 的累計配息原幣設為 {money(target_total, 4)}。")
                 st.cache_data.clear()
                 st.rerun()
             else:
