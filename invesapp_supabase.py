@@ -3829,7 +3829,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.subheader("💰 配息記錄")
 
     # ── 配息操作按鈕 ──
-action_col1, action_col2, action_col3 = st.columns([1, 1, 1])
+    action_col1, action_col2, action_col3 = st.columns([1, 1, 1])
     if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
         try:
             source_positions = globals().get("positions", pd.DataFrame())
@@ -3883,7 +3883,7 @@ action_col1, action_col2, action_col3 = st.columns([1, 1, 1])
             st.rerun()
         except Exception as exc:
             st.error(f"重新計算失敗：{exc}")
-            
+
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
@@ -3904,7 +3904,6 @@ action_col1, action_col2, action_col3 = st.columns([1, 1, 1])
     if selected_platform != "全部":
         estimate_df = estimate_df[estimate_df["平台"] == selected_platform].reset_index(drop=True)
         actual_df = actual_df[actual_df["平台"] == selected_platform].reset_index(drop=True)
-
 
     est_twd = estimate_df["_預估配息台幣"].fillna(0).sum() if "_預估配息台幣" in estimate_df else 0
     paid_df = actual_df[actual_df["確認入帳"] == True] if "確認入帳" in actual_df else pd.DataFrame()
