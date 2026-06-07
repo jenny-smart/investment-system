@@ -3505,25 +3505,28 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
+
         for pos, (_, row) in enumerate(edited.iterrows()):
             source_row = df.iloc[pos]
             old_confirmed = normalize_bool(source_row.get("_確認前", False), False)
             new_confirmed = normalize_bool(row.get("確認入帳", False), False)
-        force_sync = normalize_bool(row.get("補同步", False), False)
+            force_sync = normalize_bool(row.get("補同步", False), False)
 
-        if old_confirmed == new_confirmed and not (new_confirmed and force_sync):
-            continue
+            if old_confirmed == new_confirmed and not (new_confirmed and force_sync):
+                continue
 
-        if force_sync and not new_confirmed:
-            continue
+            if force_sync and not new_confirmed:
+                continue
 
             row_id = source_row.get("_id")
             source_table = normalize_text(source_row.get("_source_table", "fund_dividends"), "fund_dividends")
             units = normalize_number(row.get("配息單位數", 0), 0)
             div_amount = normalize_number(row.get("每單位配息", 0), 0)
             total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
+
             if total_amount <= 0 and units > 0 and div_amount > 0:
                 total_amount = units * div_amount
+
             actual_div = total_amount / units if total_amount > 0 and units > 0 else div_amount
             fx = normalize_number(source_row.get("_fx_rate", 1), 1)
 
@@ -3535,9 +3538,11 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 
             row_id_text = normalize_text(row_id, "")
             has_row_id = row_id is not None and row_id_text not in {"", "nan", "None"}
+
             if source_table == "dividend_log_candidate":
                 if not new_confirmed:
                     continue
+
                 insert_payload = {
                     "fund_code": normalize_text(source_row.get("_fund_code", "")),
                     "fund_name": normalize_text(source_row.get("_fund_name", row.get("基金名稱", ""))),
@@ -3554,10 +3559,12 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                     "note": f"當月入帳確認 {tw_now().strftime('%Y/%m/%d')}",
                 }
                 sb.table("dividend_log").insert(insert_payload).execute()
+
             elif has_row_id:
                 if source_table == "fund_dividends":
                     payload["updated_at"] = "now()"
                 sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
+
             else:
                 continue
 
@@ -3573,14 +3580,16 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                     normalize_text(source_row.get("_currency", "")),
                     delta_original,
                 )
+
                 if not ok:
                     st.warning(
                         f"配息記錄已更新，但沒有找到對應持倉可同步："
-                        f"{source_row.get('_platform', '')} / {source_row.get('_currency', '')} / {source_row.get('_fund_code', '')}"
+                        f"{source_row.get('_platform', '')} / "
+                        f"{source_row.get('_currency', '')} / "
+                        f"{source_row.get('_fund_code', '')}"
                     )
 
             updated += 1
-
 
         if updated:
             st.success(f"已更新 {updated} 筆確認狀態。")
