@@ -4149,6 +4149,236 @@ def render_manual_stock_dividend_form(current_positions: pd.DataFrame) -> None:
             except Exception as exc:
                 st.error(f"新增失敗：{exc}")
 
+STOCK_DIVIDEND_UPLOAD_COLUMNS = [
+    "平台", "股票代碼", "股票名稱", "除權息日", "現金發放日", "股票發放日",
+    "除權息股數", "每股現金股利", "實際現金股利",
+    "每股股票股利", "實際股票股數",
+    "確認現金入帳", "確認股票入帳", "備註",
+]
+
+
+def _stock_dividend_upload_template() -> pd.DataFrame:
+    return pd.DataFrame([{
+        "平台": "台股",
+        "股票代碼": "0056.TW",
+        "股票名稱": "",
+        "除權息日": "2026/07/01",
+        "現金發放日": "2026/07/31",
+        "股票發放日": "",
+        "除權息股數": 0,
+        "每股現金股利": 0,
+        "實際現金股利": 0,
+        "每股股票股利": 0,
+        "實際股票股數": 0,
+        "確認現金入帳": "是",
+        "確認股票入帳": "否",
+        "備註": "歷史補資料",
+    }])
+
+
+def _stock_lookup_for_upload(current_positions: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for code, grp in _stock_groups_from_positions(current_positions).items():
+        primary = _stock_group_primary_row(grp)
+        ticker = normalize_ticker(primary.get("ticker", "")) or _format_tw_stock_ticker(code)
+        lookup[_plain_stock_code(ticker)] = {
+            "platform": normalize_text(primary.get("platform", "台股"), "台股"),
+            "ticker": ticker,
+            "name": normalize_text(primary.get("name", "")),
+            "shares": _stock_group_current_units(grp),
+        }
+    return lookup
+
+
+def _normalize_stock_dividend_upload(upload_df: pd.DataFrame, current_positions: pd.DataFrame) -> pd.DataFrame:
+    lookup = _stock_lookup_for_upload(current_positions)
+    rows: list[dict[str, Any]] = []
+
+    for idx, raw in upload_df.iterrows():
+        raw_ticker = normalize_text(raw.get("股票代碼", ""))
+        code = _plain_stock_code(raw_ticker)
+        position_info = lookup.get(code, {})
+        ticker = normalize_ticker(raw_ticker) or position_info.get("ticker", "")
+        if ticker and "." not in ticker:
+            ticker = _format_tw_stock_ticker(ticker, position_info.get("ticker", ""))
+
+        platform = normalize_text(raw.get("平台", "")) or position_info.get("platform", "台股")
+        name = normalize_text(raw.get("股票名稱", "")) or position_info.get("name", "")
+        ex_date = normalize_text(raw.get("除權息日", ""))
+        cash_pay_date = normalize_text(raw.get("現金發放日", ""))
+        stock_pay_date = normalize_text(raw.get("股票發放日", ""))
+
+        shares_at_ex = normalize_number(raw.get("除權息股數", 0), 0)
+        if shares_at_ex <= 0:
+            shares_at_ex = normalize_number(position_info.get("shares", 0), 0)
+
+        cash_per_share = normalize_number(raw.get("每股現金股利", 0), 0)
+        actual_cash = normalize_number(raw.get("實際現金股利", 0), 0)
+        estimated_cash = shares_at_ex * cash_per_share if shares_at_ex > 0 and cash_per_share > 0 else 0
+        if actual_cash <= 0:
+            actual_cash = estimated_cash
+
+        stock_per_share = normalize_number(raw.get("每股股票股利", 0), 0)
+        estimated_stock_shares = _stock_bonus_shares(shares_at_ex, stock_per_share)
+        actual_stock_shares = normalize_number(raw.get("實際股票股數", 0), 0)
+        if actual_stock_shares <= 0:
+            actual_stock_shares = estimated_stock_shares
+
+        cash_received = normalize_bool(raw.get("確認現金入帳", False), False)
+        stock_received = normalize_bool(raw.get("確認股票入帳", False), False)
+        note = normalize_text(raw.get("備註", ""))
+
+        errors = []
+        if not ticker:
+            errors.append("股票代碼必填")
+        if not ex_date:
+            errors.append("除權息日必填")
+        if shares_at_ex <= 0:
+            errors.append("除權息股數必填，或持倉內需有目前股數")
+        if cash_per_share <= 0 and stock_per_share <= 0 and actual_cash <= 0 and actual_stock_shares <= 0:
+            errors.append("現金股利或股票股利至少填一個")
+
+        rows.append({
+            "狀態": "可匯入" if not errors else " / ".join(errors),
+            "平台": platform,
+            "股票代碼": ticker,
+            "股票名稱": name,
+            "除權息日": ex_date,
+            "現金發放日": cash_pay_date,
+            "股票發放日": stock_pay_date,
+            "除權息股數": shares_at_ex,
+            "每股現金股利": cash_per_share,
+            "預估現金股利": estimated_cash,
+            "實際現金股利": actual_cash,
+            "確認現金入帳": cash_received,
+            "每股股票股利": stock_per_share,
+            "預估股票股數": estimated_stock_shares,
+            "實際股票股數": actual_stock_shares,
+            "確認股票入帳": stock_received,
+            "備註": note or "批次匯入",
+            "_row_number": idx + 2,
+        })
+    return pd.DataFrame(rows)
+
+
+def apply_stock_dividend_upload(preview_df: pd.DataFrame) -> tuple[int, int, int, list[str]]:
+    if preview_df.empty:
+        return 0, 0, 0, []
+
+    sb = supabase_client()
+    inserted = 0
+    cash_synced = 0
+    stock_rows_added = 0
+    warnings: list[str] = []
+
+    for _, row in preview_df.iterrows():
+        if normalize_text(row.get("狀態", "")) != "可匯入":
+            continue
+
+        ticker = normalize_text(row.get("股票代碼", ""))
+        platform = normalize_text(row.get("平台", "台股"), "台股")
+        actual_cash = normalize_number(row.get("實際現金股利", 0), 0)
+        actual_stock_shares = normalize_number(row.get("實際股票股數", 0), 0)
+        cash_received = normalize_bool(row.get("確認現金入帳", False), False)
+        stock_received = normalize_bool(row.get("確認股票入帳", False), False)
+
+        payload = {
+            "platform": platform,
+            "ticker": ticker,
+            "name": normalize_text(row.get("股票名稱", "")),
+            "currency": "TWD",
+            "ex_date": normalize_text(row.get("除權息日", "")),
+            "cash_pay_date": normalize_text(row.get("現金發放日", "")),
+            "stock_pay_date": normalize_text(row.get("股票發放日", "")),
+            "shares_at_ex": normalize_number(row.get("除權息股數", 0), 0),
+            "cash_dividend_per_share": normalize_number(row.get("每股現金股利", 0), 0),
+            "estimated_cash_total": normalize_number(row.get("預估現金股利", 0), 0),
+            "actual_cash_total": actual_cash,
+            "stock_dividend_per_share": normalize_number(row.get("每股股票股利", 0), 0),
+            "estimated_stock_shares": normalize_number(row.get("預估股票股數", 0), 0),
+            "actual_stock_shares": actual_stock_shares,
+            "is_cash_received": cash_received,
+            "is_stock_received": stock_received,
+            "source": "upload",
+            "note": normalize_text(row.get("備註", "批次匯入")),
+        }
+        sb.table("stock_dividend_log").insert(payload).execute()
+        inserted += 1
+
+        if cash_received and actual_cash > 0:
+            ok = update_stock_cash_dividend_total(ticker, platform, actual_cash)
+            if ok:
+                cash_synced += 1
+            else:
+                warnings.append(f"第 {int(row.get('_row_number', 0))} 列現金股利已匯入，但找不到台股主列可同步：{ticker}")
+
+        if stock_received and actual_stock_shares > 0:
+            ok = add_zero_cost_stock_dividend_position(
+                ticker,
+                platform,
+                actual_stock_shares,
+                normalize_text(row.get("除權息日", "")),
+                f"股票股利批次匯入：{normalize_text(row.get('股票名稱', ''))}",
+            )
+            if ok:
+                stock_rows_added += 1
+            else:
+                warnings.append(f"第 {int(row.get('_row_number', 0))} 列股票股利已匯入，但新增 0 成本持倉失敗：{ticker}")
+
+    return inserted, cash_synced, stock_rows_added, warnings
+
+
+def render_stock_dividend_upload_section(current_positions: pd.DataFrame) -> None:
+    with st.expander("📤 批次匯入台股股利補資料（CSV / Excel）", expanded=False):
+        st.caption("適合補今年或歷史台股股利。股票股利確認入帳後會新增 0 成本持倉列。")
+
+        template = _stock_dividend_upload_template()
+        st.download_button(
+            "下載台股股利補資料範本 CSV",
+            data=template.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+            file_name="stock_dividend_upload_template.csv",
+            mime="text/csv",
+            key="download_stock_dividend_upload_template",
+        )
+
+        uploaded = st.file_uploader(
+            "上傳台股股利補資料 CSV / Excel",
+            type=["csv", "xlsx", "xls"],
+            key="stock_dividend_upload_file",
+        )
+        if uploaded is None:
+            return
+
+        try:
+            upload_df = read_uploaded_table(uploaded)
+            missing = [col for col in STOCK_DIVIDEND_UPLOAD_COLUMNS if col not in upload_df.columns]
+            if missing:
+                st.error("上傳檔案缺少欄位：" + "、".join(missing))
+                return
+
+            preview = _normalize_stock_dividend_upload(upload_df, current_positions)
+            st.dataframe(
+                right_align_numbers(preview.drop(columns=[c for c in preview.columns if c.startswith("_")], errors="ignore")),
+                use_container_width=True,
+                hide_index=True,
+                height=min(42 * len(preview) + 44, 520),
+            )
+
+            valid_count = int((preview["狀態"] == "可匯入").sum())
+            st.caption(f"可匯入 {valid_count} 筆，錯誤 {len(preview) - valid_count} 筆。")
+            confirm = st.checkbox("確認匯入台股股利補資料", key="confirm_stock_dividend_upload")
+            if st.button("匯入台股股利補資料", disabled=not confirm or valid_count <= 0, key="apply_stock_dividend_upload"):
+                inserted, cash_synced, stock_rows_added, warnings = apply_stock_dividend_upload(preview)
+                st.success(
+                    f"已匯入 {inserted} 筆；現金股利同步 {cash_synced} 筆；"
+                    f"股票股利新增 0 成本持倉 {stock_rows_added} 筆。"
+                )
+                if warnings:
+                    st.warning("\n".join(warnings[:20]))
+                st.cache_data.clear()
+                st.rerun()
+        except Exception as exc:
+            st.error(f"匯入失敗：{exc}")
 
 def render_stock_dividend_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.subheader("📈 台股股利")
