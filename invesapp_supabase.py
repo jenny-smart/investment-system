@@ -2904,7 +2904,6 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "匯率",
     "實際配息台幣",
     "確認入帳",
-    "補同步",
     "累計配息原幣",
     "累計配息台幣",
 ]
@@ -3375,7 +3374,6 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "實際配息台幣": twd_total if twd_total > 0 else None,
             "確認入帳": is_paid,
             "_確認前": is_paid,
-            "補同步": False,
             "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
             "_累計用配息台幣": twd_total if is_paid else 0,
             "_實際配息台幣": twd_total,
@@ -3503,18 +3501,57 @@ def update_position_dividend_original_total(
 
     return True
 
-def set_position_dividend_original_total(
-    position_id: int,
-    target_original_total: float,
-) -> bool:
+def set_position_dividend_original_total(position_id: int, target_original_total: float) -> bool:
     target_original_total = normalize_number(target_original_total, 0)
     if not position_id:
         return False
-    supabase_client().table("positions").update({
-        "dividend_received_original_total": target_original_total,
-        "dividend_received_total": 0,
-    }).eq("id", int(position_id)).execute()
+
+    rows = supabase_client().table("positions").select(
+        "id,sort_order,fund_code,platform,currency,dividend_received_original_total"
+    ).execute().data or []
+
+    selected = None
+    for row in rows:
+        if int(float(row.get("id", 0))) == int(position_id):
+            selected = row
+            break
+    if selected is None:
+        return False
+
+    target_code = normalize_text(selected.get("fund_code", "")).lower()
+    target_platform = normalize_text(selected.get("platform", ""))
+    target_currency = normalize_text(selected.get("currency", "")).upper()
+
+    matched = [
+        row for row in rows
+        if normalize_text(row.get("fund_code", "")).lower() == target_code
+        and normalize_text(row.get("platform", "")) == target_platform
+        and normalize_text(row.get("currency", "")).upper() == target_currency
+    ]
+
+    if not matched:
+        matched = [selected]
+
+    matched = sorted(
+        matched,
+        key=lambda row: (
+            normalize_number(row.get("sort_order", 999999), 999999),
+            normalize_number(row.get("id", 999999), 999999),
+        ),
+    )
+
+    primary_id = int(float(matched[0]["id"]))
+    sb = supabase_client()
+
+    for row in matched:
+        rid = int(float(row["id"]))
+        sb.table("positions").update({
+            "dividend_received_original_total": target_original_total if rid == primary_id else 0,
+            "dividend_received_total": 0,
+        }).eq("id", rid).execute()
+
     return True
+
 
 def render_position_dividend_total_fix_tool() -> None:
     with st.expander("修正持倉累計配息原幣", expanded=False):
@@ -3606,76 +3643,6 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         key="actual_dividend_editor",
     )
 
-    paid_sync_df = df[df["確認入帳"].apply(lambda value: normalize_bool(value, False))].copy()
-
-    if not paid_sync_df.empty:
-        sync_options = []
-        sync_index = {}
-
-        for idx, source_row in paid_sync_df.iterrows():
-            total_amount = normalize_number(source_row.get("實際配息原幣", 0), 0)
-            if total_amount <= 0:
-                units = normalize_number(source_row.get("配息單位數", 0), 0)
-                div_amount = normalize_number(source_row.get("每單位配息", 0), 0)
-                total_amount = units * div_amount if units > 0 and div_amount > 0 else 0
-
-            if total_amount <= 0:
-                continue
-
-            label = (
-                f"{source_row.get('平台', '')}｜"
-                f"{source_row.get('基金名稱', '')}｜"
-                f"{source_row.get('幣別', '')}｜"
-                f"除息 {source_row.get('除息日期', '')}｜"
-                f"發放 {source_row.get('發放日期', '')}｜"
-                f"原幣 {money(total_amount, 2)}"
-            )
-            sync_options.append(label)
-            sync_index[label] = idx
-
-        with st.expander("補同步已確認配息到持倉累計"):
-            sync_choice = st.selectbox(
-                "選擇要補同步的已確認配息",
-                [""] + sync_options,
-                key="dividend_position_sync_choice",
-            )
-            confirm_sync = st.checkbox(
-                "我確認這筆只補同步一次，避免重複加總",
-                key="confirm_dividend_position_sync",
-            )
-
-            if st.button(
-                "補同步選取配息到持倉",
-                disabled=not sync_choice or not confirm_sync,
-                key="sync_paid_dividend_to_position",
-            ):
-                source_row = df.loc[sync_index[sync_choice]]
-
-                total_amount = normalize_number(source_row.get("實際配息原幣", 0), 0)
-                if total_amount <= 0:
-                    units = normalize_number(source_row.get("配息單位數", 0), 0)
-                    div_amount = normalize_number(source_row.get("每單位配息", 0), 0)
-                    total_amount = units * div_amount if units > 0 and div_amount > 0 else 0
-
-                ok = update_position_dividend_original_total(
-                    normalize_text(source_row.get("_fund_code", "")),
-                    normalize_text(source_row.get("_platform", "")),
-                    normalize_text(source_row.get("_currency", "")),
-                    total_amount,
-                )
-
-                if ok:
-                    st.success(f"已補同步 {money(total_amount, 2)} 原幣到持倉累計。")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.warning(
-                        f"沒有找到對應持倉可同步："
-                        f"{source_row.get('_platform', '')} / "
-                        f"{source_row.get('_currency', '')} / "
-                        f"{source_row.get('_fund_code', '')}"
-                    )
-
     if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
@@ -3684,12 +3651,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             source_row = df.iloc[pos]
             old_confirmed = normalize_bool(source_row.get("_確認前", False), False)
             new_confirmed = normalize_bool(row.get("確認入帳", False), False)
-            force_sync = normalize_bool(row.get("補同步", False), False)
 
-            if old_confirmed == new_confirmed and not (new_confirmed and force_sync):
-                continue
-
-            if force_sync and not new_confirmed:
+            if old_confirmed == new_confirmed:
                 continue
 
             row_id = source_row.get("_id")
@@ -3743,10 +3706,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                 continue
 
             if total_amount > 0:
-                if force_sync and new_confirmed and old_confirmed == new_confirmed:
-                    delta_original = total_amount
-                else:
-                    delta_original = total_amount if new_confirmed else -total_amount
+                delta_original = total_amount if new_confirmed else -total_amount
+
 
                 ok = update_position_dividend_original_total(
                     normalize_text(source_row.get("_fund_code", "")),
