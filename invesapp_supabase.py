@@ -23,7 +23,7 @@ try:
 except Exception:
     HAS_BS4 = False
 
-APP_VERSION = "2026-06-07-v40-dividend-position-match-fallback"
+APP_VERSION = "2026-06-07-v41-dividend-manual-position-sync-button"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3534,6 +3534,77 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c not in {"確認入帳", "補同步"}],
         key="actual_dividend_editor",
     )
+
+    paid_sync_df = df[df["確認入帳"].apply(lambda value: normalize_bool(value, False))].copy()
+
+    if not paid_sync_df.empty:
+        sync_options = []
+        sync_index = {}
+
+        for idx, source_row in paid_sync_df.iterrows():
+            total_amount = normalize_number(source_row.get("實際配息原幣", 0), 0)
+            if total_amount <= 0:
+                units = normalize_number(source_row.get("配息單位數", 0), 0)
+                div_amount = normalize_number(source_row.get("每單位配息", 0), 0)
+                total_amount = units * div_amount if units > 0 and div_amount > 0 else 0
+
+            if total_amount <= 0:
+                continue
+
+            label = (
+                f"{source_row.get('平台', '')}｜"
+                f"{source_row.get('基金名稱', '')}｜"
+                f"{source_row.get('幣別', '')}｜"
+                f"除息 {source_row.get('除息日期', '')}｜"
+                f"發放 {source_row.get('發放日期', '')}｜"
+                f"原幣 {money(total_amount, 2)}"
+            )
+            sync_options.append(label)
+            sync_index[label] = idx
+
+        with st.expander("補同步已確認配息到持倉累計"):
+            sync_choice = st.selectbox(
+                "選擇要補同步的已確認配息",
+                [""] + sync_options,
+                key="dividend_position_sync_choice",
+            )
+            confirm_sync = st.checkbox(
+                "我確認這筆只補同步一次，避免重複加總",
+                key="confirm_dividend_position_sync",
+            )
+
+            if st.button(
+                "補同步選取配息到持倉",
+                disabled=not sync_choice or not confirm_sync,
+                key="sync_paid_dividend_to_position",
+            ):
+                source_row = df.loc[sync_index[sync_choice]]
+
+                total_amount = normalize_number(source_row.get("實際配息原幣", 0), 0)
+                if total_amount <= 0:
+                    units = normalize_number(source_row.get("配息單位數", 0), 0)
+                    div_amount = normalize_number(source_row.get("每單位配息", 0), 0)
+                    total_amount = units * div_amount if units > 0 and div_amount > 0 else 0
+
+                ok = update_position_dividend_original_total(
+                    normalize_text(source_row.get("_fund_code", "")),
+                    normalize_text(source_row.get("_platform", "")),
+                    normalize_text(source_row.get("_currency", "")),
+                    total_amount,
+                )
+
+                if ok:
+                    st.success(f"已補同步 {money(total_amount, 2)} 原幣到持倉累計。")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.warning(
+                        f"沒有找到對應持倉可同步："
+                        f"{source_row.get('_platform', '')} / "
+                        f"{source_row.get('_currency', '')} / "
+                        f"{source_row.get('_fund_code', '')}"
+                    )
+
     if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
         sb = supabase_client()
         updated = 0
