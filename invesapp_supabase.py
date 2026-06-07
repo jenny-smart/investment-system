@@ -23,7 +23,7 @@ try:
 except Exception:
     HAS_BS4 = False
 
-APP_VERSION = "2026-06-07-v41-dividend-manual-position-sync-button"
+APP_VERSION = "2026-06-07-v42-dividend-set-target-total"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3501,6 +3501,19 @@ def update_position_dividend_original_total(
         "dividend_received_total": 0,
     }).eq("id", primary_id).execute()
 
+    return True
+
+def set_position_dividend_original_total(
+    position_id: int,
+    target_original_total: float,
+) -> bool:
+    target_original_total = normalize_number(target_original_total, 0)
+    if not position_id:
+        return False
+    supabase_client().table("positions").update({
+        "dividend_received_original_total": target_original_total,
+        "dividend_received_total": 0,
+    }).eq("id", int(position_id)).execute()
     return True
 
 
