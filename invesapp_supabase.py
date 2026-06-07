@@ -3516,6 +3516,62 @@ def set_position_dividend_original_total(
     }).eq("id", int(position_id)).execute()
     return True
 
+def render_position_dividend_total_fix_tool() -> None:
+    with st.expander("修正持倉累計配息原幣"):
+        current = ensure_columns(load_positions())
+        funds = current[current["asset_type"].astype(str) == "基金"].copy()
+        if funds.empty:
+            st.info("沒有基金持倉可修正。")
+            return
+
+        funds["_label"] = funds.apply(
+            lambda r: (
+                f"ID {int(float(r['id']))}｜"
+                f"{r.get('platform', '')}｜{r.get('currency', '')}｜"
+                f"{r.get('fund_code', '')}｜{r.get('name', '')}｜"
+                f"目前 {money(r.get('dividend_received_original_total', 0), 2)}"
+            ),
+            axis=1,
+        )
+
+        choice = st.selectbox(
+            "選擇要修正的持倉",
+            [""] + funds["_label"].tolist(),
+            key="fix_position_dividend_total_choice",
+        )
+        if not choice:
+            return
+
+        selected = funds[funds["_label"] == choice].iloc[0]
+        current_total = normalize_number(selected.get("dividend_received_original_total", 0), 0)
+
+        target_total = st.number_input(
+            "正確累計配息原幣",
+            value=float(current_total),
+            format="%.4f",
+            key="fix_position_dividend_total_value",
+        )
+        confirm = st.checkbox(
+            "我確認要把這筆持倉累計配息原幣改成上方數字",
+            key="fix_position_dividend_total_confirm",
+        )
+
+        if st.button(
+            "更新持倉累計配息原幣",
+            disabled=not confirm,
+            key="fix_position_dividend_total_button",
+        ):
+            ok = set_position_dividend_original_total(
+                int(float(selected["id"])),
+                target_total,
+            )
+            if ok:
+                st.success("已更新持倉累計配息原幣。")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("更新失敗。")
+
 
 def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> None:
     if df.empty:
@@ -3800,6 +3856,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.markdown("#### 配息記錄表")
     st.caption("實際配息依當月發放日列出；配息單位數仍用除息日計算。勾選確認入帳後，實際配息原幣會加入持倉累計配息。")
     render_actual_dividend_table(actual_df)
+    render_position_dividend_total_fix_tool()
 
     st.markdown("---")
 
