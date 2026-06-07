@@ -3562,25 +3562,47 @@ def render_position_dividend_total_fix_tool() -> None:
             return
 
         funds["_id_num"] = funds["id"].apply(lambda v: int(float(v)) if not pd.isna(v) else 0)
-        funds["_label"] = funds.apply(
+        funds["_sort_num"] = funds["sort_order"].apply(lambda v: normalize_number(v, 999999))
+        funds["_group_key"] = funds.apply(
             lambda r: (
-                f"ID {r['_id_num']}｜{r.get('platform', '')}｜{r.get('currency', '')}｜"
+                normalize_text(r.get("platform", "")),
+                normalize_text(r.get("currency", "")).upper(),
+                normalize_text(r.get("fund_code", "")).lower(),
+            ),
+            axis=1,
+        )
+
+        primary_rows = []
+        for group_key, grp in funds.groupby("_group_key", dropna=False):
+            grp = grp.sort_values(["_sort_num", "_id_num"]).copy()
+            primary = grp.iloc[0].copy()
+            primary["_group_count"] = len(grp)
+            primary_rows.append(primary)
+
+        primary_df = pd.DataFrame(primary_rows).sort_values(
+            ["platform", "currency", "fund_code", "_sort_num", "_id_num"]
+        )
+
+        primary_df["_label"] = primary_df.apply(
+            lambda r: (
+                f"主列 ID {r['_id_num']}｜{r.get('platform', '')}｜{r.get('currency', '')}｜"
                 f"{r.get('fund_code', '')}｜{r.get('name', '')}｜"
-                f"目前 {money(r.get('dividend_received_original_total', 0), 4)}"
+                f"目前 {money(r.get('dividend_received_original_total', 0), 4)}｜"
+                f"同基金 {int(r.get('_group_count', 1))} 筆"
             ),
             axis=1,
         )
 
         choice = st.selectbox(
-            "選擇要修正的持倉",
-            [""] + funds["_label"].tolist(),
-            key="fix_position_dividend_total_choice_v42",
+            "選擇要修正的持倉主列",
+            [""] + primary_df["_label"].tolist(),
+            key="fix_position_dividend_total_choice_v45_primary_only",
         )
         if not choice:
-            st.info("先選一筆持倉，才會出現輸入框。")
+            st.info("只列出每檔基金的第一筆主列，修正後會同步把同基金其他列累計歸零。")
             return
 
-        selected = funds[funds["_label"] == choice].iloc[0]
+        selected = primary_df[primary_df["_label"] == choice].iloc[0]
         position_id = int(selected["_id_num"])
         current_total = normalize_number(selected.get("dividend_received_original_total", 0), 0)
 
@@ -3593,10 +3615,10 @@ def render_position_dividend_total_fix_tool() -> None:
                 key=f"fix_position_dividend_total_value_{position_id}",
             )
             confirm = st.checkbox(
-                "我確認這是此持倉的正確累計配息原幣，不是最上方總額",
+                "我確認這是此基金主列的正確累計配息原幣",
                 key=f"fix_position_dividend_total_confirm_{position_id}",
             )
-            submitted = st.form_submit_button("更新這筆持倉累計配息原幣")
+            submitted = st.form_submit_button("更新這檔基金累計配息原幣")
 
         if submitted:
             if not confirm:
@@ -3605,7 +3627,7 @@ def render_position_dividend_total_fix_tool() -> None:
 
             ok = set_position_dividend_original_total(position_id, target_total)
             if ok:
-                st.success(f"已把 ID {position_id} 的累計配息原幣設為 {money(target_total, 4)}。")
+                st.success(f"已更新主列 ID {position_id} 的累計配息原幣為 {money(target_total, 4)}。")
                 st.cache_data.clear()
                 st.rerun()
             else:
