@@ -3517,7 +3517,6 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         if force_sync and not new_confirmed:
             continue
 
-
             row_id = source_row.get("_id")
             source_table = normalize_text(source_row.get("_source_table", "fund_dividends"), "fund_dividends")
             units = normalize_number(row.get("配息單位數", 0), 0)
@@ -3563,14 +3562,25 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                 continue
 
             if total_amount > 0:
-                delta_original = total_amount if new_confirmed else -total_amount
-                update_position_dividend_original_total(
+                if force_sync and new_confirmed and old_confirmed == new_confirmed:
+                    delta_original = total_amount
+                else:
+                    delta_original = total_amount if new_confirmed else -total_amount
+
+                ok = update_position_dividend_original_total(
                     normalize_text(source_row.get("_fund_code", "")),
                     normalize_text(source_row.get("_platform", "")),
                     normalize_text(source_row.get("_currency", "")),
                     delta_original,
                 )
+                if not ok:
+                    st.warning(
+                        f"配息記錄已更新，但沒有找到對應持倉可同步："
+                        f"{source_row.get('_platform', '')} / {source_row.get('_currency', '')} / {source_row.get('_fund_code', '')}"
+                    )
+
             updated += 1
+
 
         if updated:
             st.success(f"已更新 {updated} 筆確認狀態。")
