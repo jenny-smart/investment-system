@@ -23,7 +23,7 @@ try:
 except Exception:
     HAS_BS4 = False
 
-APP_VERSION = "2026-06-07-v44-remove-dangerous-dividend-recalc"
+APP_VERSION = "2026-06-07-v46-stock-dividends"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3573,7 +3573,7 @@ def render_position_dividend_total_fix_tool() -> None:
         )
 
         primary_rows = []
-        for group_key, grp in funds.groupby("_group_key", dropna=False):
+        for _, grp in funds.groupby("_group_key", dropna=False):
             grp = grp.sort_values(["_sort_num", "_id_num"]).copy()
             primary = grp.iloc[0].copy()
             primary["_group_count"] = len(grp)
@@ -3596,7 +3596,7 @@ def render_position_dividend_total_fix_tool() -> None:
         choice = st.selectbox(
             "選擇要修正的持倉主列",
             [""] + primary_df["_label"].tolist(),
-            key="fix_position_dividend_total_choice_v45_primary_only",
+            key="fix_position_dividend_total_choice_v46_primary_only",
         )
         if not choice:
             st.info("只列出每檔基金的第一筆主列，修正後會同步把同基金其他列累計歸零。")
