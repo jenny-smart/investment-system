@@ -23,7 +23,7 @@ try:
 except Exception:
     HAS_BS4 = False
 
-APP_VERSION = "2026-06-07-v39-dividend-position-sync"
+APP_VERSION = "2026-06-07-v40-dividend-position-match-fallback"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3440,20 +3440,49 @@ def update_position_dividend_original_total(
     delta_original: float,
 ) -> bool:
     delta_original = normalize_number(delta_original, 0)
-    if not fund_code or delta_original == 0:
+    target_code = normalize_text(fund_code, "").lower()
+    target_platform = normalize_text(platform, "")
+    target_currency = normalize_text(currency, "").upper()
+
+    if not target_code or delta_original == 0:
         return False
+
     try:
         rows = supabase_client().table("positions").select(
             "id,sort_order,fund_code,platform,currency,dividend_received_original_total"
-        ).eq("platform", platform).eq("currency", currency).execute().data or []
+        ).execute().data or []
     except Exception:
         rows = []
-    matched = [
+
+    same_code = [
         row for row in rows
-        if normalize_text(row.get("fund_code", "")).lower() == normalize_text(fund_code).lower()
+        if normalize_text(row.get("fund_code", "")).lower() == target_code
     ]
+
+    exact = [
+        row for row in same_code
+        if normalize_text(row.get("platform", "")) == target_platform
+        and normalize_text(row.get("currency", "")).upper() == target_currency
+    ]
+
+    same_currency = [
+        row for row in same_code
+        if normalize_text(row.get("currency", "")).upper() == target_currency
+    ]
+
+    matched = exact
+    if not matched and same_currency:
+        fallback_platforms = {
+            normalize_text(row.get("platform", ""))
+            for row in same_currency
+            if normalize_text(row.get("platform", ""))
+        }
+        if len(fallback_platforms) <= 1:
+            matched = same_currency
+
     if not matched:
         return False
+
     matched = sorted(
         matched,
         key=lambda row: (
@@ -3461,14 +3490,17 @@ def update_position_dividend_original_total(
             normalize_number(row.get("id", 999999), 999999),
         ),
     )
+
     primary = matched[0]
     primary_id = int(float(primary["id"]))
     current_total = normalize_number(primary.get("dividend_received_original_total", 0), 0)
     new_total = max(0, current_total + delta_original)
+
     supabase_client().table("positions").update({
         "dividend_received_original_total": new_total,
         "dividend_received_total": 0,
     }).eq("id", primary_id).execute()
+
     return True
 
 
