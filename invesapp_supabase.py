@@ -4414,7 +4414,9 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame | None = None) -> None:
 
     if table_df.empty:
         st.info("目前沒有台股股利記錄。可先按「掃描台股股利候選」或手動新增。")
+        render_stock_dividend_upload_section(current_positions)
         render_manual_stock_dividend_form(current_positions)
+
         return
 
     display_df = table_df[STOCK_DIVIDEND_COLUMNS].copy()
