@@ -3829,7 +3829,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.subheader("💰 配息記錄")
 
     # ── 配息操作按鈕 ──
-    action_col1, action_col2 = st.columns([1, 1])
+action_col1, action_col2, action_col3 = st.columns([1, 1, 1])
     if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
         try:
             source_positions = globals().get("positions", pd.DataFrame())
@@ -3872,6 +3872,18 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
         else:
             st.info("沒有需要回填的基金每月配息。")
 
+    if action_col3.button("🔄 重新計算累計配息", key="recalc_dividend_totals"):
+        try:
+            result = recalculate_all_dividend_totals()
+            st.success(
+                f"重新計算完成：已處理 {result['total_records']} 筆確認記錄，"
+                f"更新 {result['groups_updated']} 組基金累計配息。"
+            )
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as exc:
+            st.error(f"重新計算失敗：{exc}")
+            
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
