@@ -4407,6 +4407,188 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         else:
             st.info("沒有勾選狀態需要更新。")
 
+FUND_DIVIDEND_UPLOAD_COLUMNS = [
+    "平台", "幣別", "基金代號", "基金名稱", "除息日", "發放日",
+    "配息單位數", "每單位配息", "實際配息原幣", "匯率", "確認入帳", "備註",
+]
+
+
+def _fund_dividend_upload_template() -> pd.DataFrame:
+    return pd.DataFrame([{
+        "平台": "基富通",
+        "幣別": "TWD",
+        "基金代號": "acft94",
+        "基金名稱": "",
+        "除息日": "2026/06/01",
+        "發放日": "2026/06/10",
+        "配息單位數": 0,
+        "每單位配息": 0,
+        "實際配息原幣": 0,
+        "匯率": 1,
+        "確認入帳": "是",
+        "備註": "歷史補資料",
+    }])
+
+
+def _normalize_fund_dividend_upload(upload_df: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for idx, raw in upload_df.iterrows():
+        platform = normalize_text(raw.get("平台", ""))
+        currency = normalize_text(raw.get("幣別", "")).upper()
+        fund_code = normalize_text(raw.get("基金代號", ""))
+        fund_name = normalize_text(raw.get("基金名稱", ""))
+        ex_date = normalize_text(raw.get("除息日", ""))
+        pay_date = normalize_text(raw.get("發放日", ""))
+        units = normalize_number(raw.get("配息單位數", 0), 0)
+        div_amount = normalize_number(raw.get("每單位配息", 0), 0)
+        actual_total = normalize_number(raw.get("實際配息原幣", 0), 0)
+        fx = normalize_number(raw.get("匯率", 1), 1) or 1
+        is_paid = normalize_bool(raw.get("確認入帳", False), False)
+        note = normalize_text(raw.get("備註", ""))
+
+        if actual_total <= 0 and units > 0 and div_amount > 0:
+            actual_total = units * div_amount
+        if div_amount <= 0 and actual_total > 0 and units > 0:
+            div_amount = actual_total / units
+        actual_div = actual_total / units if actual_total > 0 and units > 0 else div_amount
+
+        errors = []
+        if not platform:
+            errors.append("平台必填")
+        if not currency:
+            errors.append("幣別必填")
+        if not fund_code:
+            errors.append("基金代號必填")
+        if not ex_date:
+            errors.append("除息日必填")
+        if units <= 0:
+            errors.append("配息單位數必須大於 0")
+        if actual_total <= 0 and div_amount <= 0:
+            errors.append("每單位配息或實際配息原幣至少填一個")
+
+        rows.append({
+            "狀態": "可匯入" if not errors else " / ".join(errors),
+            "平台": platform,
+            "幣別": currency,
+            "基金代號": fund_code,
+            "基金名稱": fund_name,
+            "除息日": ex_date,
+            "發放日": pay_date,
+            "配息單位數": units,
+            "每單位配息": div_amount,
+            "實際配息原幣": actual_total,
+            "匯率": fx,
+            "實際配息台幣": round(actual_total * fx, 0) if actual_total > 0 else 0,
+            "確認入帳": is_paid,
+            "備註": note or "批次匯入",
+            "_actual_div": actual_div,
+            "_row_number": idx + 2,
+        })
+    return pd.DataFrame(rows)
+
+
+def apply_fund_dividend_upload(preview_df: pd.DataFrame) -> tuple[int, int, list[str]]:
+    if preview_df.empty:
+        return 0, 0, []
+
+    sb = supabase_client()
+    inserted = 0
+    synced = 0
+    warnings: list[str] = []
+
+    for _, row in preview_df.iterrows():
+        if normalize_text(row.get("狀態", "")) != "可匯入":
+            continue
+
+        total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
+        fx = normalize_number(row.get("匯率", 1), 1) or 1
+        is_paid = normalize_bool(row.get("確認入帳", False), False)
+
+        payload = {
+            "fund_code": normalize_text(row.get("基金代號", "")),
+            "fund_name": normalize_text(row.get("基金名稱", "")),
+            "platform": normalize_text(row.get("平台", "")),
+            "currency": normalize_text(row.get("幣別", "")),
+            "ex_date": normalize_text(row.get("除息日", "")),
+            "pay_date": normalize_text(row.get("發放日", "")),
+            "div_amount": normalize_number(row.get("每單位配息", 0), 0),
+            "actual_div_amount": normalize_number(row.get("_actual_div", 0), 0) if is_paid else 0,
+            "units_at_ex": normalize_number(row.get("配息單位數", 0), 0),
+            "fx_rate": fx,
+            "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
+            "is_paid": is_paid,
+            "note": normalize_text(row.get("備註", "批次匯入")),
+        }
+        sb.table("dividend_log").insert(payload).execute()
+        inserted += 1
+
+        if is_paid and total_amount > 0:
+            ok = update_position_dividend_original_total(
+                payload["fund_code"],
+                payload["platform"],
+                payload["currency"],
+                total_amount,
+            )
+            if ok:
+                synced += 1
+            else:
+                warnings.append(
+                    f"第 {int(row.get('_row_number', 0))} 列已匯入，但找不到對應持倉可同步累計："
+                    f"{payload['platform']} / {payload['currency']} / {payload['fund_code']}"
+                )
+
+    return inserted, synced, warnings
+
+
+def render_fund_dividend_upload_section() -> None:
+    with st.expander("📤 批次匯入基金配息補資料（CSV / Excel）", expanded=False):
+        st.caption("適合補歷史配息。實際配息原幣可留 0，系統會用配息單位數 × 每單位配息計算。")
+
+        template = _fund_dividend_upload_template()
+        st.download_button(
+            "下載基金配息補資料範本 CSV",
+            data=template.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+            file_name="fund_dividend_upload_template.csv",
+            mime="text/csv",
+            key="download_fund_dividend_upload_template",
+        )
+
+        uploaded = st.file_uploader(
+            "上傳基金配息補資料 CSV / Excel",
+            type=["csv", "xlsx", "xls"],
+            key="fund_dividend_upload_file",
+        )
+        if uploaded is None:
+            return
+
+        try:
+            upload_df = read_uploaded_table(uploaded)
+            missing = [col for col in FUND_DIVIDEND_UPLOAD_COLUMNS if col not in upload_df.columns]
+            if missing:
+                st.error("上傳檔案缺少欄位：" + "、".join(missing))
+                return
+
+            preview = _normalize_fund_dividend_upload(upload_df)
+            st.dataframe(
+                right_align_numbers(preview.drop(columns=[c for c in preview.columns if c.startswith("_")], errors="ignore")),
+                use_container_width=True,
+                hide_index=True,
+                height=min(42 * len(preview) + 44, 520),
+            )
+
+            valid_count = int((preview["狀態"] == "可匯入").sum())
+            st.caption(f"可匯入 {valid_count} 筆，錯誤 {len(preview) - valid_count} 筆。")
+            confirm = st.checkbox("確認匯入基金配息補資料", key="confirm_fund_dividend_upload")
+            if st.button("匯入基金配息補資料", disabled=not confirm or valid_count <= 0, key="apply_fund_dividend_upload"):
+                inserted, synced, warnings = apply_fund_dividend_upload(preview)
+                st.success(f"已匯入 {inserted} 筆；其中 {synced} 筆已同步累計配息原幣。")
+                if warnings:
+                    st.warning("\n".join(warnings[:20]))
+                st.cache_data.clear()
+                st.rerun()
+        except Exception as exc:
+            st.error(f"匯入失敗：{exc}")
+
 def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
@@ -4496,8 +4678,10 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_position_dividend_total_fix_tool()
 
     st.markdown("---")
+    render_fund_dividend_upload_section()
 
     with st.expander("➕ 手動新增配息記錄（補填歷史）"):
+
         st.caption("用於補填歷史配息；實際配息留 0 時，確認入帳記錄會用每單位配息 × 配息單位數代入。")
         with st.form("manual_div_log"):
             c1, c2, c3 = st.columns(3)
