@@ -5179,6 +5179,9 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出", "借入", "借出", "代墊"]
+CASHFLOW_TRANSFER_TYPES = {"轉帳"}
+CASHFLOW_INCOME_TYPES = {"收入", "利息收入", "投資賣出", "借入"}
+CASHFLOW_EXPENSE_TYPES = {"支出", "利息支出", "信用卡消費", "投資買入", "借出", "代墊"}
 CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
 LIABILITY_CATEGORIES = ["借款/代墊"]
@@ -5275,6 +5278,52 @@ def _unique_keep_order(values: list[Any]) -> list[str]:
 
 def cash_subject_options() -> list[str]:
     return cash_subject_catalog_df()["科目"].dropna().astype(str).tolist()
+
+
+def _cashflow_kind(txn_type: str) -> str:
+    txn_type = normalize_text(txn_type)
+    if txn_type in CASHFLOW_TRANSFER_TYPES:
+        return "transfer"
+    if txn_type in CASHFLOW_INCOME_TYPES:
+        return "income"
+    if txn_type in CASHFLOW_EXPENSE_TYPES:
+        return "expense"
+    return "expense"
+
+
+def cash_subject_options_for_txn(txn_type: str) -> list[str]:
+    kind = _cashflow_kind(txn_type)
+    all_options = cash_subject_options()
+    if kind == "transfer":
+        return []
+
+    expense_roles = {
+        "expense", "advance_expense", "credit_card_expense",
+        "insurance_expense", "loan_or_investment_outflow",
+    }
+    income_roles = {
+        "income", "interest_income", "investment_income",
+        "insurance_rebate", "loan_payable",
+    }
+    wanted_roles = expense_roles if kind == "expense" else income_roles
+    wanted_cashflow = {"支出", "代墊", "借出/投資"} if kind == "expense" else {"收入", "借入"}
+
+    filtered = []
+    for subject in all_options:
+        rule = classify_cash_subject(subject)
+        role = normalize_text(rule.get("資料角色", ""))
+        cashflow_type = normalize_text(rule.get("收支屬性", ""))
+        if role in wanted_roles or cashflow_type in wanted_cashflow:
+            filtered.append(subject)
+    return filtered or all_options
+
+
+def _default_subject_index(options: list[str], preferred: str = "") -> int:
+    if not options:
+        return 0
+    if preferred and preferred in options:
+        return options.index(preferred)
+    return 0
 
 
 def _cash_subject_currency(subject: str) -> str:
@@ -5454,6 +5503,15 @@ def _id_from_option(opt: str) -> int | None:
         return int(str(opt).split("｜")[0])
     except Exception:
         return None
+
+
+def _account_name_from_option(opt: str) -> str:
+    opt = normalize_text(opt)
+    if not opt or opt == "（無）":
+        return ""
+    if "｜" in opt:
+        return opt.split("｜", 1)[1]
+    return opt
 
 
 def _account_balance_twd(row: pd.Series) -> float:
@@ -5675,7 +5733,7 @@ def apply_cash_import_preview(preview: pd.DataFrame, update_existing: bool = Tru
 
 def render_cash_import_section() -> None:
     st.markdown("#### 📥 匯入目前資料")
-    st.caption("從 2026細帳選一個月份匯入帳戶目前餘額；轉帳來源/目標只列銀行、外幣、保險、投資、借款/代墊。零用金明細、信用卡消費、收入與彙總列只保留為交易分類。")
+    st.caption("這裡把 Google Sheet 舊表資料匯入正式現金流；線上總表只做讀取、檢查與搬資料，不當作正式交易帳。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -5832,22 +5890,46 @@ def render_cashflow_tab() -> None:
         if accts.empty:
             st.warning("請先到「帳戶管理」建立帳戶。")
         else:
-            acct_opts = ["（無）"] + _acct_options(accts)
-            subject_opts = cash_subject_options()
-            default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
-            st.caption("來源/目標是帳戶互轉；轉入零用金或信用卡時，請在「分類 / 支出項目」選對應科目，並可填轉帳註記。")
+            account_opts = _acct_options(accts)
+            if not account_opts:
+                st.warning("目前沒有可作付款、入帳或轉帳的帳戶；請先到「帳戶管理」建立銀行、外幣、投資、保險或借款/代墊帳戶。")
+            required_account_opts = account_opts if account_opts else ["（無）"]
+            acct_opts_optional = ["（無）"] + account_opts
+            txn_type = st.selectbox("類型", TXN_TYPES, key="new_txn_type")
+            flow_kind = _cashflow_kind(txn_type)
+            subject_opts = cash_subject_options_for_txn(txn_type)
+            if flow_kind == "transfer":
+                st.caption("轉帳只選轉出與轉入科目；支出、收入才需要選分類科目。")
+            elif flow_kind == "income":
+                st.caption("收入類：選收入科目與入帳科目，系統會增加入帳科目餘額。")
+            else:
+                st.caption("支出類：選付款科目與支出科目，系統會扣除付款科目餘額；付款科目留空時只記錄分類。")
+
             with st.form("new_txn_form"):
                 c1, c2, c3 = st.columns(3)
                 txn_date = c1.date_input("日期", value=pd.Timestamp.today())
-                txn_type = c2.selectbox("類型", TXN_TYPES)
-                txn_subject = c3.selectbox("分類 / 支出項目", subject_opts, index=default_subject_idx)
-                rule = classify_cash_subject(txn_subject)
-                role = normalize_text(rule.get("資料角色", ""))
-                st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
-
-                c4, c5 = st.columns(2)
-                from_opt = c4.selectbox("來源科目（扣款方）", acct_opts, key="from_acct")
-                to_opt = c5.selectbox("目標科目（入帳方）", acct_opts, key="to_acct")
+                if flow_kind == "transfer":
+                    txn_subject = txn_type
+                    role = "transfer"
+                    from_opt = c2.selectbox("轉出科目", required_account_opts, key="transfer_from_acct")
+                    to_opt = c3.selectbox("轉入科目", required_account_opts, key="transfer_to_acct")
+                    st.caption("科目分類：轉帳 / 帳戶互轉")
+                elif flow_kind == "income":
+                    default_subject_idx = _default_subject_index(subject_opts, "薪資入帳")
+                    txn_subject = c2.selectbox("收入科目", subject_opts, index=default_subject_idx, key="income_subject")
+                    to_opt = c3.selectbox("入帳科目", required_account_opts, key="income_to_acct")
+                    from_opt = "（無）"
+                    rule = classify_cash_subject(txn_subject)
+                    role = normalize_text(rule.get("資料角色", ""))
+                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
+                else:
+                    default_subject_idx = _default_subject_index(subject_opts, "零用金-餐費")
+                    from_opt = c2.selectbox("付款科目", acct_opts_optional, key="expense_from_acct")
+                    txn_subject = c3.selectbox("支出科目", subject_opts, index=default_subject_idx, key="expense_subject")
+                    to_opt = "（無）"
+                    rule = classify_cash_subject(txn_subject)
+                    role = normalize_text(rule.get("資料角色", ""))
+                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
 
                 c6, c7, c8 = st.columns(3)
                 amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
@@ -5857,19 +5939,23 @@ def render_cashflow_tab() -> None:
 
                 twd_est = amount * fx_rate_input
                 st.caption(f"估算台幣金額：**{money(twd_est)}**")
-                desc = st.text_input("說明", value=txn_subject)
-                note = st.text_input("轉帳註記 / 備註")
+                default_desc = txn_subject
+                if flow_kind == "transfer":
+                    default_desc = f"{_account_name_from_option(from_opt)} → {_account_name_from_option(to_opt)}"
+                desc = st.text_input("說明", value=default_desc)
+                note = st.text_input("備註")
 
                 if st.form_submit_button("💾 新增交易"):
                     from_id = _id_from_option(from_opt)
                     to_id = _id_from_option(to_opt)
-                    record_only_allowed = role in {"expense", "advance_expense", "credit_card_expense", "insurance_expense"}
                     if amount <= 0:
                         st.error("金額必須大於 0")
-                    elif from_id is None and to_id is None and not record_only_allowed:
-                        st.error("來源和目標科目至少填一個")
+                    elif flow_kind == "transfer" and (from_id is None or to_id is None):
+                        st.error("轉帳必須選轉出科目和轉入科目")
+                    elif flow_kind == "income" and to_id is None:
+                        st.error("收入必須選入帳科目")
                     elif from_id is not None and to_id is not None and from_id == to_id:
-                        st.error("來源和目標不能是同一個科目")
+                        st.error("轉出和轉入不能是同一個科目")
                     else:
                         try:
                             sb = supabase_client()
