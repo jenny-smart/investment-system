@@ -5339,27 +5339,9 @@ def _cash_account_category(rule: dict[str, str]) -> str:
 
 def _cash_account_bank_name(subject: str, account_category: str) -> tuple[str, str]:
     subject = normalize_text(subject)
-    if subject == "零用金":
-        return "零用金", "主帳戶"
-    if account_category in {"支出", "收入"}:
-        if "-" in subject:
-            bank, name = subject.split("-", 1)
-            return bank, name or subject
-        return account_category, subject
-    if account_category == "信用卡" and subject.startswith("信用卡-"):
-        return "信用卡", subject.replace("信用卡-", "", 1)
-    if account_category == "外幣" and subject in {"美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"}:
-        return "外幣現金", subject
-    if account_category == "保險":
-        return subject, "保單"
-    if "-" in subject:
-        bank, name = subject.split("-", 1)
-        return bank, name or subject
-    if account_category == "投資":
-        return subject, "投資帳戶"
-    if account_category == "借款/代墊":
-        return subject, "往來帳戶"
-    return subject, "主帳戶"
+    # 科目名稱直接當帳戶識別，不再拆分
+    # bank = 科目名稱本身，name = 空字串（帳戶總覽顯示時只用 bank）
+    return subject, ""
 
 
 def cash_account_preset_rows() -> list[dict[str, Any]]:
@@ -5445,15 +5427,22 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if row.empty:
         return str(acct_id)
     r = row.iloc[0]
-    return f"{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})"
-
+    bank = normalize_text(r.get("bank", ""))
+    name = normalize_text(r.get("name", ""))
+    cur = normalize_text(r.get("currency", ""))
+    label = bank if not name else f"{bank} {name}"
+    return f"{label}({cur})"
 
 def _acct_options(accts: pd.DataFrame) -> list[str]:
     opts: list[str] = []
     if accts.empty:
         return opts
     for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        opts.append(f"{r.get('id')}｜{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})")
+        bank = normalize_text(r.get("bank", ""))
+        name = normalize_text(r.get("name", ""))
+        cur  = normalize_text(r.get("currency", ""))
+        label = bank if not name else f"{bank} {name}"
+        opts.append(f"{r.get('id')}｜{label}({cur})")
     return opts
 
 
@@ -6079,27 +6068,27 @@ def render_cashflow_tab() -> None:
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
 
-        with st.expander("一鍵建立缺少的預設帳戶"):
-            st.caption("會建立帳戶餘額科目；來源/目標互轉只列銀行、外幣、保險、投資、借款/代墊。現金類可做總覽但不列入互轉，支出/收入/信用卡消費只作分類；已存在者會略過。")
-            st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
-            confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
-            if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
-                try:
-                    count = create_missing_cash_account_presets()
-                    st.success(f"已新增 {count} 個預設帳戶。")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"建立失敗：{e}")
-
-    with tab5:
-        catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
-        st.markdown("#### 科目字典")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("科目數", f"{len(catalog):,}")
-        c2.metric("大類數", f"{catalog['大類'].nunique():,}")
-        c3.metric("預設帳戶數", f"{len(cash_account_preset_rows()):,}")
-        st.dataframe(catalog, use_container_width=True, hide_index=True, height=620)
+        # 在「一鍵建立缺少的預設帳戶」expander 裡加這個
+        with st.expander("⚠️ 清除全部帳戶重建"):
+            confirm_clear = st.checkbox("確認刪除全部 accounts 重建", key="confirm_clear_accounts")
+            if st.button("刪除全部帳戶", disabled=not confirm_clear, key="clear_all_accounts"):
+                sb = supabase_client()
+                rows = load_accounts()
+                for _, r in rows.iterrows():
+                    rid = r.get("id")
+                    if not pd.isna(rid):
+                        sb.table("accounts").delete().eq("id", int(rid)).execute()
+                st.success(f"已刪除 {len(rows)} 筆帳戶。")
+                st.cache_data.clear()
+                st.rerun()
+            with tab5:
+                catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
+                st.markdown("#### 科目字典")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("科目數", f"{len(catalog):,}")
+                c2.metric("大類數", f"{catalog['大類'].nunique():,}")
+                c3.metric("預設帳戶數", f"{len(cash_account_preset_rows()):,}")
+                st.dataframe(catalog, use_container_width=True, hide_index=True, height=620)
 
 
 # ════════════════════════════════════════════════════════════════════════════
