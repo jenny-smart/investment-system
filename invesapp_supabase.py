@@ -1279,178 +1279,132 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
             "零用金-命理", "零用金-醫療", "零用金-拜拜", "零用金-其他",
             "零用金-旅行", "零用金-朋友", "零用金-家用",
         ],
-        "支出",
-        "零用金生活支出",
-        "expense",
-        "cash_ledger_entries",
-        "支出",
+        "支出", "零用金生活支出", "expense", "cash_ledger_entries", "支出",
     )
     + _cash_subject_record(
         ["零用金-公司", "零用金-公司內勤", "零用金-公司代墊", "零用金-代墊"],
-        "支出/代墊",
-        "零用金代墊",
-        "advance_expense",
-        "cash_ledger_entries",
-        "代墊",
+        "支出/代墊", "零用金代墊", "advance_expense", "cash_ledger_entries", "代墊",
         "後續可用公司代墊款入帳沖銷。",
     )
     + _cash_subject_record(
-        ["零用金", "零用金--總支出", "零用金-支出", "零用金-淨值", "月支出"],
-        "彙總",
-        "零用金彙總",
-        "summary",
-        "cash_monthly_snapshots",
-        "彙總",
+        ["零用金", "零用金--總支出", "零用金-支出", "零用金-淨值", "月支出", "prettycash"],
+        "彙總", "零用金彙總", "summary", "cash_monthly_snapshots", "彙總",
         "這類通常是公式結果，不應當作單筆交易重複入帳。",
     )
     + _cash_subject_record(
         ["薪資入帳", "公司代墊款入帳"],
-        "收入",
-        "薪資/代墊款入帳",
-        "income",
-        "cash_ledger_entries",
-        "收入",
+        "收入", "薪資/代墊款入帳", "income", "cash_ledger_entries", "收入",
     )
     + _cash_subject_record(
         [
-            "富邦銀行", "元大銀行", "郵局", "台新銀行-建北", "台新銀行-信義",
-            "台新銀行-Richard", "台新銀行-子帳戶", "台新銀行-內湖新轉",
+            "富邦銀行", "元大銀行", "郵局",
+            "台新銀行-建北", "台新銀行-信義", "台新銀行-Richard",
+            "台新銀行-子帳戶", "台新銀行-內湖新轉",
             "連線銀行", "將來銀行", "渣打銀行", "中國信託", "樂天銀行",
             "悠遊付", "一卡通",
         ],
-        "現金/銀行",
-        "台幣帳戶",
-        "account_balance",
-        "cash_accounts",
-        "餘額",
+        "現金/銀行", "台幣帳戶", "account_balance", "cash_accounts", "餘額",
         "轉線上時做帳戶餘額或月份快照，不當作收入或支出。",
     )
     + _cash_subject_record(
         [
-            "富邦銀行-銀行利息", "元大bank-銀行利息", "台新bank-銀行利息",
+            "富邦銀行-銀行利息", "元大bank-銀行利息",
+            "台新bank-銀行利息",
             "連線bank-銀行利息", "將來bank-銀行利息", "樂天bank-銀行利息",
         ],
-        "收入",
-        "銀行利息",
-        "interest_income",
-        "cash_ledger_entries",
-        "收入",
+        "收入", "銀行利息", "interest_income", "cash_ledger_entries", "收入",
     )
     + _cash_subject_record(
-        ["台銀人壽", "國泰人壽", "新光人壽", "保誠人壽"],
-        "保險",
-        "保單/保險資產",
-        "insurance_balance",
-        "insurance_accounts",
-        "餘額",
+        ["銀行總額-台幣", "銀行總額-外幣", "銀行總額-台/外幣"],
+        "彙總", "銀行彙總", "summary", "cash_monthly_snapshots", "彙總",
+        "公式彙總列，不建立帳戶。",
+    )
+    + _cash_subject_record(
+        ["台銀人壽", "國泰人壽", "新光人壽", "保誠人壽", "南山人壽", "台灣人壽", "中國人壽"],
+        "保險", "保單/保險資產", "insurance_balance", "insurance_accounts", "餘額",
+    )
+    + _cash_subject_record(
+        ["保險總額"],
+        "彙總", "保險彙總", "summary", "cash_monthly_snapshots", "彙總",
     )
     + _cash_subject_record(
         ["保費支出"],
-        "支出",
-        "保費支出",
-        "insurance_expense",
-        "cash_ledger_entries",
-        "支出",
+        "支出", "保費支出", "insurance_expense", "cash_ledger_entries", "支出",
     )
     + _cash_subject_record(
-        ["保險回饋金"],
-        "收入",
-        "保險回饋",
-        "insurance_rebate",
-        "cash_ledger_entries",
-        "收入",
+        ["保險回饋金", "回饋金-保險"],
+        "收入", "保險回饋", "insurance_rebate", "cash_ledger_entries", "收入",
     )
     + _cash_subject_record(
         ["台幣換外幣"],
-        "轉帳/換匯",
-        "台幣換外幣",
-        "fx_transfer",
-        "cash_transfers",
-        "轉帳",
+        "轉帳/換匯", "台幣換外幣", "fx_transfer", "cash_transfers", "轉帳",
     )
     + _cash_subject_record(
-        ["美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"],
-        "現金/銀行",
-        "外幣現金",
-        "foreign_cash_balance",
-        "cash_accounts",
-        "餘額",
-    )
-    + _cash_subject_record(
-        ["渣打美金", "渣打南非", "台新美金", "台新日幣", "台新南非"],
-        "現金/銀行",
-        "外幣銀行帳戶",
-        "foreign_account_balance",
-        "cash_accounts",
-        "餘額",
-    )
-    + _cash_subject_record(
-        ["借入"],
-        "借款",
-        "借入",
-        "loan_payable",
-        "loan_entries",
-        "借入",
-    )
-    + _cash_subject_record(
-        ["借出+投資"],
-        "借款/投資",
-        "借出與投資",
-        "loan_or_investment_outflow",
-        "loan_entries",
-        "借出/投資",
-    )
-    + _cash_subject_record(
-        ["借出+代墊+借入小計"],
-        "彙總",
-        "借款代墊小計",
-        "summary",
-        "cash_monthly_snapshots",
-        "彙總",
+        ["美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元", "日幣 suica", "Taiwan", "China"],
+        "現金/銀行", "外幣現金", "foreign_cash_balance", "cash_accounts", "餘額",
     )
     + _cash_subject_record(
         [
-            "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
-            "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
-            "渣打-南非", "台新-美金", "台新-南非",
-            "懷思投資", "懷思新增投資", "notyetincome",
+            "渣打美金", "渣打南非",
+            "台新美金", "台新日幣", "台新南非",
         ],
-        "投資",
-        "投資資金/帳戶",
-        "investment_transfer_or_balance",
-        "investment_cash_links",
-        "投資/轉帳",
+        "現金/銀行", "外幣銀行帳戶", "foreign_account_balance", "cash_accounts", "餘額",
     )
     + _cash_subject_record(
-        ["懷思投資total"],
-        "彙總",
-        "懷思投資彙總",
-        "summary",
-        "investment_snapshots",
-        "彙總",
+        ["借入"],
+        "借款", "借入", "loan_payable", "loan_entries", "借入",
     )
     + _cash_subject_record(
-        ["懷思投資報酬", "基金配息", "j渣打-大華"],
-        "收入",
-        "投資收入",
-        "investment_income",
-        "cash_ledger_entries",
-        "收入",
+        ["借出+投資"],
+        "借款/投資", "借出與投資", "loan_or_investment_outflow", "loan_entries", "借出/投資",
+    )
+    + _cash_subject_record(
+        ["借出+代墊+借入小計", "借出/入總額", "利息+利得"],
+        "彙總", "借款代墊小計", "summary", "cash_monthly_snapshots", "彙總",
+    )
+    + _cash_subject_record(
+        [
+            "台股-舊資金", "台股-新資金", "台股",
+            "富邦奈米投",
+            "基富通-台", "基富通-人", "基富通-日",
+            "渣打-美金", "渣打-南非",
+            "台新-美金", "台新-南非",
+            "台新基金",
+            "懷思投資", "懷思新增投資",
+            "notyetincome",
+        ],
+        "投資", "投資資金/帳戶", "investment_transfer_or_balance",
+        "investment_cash_links", "投資/轉帳",
+    )
+    + _cash_subject_record(
+        ["懷思投資total", "台股投資總值", "基金投資總額", "投資總額"],
+        "彙總", "投資彙總", "summary", "investment_snapshots", "彙總",
+    )
+    + _cash_subject_record(
+        [
+            "懷思投資報酬", "基金配息", "j渣打-大華",
+            "配息-懷思投資",
+            "股利-台股",
+            "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
+            "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
+            "配息-台新-美金", "配息-台新-南非",
+        ],
+        "收入", "投資收入", "investment_income", "cash_ledger_entries", "收入",
     )
     + _cash_subject_record(
         [
             "信用卡-渣打 14", "信用卡-富邦 19", "信用卡-聯邦",
             "信用卡-星展 08", "信用卡-台新 18", "信用卡-國泰世華 24",
         ],
-        "支出",
-        "信用卡消費",
-        "credit_card_expense",
-        "cash_ledger_entries",
-        "支出",
+        "支出", "信用卡消費", "credit_card_expense", "cash_ledger_entries", "支出",
         "信用卡消費只記分類，不建立互轉帳戶。",
     )
+    + _cash_subject_record(
+        ["totalincome", "總支出", "總淨值", "net confirm"],
+        "彙總", "全局彙總", "summary", "cash_monthly_snapshots", "彙總",
+        "全局公式彙總列，不當作單筆交易。",
+    )
 )
-
 
 CASH_SUBJECT_LOOKUP: dict[str, dict[str, str]] = {
     normalize_text(row["科目"]): row for row in CASH_SUBJECT_RULES
@@ -1465,6 +1419,13 @@ def classify_cash_subject(subject: Any) -> dict[str, str]:
         return {"科目": item, "大類": "未分類", "子類": "空白", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": ""}
     if "銀行利息" in item or "bank-銀行利息" in item:
         return {"科目": item, "大類": "收入", "子類": "銀行利息", "資料角色": "interest_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
+    if item.startswith("配息-") or item.startswith("股利-"):
+        return {
+            "科目": item, "大類": "收入", "子類": "投資收入",
+            "資料角色": "investment_income",
+            "建議線上表": "cash_ledger_entries",
+            "收支屬性": "收入", "備註": "依配息/股利前綴自動判斷",
+        }
     if item.startswith("零用金-") or item.startswith("零用金--"):
         return {"科目": item, "大類": "支出", "子類": "零用金待確認", "資料角色": "expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依零用金前綴自動判斷"}
     if item.startswith("信用卡-"):
