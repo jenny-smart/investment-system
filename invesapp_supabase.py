@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import io
 import re
+import html as html_lib
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -903,12 +904,61 @@ def fetch_anue_fund_nav(code: str) -> tuple[float | None, str]:
         return None, f"鉅亨錯誤:{str(e)[:40]}"
 
 
+def _decode_moneydj_content(content: bytes) -> str:
+    for encoding in ("big5", "cp950", "utf-8"):
+        try:
+            return content.decode(encoding)
+        except Exception:
+            continue
+    return content.decode("utf-8", errors="ignore")
+
+
+def _moneydj_text_from_html(html: str) -> str:
+    if HAS_BS4:
+        try:
+            return BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            pass
+    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return html_lib.unescape(re.sub(r"\s+", " ", text)).strip()
+
+
+def parse_moneydj_fund_quote(html: str) -> dict[str, Any]:
+    text = _moneydj_text_from_html(html).replace(",", "")
+    patterns = [
+        r"淨值日期\s+最新淨值\s+每日變化\s+最高淨值\(年\)\s+最低淨值\(年\)\s+"
+        r"(20\d{2}/\d{1,2}/\d{1,2})\s+([0-9]+(?:\.[0-9]+)?)",
+        r"淨值日期\s+最新淨值.*?(20\d{2}/\d{1,2}/\d{1,2})\s+([0-9]+(?:\.[0-9]+)?)",
+        r"(20\d{2}/\d{1,2}/\d{1,2})\s+([0-9]+(?:\.[0-9]+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.S)
+        if not match:
+            continue
+        raw_date = _format_dividend_date(match.group(1))
+        nav = to_float(match.group(2))
+        if nav is not None and 0 < nav < 10000:
+            return {
+                "nav": float(nav),
+                "date": _parse_date_str(raw_date),
+                "raw_date": raw_date,
+                "status": "MoneyDJ直連✓",
+            }
+
+    nums = re.findall(r"(?<!\d)([0-9]+\.[0-9]{2,6})(?!\d)", text)
+    for n in nums:
+        nav = to_float(n)
+        if nav is not None and 0 < nav < 10000:
+            return {"nav": float(nav), "date": "—", "raw_date": "", "status": "MoneyDJ直連✓"}
+    return {"nav": None, "date": "—", "raw_date": "", "status": "MoneyDJ 找不到淨值"}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
+def fetch_moneydj_fund_quote(code: str, pattern: str) -> dict[str, Any]:
     if not code or not pattern:
-        return None, "無 fund_code/fund_pattern"
-    if not HAS_BS4:
-        return None, "缺少 beautifulsoup4"
+        return {"nav": None, "date": "—", "raw_date": "", "status": "無 fund_code/fund_pattern"}
     try:
         url = f"https://www.moneydj.com/funddj/ya/{pattern}.djhtm?a={code}"
         r = requests.get(url, timeout=PRICE_REQUEST_TIMEOUT_SECONDS, headers={
@@ -916,35 +966,20 @@ def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
             "Referer": "https://www.moneydj.com/",
         })
         r.raise_for_status()
-        soup = BeautifulSoup(r.content, "lxml", from_encoding="big5")
-        header_table = soup.find("table", class_="t01")
-        if header_table is not None:
-            cells = [td.get_text(" ", strip=True).replace(",", "") for td in header_table.find_all("td")]
-            for txt in cells:
-                val = to_float(txt)
-                if val is not None and 0 < val < 10000:
-                    return val, "ok"
-        candidates: list[float] = []
-        for td in soup.find_all("td"):
-            txt = td.get_text(" ", strip=True).replace(",", "")
-            if not txt:
-                continue
-            if re.fullmatch(r"\d+(?:\.\d+)?", txt):
-                val = float(txt)
-                if 0 < val < 10000:
-                    candidates.append(val)
-        decimal_candidates = [x for x in candidates if isinstance(x, float) and not float(x).is_integer()]
-        if decimal_candidates:
-            return float(decimal_candidates[0]), "ok"
-        text = soup.get_text(" ", strip=True).replace(",", "")
-        nums = re.findall(r"(?<!\d)(\d+\.\d+)(?!\d)", text)
-        for n in nums:
-            val = float(n)
-            if 0 < val < 10000:
-                return val, "ok"
-        return None, f"MoneyDJ 找不到淨值:{code}"
+        quote = parse_moneydj_fund_quote(_decode_moneydj_content(r.content))
+        if quote.get("nav") is not None:
+            return quote
+        quote["status"] = f"{quote.get('status', 'MoneyDJ 找不到淨值')}:{code}"
+        return quote
     except Exception as e:
-        return None, f"MoneyDJ 錯誤:{str(e)[:40]}"
+        return {"nav": None, "date": "—", "raw_date": "", "status": f"MoneyDJ 錯誤:{str(e)[:40]}"}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
+    quote = fetch_moneydj_fund_quote(code, pattern)
+    nav = quote.get("nav")
+    return (float(nav), normalize_text(quote.get("status", "MoneyDJ直連✓"))) if nav is not None else (None, normalize_text(quote.get("status", "MoneyDJ 找不到淨值")))
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_gas_div_for_enrich(fund_code: str) -> float | None:
@@ -954,41 +989,54 @@ def _fetch_gas_div_for_enrich(fund_code: str) -> float | None:
     return float(value) if value else None
 
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
+def fetch_fund_quote(code: str, pattern: str) -> dict[str, Any]:
     code = normalize_text(code)
     pattern = normalize_text(pattern)
+    empty = {"nav": None, "date": "—", "raw_date": "", "status": "基金代碼空白"}
+    if not code:
+        return empty
     if re.fullmatch(r"[A-Z]\d{5}", code.upper()):
         nav, status = fetch_anue_fund_nav(code)
         if nav:
-            return nav, status
+            return {"nav": nav, "date": "—", "raw_date": "", "status": status}
         nav, status = fetch_gas_fund_nav(code)
         if nav:
-            return nav, status
-        return None, status
+            gas = _get_gas_data(code)
+            return {"nav": nav, "date": gas.get("date", "—"), "raw_date": normalize_text(gas.get("date", "")), "status": status}
+        return {"nav": None, "date": "—", "raw_date": "", "status": status}
     statuses: list[str] = []
     if pattern and pattern.lower() != "anue":
-        nav, status = fetch_moneydj_nav(code, pattern)
-        if nav:
-            return nav, "MoneyDJ直連✓"
-        statuses.append(status)
+        quote = fetch_moneydj_fund_quote(code, pattern)
+        nav = quote.get("nav")
+        if nav is not None:
+            return quote
+        statuses.append(normalize_text(quote.get("status", "")))
     cnyes_id = FUND_CNYES_IDS.get(code, "")
     if cnyes_id:
         nav, status = fetch_cnyes_fund_nav(cnyes_id)
         if nav:
-            return nav, f"鉅亨直連✓({cnyes_id})"
+            return {"nav": nav, "date": "—", "raw_date": "", "status": f"鉅亨直連✓({cnyes_id})"}
         statuses.append(status)
     anue_id = FUND_ANUE_IDS.get(code.lower(), "")
     if anue_id:
         nav, status = fetch_anue_fund_nav(anue_id)
         if nav:
-            return nav, f"鉅亨舊✓({anue_id})"
+            return {"nav": nav, "date": "—", "raw_date": "", "status": f"鉅亨舊✓({anue_id})"}
         statuses.append(status)
     nav, status = fetch_gas_fund_nav(code)
     if nav:
-        return nav, status
+        gas = _get_gas_data(code)
+        return {"nav": nav, "date": gas.get("date", "—"), "raw_date": normalize_text(gas.get("date", "")), "status": status}
     statuses.append(status)
     detail = "；".join(s for s in statuses if s)
-    return None, f"所有來源失敗:{code} {detail[:120]}"
+    return {"nav": None, "date": "—", "raw_date": "", "status": f"所有來源失敗:{code} {detail[:120]}"}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
+    quote = fetch_fund_quote(code, pattern)
+    nav = quote.get("nav")
+    return (float(nav), normalize_text(quote.get("status", "ok"))) if nav is not None else (None, normalize_text(quote.get("status", "所有來源失敗")))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1102,6 +1150,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     for _, r in df.iterrows():
         name = normalize_text(r.get("name", ""))
         currency = normalize_text(r.get("currency", "TWD")).upper()
+        fund_nav_date = "—"
         if "南非幣" in name:
             currency = "ZAR"
         elif "美元" in name or "美金" in name or normalize_text(r.get("asset_type")) == "美股":
@@ -1125,7 +1174,10 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             fund_code = normalize_text(r.get("fund_code", ""))
             fund_pattern = normalize_text(r.get("fund_pattern", ""))
             fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
-            price, p_status = fetch_fund_nav(fund_code, fund_pattern)
+            fund_quote = fetch_fund_quote(fund_code, fund_pattern)
+            price = to_float(fund_quote.get("nav"))
+            p_status = normalize_text(fund_quote.get("status", "所有來源失敗"))
+            fund_nav_date = normalize_text(fund_quote.get("date", "—"), "—")
         fx, fx_status = fetch_fx(currency)
         calc_row = r.copy()
         is_dividend_primary = True
@@ -1158,6 +1210,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         out.update(calc)
         out.update({
             "即時價格/淨值": price,
+            "基金淨值日期": fund_nav_date,
             "匯率": fx,
             "累積配息主列": is_dividend_primary,
             "每單位月配息估算": div_per_unit,
@@ -2283,7 +2336,7 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計配息原幣", "累計已領配息", "每月配息",
                   "units", "original_units", "total_cost_input", "dividend_received_total"]
     first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
-                  "即時價格/淨值", "匯率", "platform", "asset_type", "id"]
+                  "即時價格/淨值", "基金淨值日期", "匯率", "platform", "asset_type", "id"]
 
     merged_rows = []
     for key_val, grp in p_rows.groupby("_merge_key", dropna=False):
@@ -2368,7 +2421,7 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             date_str = fmt_md(tw_now())
         else:
             fc       = normalize_text(pr.get("fund_code", ""))
-            date_str = _get_gas_date(fc) if fc else "—"
+            date_str = normalize_text(pr.get("基金淨值日期", ""), "") or (_get_gas_date(fc) if fc else "—")
 
         if price_val is None:
             date_str = "❌"
@@ -3118,6 +3171,13 @@ def _latest_past_date(values: list[Any]) -> str:
     return max(parsed_dates).strftime("%Y/%m/%d")
 
 
+def _latest_dividend_reference_date(gas: dict[str, Any], history_rows: list[dict[str, Any]]) -> str:
+    ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
+    if ex_date != "—":
+        return ex_date
+    return _latest_past_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
+
+
 def _combined_dividend_records() -> list[dict[str, Any]]:
     records = _fetch_dividend_rows("fund_dividends")
     log_records = _fetch_dividend_rows("dividend_log")
@@ -3229,7 +3289,7 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         history_rows = _history_records_for(history_index, fund_code, platform, currency)
         latest_history = _latest_past_record(history_rows, "ex_date")
         gas = _get_gas_data(fund_code) if fund_code else {}
-        ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
+        ex_date = _latest_dividend_reference_date(gas, history_rows)
 
         div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
         if div_per_unit <= 0:
@@ -3398,11 +3458,141 @@ def update_position_dividend_original_total(
     primary_id = int(float(primary["id"]))
     current_total = normalize_number(primary.get("dividend_received_original_total", 0), 0)
     new_total = max(0, current_total + delta_original)
-    supabase_client().table("positions").update({
-        "dividend_received_original_total": new_total,
-        "dividend_received_total": 0,
-    }).eq("id", primary_id).execute()
+    sb = supabase_client()
+    for row in matched:
+        rid = int(float(row["id"]))
+        sb.table("positions").update({
+            "dividend_received_original_total": new_total if rid == primary_id else 0,
+            "dividend_received_total": 0,
+        }).eq("id", rid).execute()
     return True
+
+
+def set_position_dividend_original_total(position_id: int, target_original_total: float) -> bool:
+    target_original_total = max(0, normalize_number(target_original_total, 0))
+    current = ensure_columns(load_positions())
+    if current.empty:
+        return False
+
+    current["_id_num"] = current["id"].apply(lambda v: int(float(v)) if not pd.isna(v) else 0)
+    selected_rows = current[current["_id_num"] == int(position_id)]
+    if selected_rows.empty:
+        return False
+
+    selected = selected_rows.iloc[0]
+    target_platform = normalize_text(selected.get("platform", ""))
+    target_currency = normalize_text(selected.get("currency", "")).upper()
+    target_fund_code = normalize_text(selected.get("fund_code", "")).lower()
+    if not target_fund_code:
+        return False
+
+    funds = current[current["asset_type"].astype(str) == "基金"].copy()
+    matched = funds[
+        (funds["platform"].astype(str).str.strip() == target_platform)
+        & (funds["currency"].astype(str).str.strip().str.upper() == target_currency)
+        & (funds["fund_code"].astype(str).str.strip().str.lower() == target_fund_code)
+    ].copy()
+    if matched.empty:
+        matched = selected_rows.copy()
+
+    matched["_sort_num"] = matched["sort_order"].apply(lambda v: normalize_number(v, 999999))
+    matched["_id_num"] = matched["id"].apply(lambda v: int(float(v)) if not pd.isna(v) else 999999)
+    matched = matched.sort_values(["_sort_num", "_id_num"])
+    primary_id = int(float(matched.iloc[0]["id"]))
+
+    sb = supabase_client()
+    for _, row in matched.iterrows():
+        rid = int(float(row["id"]))
+        sb.table("positions").update({
+            "dividend_received_original_total": target_original_total if rid == primary_id else 0,
+            "dividend_received_total": 0,
+        }).eq("id", rid).execute()
+
+    return True
+
+
+def render_position_dividend_total_fix_tool() -> None:
+    with st.expander("修正持倉累計配息原幣", expanded=False):
+        current = ensure_columns(load_positions())
+        funds = current[current["asset_type"].astype(str) == "基金"].copy()
+        funds = funds[funds["fund_code"].astype(str).str.strip() != ""].copy()
+        if funds.empty:
+            st.info("沒有基金持倉可修正。")
+            return
+
+        funds["_id_num"] = funds["id"].apply(lambda v: int(float(v)) if not pd.isna(v) else 0)
+        funds["_sort_num"] = funds["sort_order"].apply(lambda v: normalize_number(v, 999999))
+        funds["_group_key"] = funds.apply(
+            lambda r: (
+                normalize_text(r.get("platform", "")),
+                normalize_text(r.get("currency", "")).upper(),
+                normalize_text(r.get("fund_code", "")).lower(),
+            ),
+            axis=1,
+        )
+
+        primary_rows: list[pd.Series] = []
+        for _, grp in funds.groupby("_group_key", dropna=False):
+            grp = grp.sort_values(["_sort_num", "_id_num"]).copy()
+            primary = grp.iloc[0].copy()
+            primary["_group_count"] = len(grp)
+            primary["_group_original_total"] = grp["dividend_received_original_total"].apply(lambda v: normalize_number(v, 0)).sum()
+            primary_rows.append(primary)
+
+        primary_df = pd.DataFrame(primary_rows)
+        if primary_df.empty:
+            st.info("沒有可修正的基金主列。")
+            return
+
+        primary_df = primary_df.sort_values(["platform", "currency", "fund_code", "_sort_num", "_id_num"])
+        primary_df["_label"] = primary_df.apply(
+            lambda r: (
+                f"主列 ID {int(r['_id_num'])}｜{r.get('platform', '')}｜{r.get('currency', '')}｜"
+                f"{r.get('fund_code', '')}｜{r.get('name', '')}｜"
+                f"主列目前 {money(r.get('dividend_received_original_total', 0), 4)}｜"
+                f"同基金合計 {money(r.get('_group_original_total', 0), 4)}｜"
+                f"同基金 {int(r.get('_group_count', 1))} 筆"
+            ),
+            axis=1,
+        )
+
+        choice = st.selectbox(
+            "選擇要修正的持倉主列",
+            [""] + primary_df["_label"].tolist(),
+            key="fix_position_dividend_total_choice_primary_only",
+        )
+        if not choice:
+            st.caption("只列出每檔基金的第一筆主列；更新後同基金其他持倉列會歸零，避免重複累計。")
+            return
+
+        selected = primary_df[primary_df["_label"] == choice].iloc[0]
+        position_id = int(selected["_id_num"])
+        current_total = normalize_number(selected.get("dividend_received_original_total", 0), 0)
+
+        with st.form(f"fix_position_dividend_total_form_{position_id}"):
+            st.write(f"目前主列累計配息原幣：{money(current_total, 4)}")
+            target_total = st.number_input(
+                "正確累計配息原幣",
+                value=float(current_total),
+                format="%.4f",
+                key=f"fix_position_dividend_total_value_{position_id}",
+            )
+            confirm = st.checkbox(
+                "我確認這是此基金主列的正確累計配息原幣，並將同基金其他列歸零",
+                key=f"fix_position_dividend_total_confirm_{position_id}",
+            )
+            submitted = st.form_submit_button("更新這檔基金累計配息原幣")
+
+        if submitted:
+            if not confirm:
+                st.warning("請先勾選確認。")
+                return
+            if set_position_dividend_original_total(position_id, target_total):
+                st.success(f"已更新主列 ID {position_id} 的累計配息原幣為 {money(target_total, 4)}。")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("更新失敗。")
 
 
 STOCK_DIVIDEND_COLUMNS = [
@@ -4246,6 +4436,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.markdown("#### 配息記錄表")
     st.caption("實際配息依發放日記錄；勾選確認入帳後，實際配息原幣會加入持倉的累計配息原幣，並以匯率換算累計配息台幣。")
     render_actual_dividend_table(actual_df)
+    render_position_dividend_total_fix_tool()
 
     st.markdown("---")
 
