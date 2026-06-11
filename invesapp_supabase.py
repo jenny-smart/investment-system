@@ -68,10 +68,6 @@ TW_STOCK_EXCHANGES = {
     "6261.TWO":   "TAI",    # 久元
     "9802.TW":    "TPE",    # 鈺齊-KY
 }
-# 在 TW_STOCK_EXCHANGES 附近加這個常數
-TW_DELISTED_TICKERS = {
-    "2823.TW",   # 中壽，已下市
-}
 
 TW_PRESETS = {
     "儒鴻": "1476.TW", "大魯閣": "1432.TW", "中砂": "1560.TW", "中鴻": "2014.TW",
@@ -769,11 +765,6 @@ def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
     ticker = normalize_ticker(ticker)
-    
-    # ── 已下市黑名單：直接跳過，不查不 log ──
-    if ticker in TW_DELISTED_TICKERS:
-        return None, "已下市"
-        
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
@@ -1288,132 +1279,178 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
             "零用金-命理", "零用金-醫療", "零用金-拜拜", "零用金-其他",
             "零用金-旅行", "零用金-朋友", "零用金-家用",
         ],
-        "支出", "零用金生活支出", "expense", "cash_ledger_entries", "支出",
+        "支出",
+        "零用金生活支出",
+        "expense",
+        "cash_ledger_entries",
+        "支出",
     )
     + _cash_subject_record(
         ["零用金-公司", "零用金-公司內勤", "零用金-公司代墊", "零用金-代墊"],
-        "支出/代墊", "零用金代墊", "advance_expense", "cash_ledger_entries", "代墊",
+        "支出/代墊",
+        "零用金代墊",
+        "advance_expense",
+        "cash_ledger_entries",
+        "代墊",
         "後續可用公司代墊款入帳沖銷。",
     )
     + _cash_subject_record(
-        ["零用金", "零用金--總支出", "零用金-支出", "零用金-淨值", "月支出", "prettycash"],
-        "彙總", "零用金彙總", "summary", "cash_monthly_snapshots", "彙總",
+        ["零用金", "零用金--總支出", "零用金-支出", "零用金-淨值", "月支出"],
+        "彙總",
+        "零用金彙總",
+        "summary",
+        "cash_monthly_snapshots",
+        "彙總",
         "這類通常是公式結果，不應當作單筆交易重複入帳。",
     )
     + _cash_subject_record(
         ["薪資入帳", "公司代墊款入帳"],
-        "收入", "薪資/代墊款入帳", "income", "cash_ledger_entries", "收入",
+        "收入",
+        "薪資/代墊款入帳",
+        "income",
+        "cash_ledger_entries",
+        "收入",
     )
     + _cash_subject_record(
         [
-            "富邦銀行", "元大銀行", "郵局",
-            "台新銀行-建北", "台新銀行-信義", "台新銀行-Richard",
-            "台新銀行-子帳戶", "台新銀行-內湖新轉",
+            "富邦銀行", "元大銀行", "郵局", "台新銀行-建北", "台新銀行-信義",
+            "台新銀行-Richard", "台新銀行-子帳戶", "台新銀行-內湖新轉",
             "連線銀行", "將來銀行", "渣打銀行", "中國信託", "樂天銀行",
             "悠遊付", "一卡通",
         ],
-        "現金/銀行", "台幣帳戶", "account_balance", "cash_accounts", "餘額",
+        "現金/銀行",
+        "台幣帳戶",
+        "account_balance",
+        "cash_accounts",
+        "餘額",
         "轉線上時做帳戶餘額或月份快照，不當作收入或支出。",
     )
     + _cash_subject_record(
         [
-            "富邦銀行-銀行利息", "元大bank-銀行利息",
-            "台新bank-銀行利息",
+            "富邦銀行-銀行利息", "元大bank-銀行利息", "台新bank-銀行利息",
             "連線bank-銀行利息", "將來bank-銀行利息", "樂天bank-銀行利息",
         ],
-        "收入", "銀行利息", "interest_income", "cash_ledger_entries", "收入",
+        "收入",
+        "銀行利息",
+        "interest_income",
+        "cash_ledger_entries",
+        "收入",
     )
     + _cash_subject_record(
-        ["銀行總額-台幣", "銀行總額-外幣", "銀行總額-台/外幣"],
-        "彙總", "銀行彙總", "summary", "cash_monthly_snapshots", "彙總",
-        "公式彙總列，不建立帳戶。",
-    )
-    + _cash_subject_record(
-        ["台銀人壽", "國泰人壽", "新光人壽", "保誠人壽", "南山人壽", "台灣人壽", "中國人壽"],
-        "保險", "保單/保險資產", "insurance_balance", "insurance_accounts", "餘額",
-    )
-    + _cash_subject_record(
-        ["保險總額"],
-        "彙總", "保險彙總", "summary", "cash_monthly_snapshots", "彙總",
+        ["台銀人壽", "國泰人壽", "新光人壽", "保誠人壽"],
+        "保險",
+        "保單/保險資產",
+        "insurance_balance",
+        "insurance_accounts",
+        "餘額",
     )
     + _cash_subject_record(
         ["保費支出"],
-        "支出", "保費支出", "insurance_expense", "cash_ledger_entries", "支出",
+        "支出",
+        "保費支出",
+        "insurance_expense",
+        "cash_ledger_entries",
+        "支出",
     )
     + _cash_subject_record(
-        ["保險回饋金", "回饋金-保險"],
-        "收入", "保險回饋", "insurance_rebate", "cash_ledger_entries", "收入",
+        ["保險回饋金"],
+        "收入",
+        "保險回饋",
+        "insurance_rebate",
+        "cash_ledger_entries",
+        "收入",
     )
     + _cash_subject_record(
         ["台幣換外幣"],
-        "轉帳/換匯", "台幣換外幣", "fx_transfer", "cash_transfers", "轉帳",
+        "轉帳/換匯",
+        "台幣換外幣",
+        "fx_transfer",
+        "cash_transfers",
+        "轉帳",
     )
     + _cash_subject_record(
-        ["美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元", "日幣 suica", "Taiwan", "China"],
-        "現金/銀行", "外幣現金", "foreign_cash_balance", "cash_accounts", "餘額",
+        ["美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"],
+        "現金/銀行",
+        "外幣現金",
+        "foreign_cash_balance",
+        "cash_accounts",
+        "餘額",
     )
     + _cash_subject_record(
-        [
-            "渣打美金", "渣打南非",
-            "台新美金", "台新日幣", "台新南非",
-        ],
-        "現金/銀行", "外幣銀行帳戶", "foreign_account_balance", "cash_accounts", "餘額",
+        ["渣打美金", "渣打南非", "台新美金", "台新日幣", "台新南非"],
+        "現金/銀行",
+        "外幣銀行帳戶",
+        "foreign_account_balance",
+        "cash_accounts",
+        "餘額",
     )
     + _cash_subject_record(
         ["借入"],
-        "借款", "借入", "loan_payable", "loan_entries", "借入",
+        "借款",
+        "借入",
+        "loan_payable",
+        "loan_entries",
+        "借入",
     )
     + _cash_subject_record(
         ["借出+投資"],
-        "借款/投資", "借出與投資", "loan_or_investment_outflow", "loan_entries", "借出/投資",
+        "借款/投資",
+        "借出與投資",
+        "loan_or_investment_outflow",
+        "loan_entries",
+        "借出/投資",
     )
     + _cash_subject_record(
-        ["借出+代墊+借入小計", "借出/入總額", "利息+利得"],
-        "彙總", "借款代墊小計", "summary", "cash_monthly_snapshots", "彙總",
-    )
-    + _cash_subject_record(
-        [
-            "台股-舊資金", "台股-新資金", "台股",
-            "富邦奈米投",
-            "基富通-台", "基富通-人", "基富通-日",
-            "渣打-美金", "渣打-南非",
-            "台新-美金", "台新-南非",
-            "台新基金",
-            "懷思投資", "懷思新增投資",
-            "notyetincome",
-        ],
-        "投資", "投資資金/帳戶", "investment_transfer_or_balance",
-        "investment_cash_links", "投資/轉帳",
-    )
-    + _cash_subject_record(
-        ["懷思投資total", "台股投資總值", "基金投資總額", "投資總額"],
-        "彙總", "投資彙總", "summary", "investment_snapshots", "彙總",
+        ["借出+代墊+借入小計"],
+        "彙總",
+        "借款代墊小計",
+        "summary",
+        "cash_monthly_snapshots",
+        "彙總",
     )
     + _cash_subject_record(
         [
-            "懷思投資報酬", "基金配息", "j渣打-大華",
-            "配息-懷思投資",
-            "股利-台股",
-            "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
-            "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
-            "配息-台新-美金", "配息-台新-南非",
+            "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
+            "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
+            "渣打-南非", "台新-美金", "台新-南非",
+            "懷思投資", "懷思新增投資", "notyetincome",
         ],
-        "收入", "投資收入", "investment_income", "cash_ledger_entries", "收入",
+        "投資",
+        "投資資金/帳戶",
+        "investment_transfer_or_balance",
+        "investment_cash_links",
+        "投資/轉帳",
+    )
+    + _cash_subject_record(
+        ["懷思投資total"],
+        "彙總",
+        "懷思投資彙總",
+        "summary",
+        "investment_snapshots",
+        "彙總",
+    )
+    + _cash_subject_record(
+        ["懷思投資報酬", "基金配息", "j渣打-大華"],
+        "收入",
+        "投資收入",
+        "investment_income",
+        "cash_ledger_entries",
+        "收入",
     )
     + _cash_subject_record(
         [
             "信用卡-渣打 14", "信用卡-富邦 19", "信用卡-聯邦",
             "信用卡-星展 08", "信用卡-台新 18", "信用卡-國泰世華 24",
         ],
-        "支出", "信用卡消費", "credit_card_expense", "cash_ledger_entries", "支出",
+        "支出",
+        "信用卡消費",
+        "credit_card_expense",
+        "cash_ledger_entries",
+        "支出",
         "信用卡消費只記分類，不建立互轉帳戶。",
     )
-    + _cash_subject_record(
-        ["totalincome", "總支出", "總淨值", "net confirm"],
-        "彙總", "全局彙總", "summary", "cash_monthly_snapshots", "彙總",
-        "全局公式彙總列，不當作單筆交易。",
-    )
 )
+
 
 CASH_SUBJECT_LOOKUP: dict[str, dict[str, str]] = {
     normalize_text(row["科目"]): row for row in CASH_SUBJECT_RULES
@@ -1428,13 +1465,6 @@ def classify_cash_subject(subject: Any) -> dict[str, str]:
         return {"科目": item, "大類": "未分類", "子類": "空白", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": ""}
     if "銀行利息" in item or "bank-銀行利息" in item:
         return {"科目": item, "大類": "收入", "子類": "銀行利息", "資料角色": "interest_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
-    if item.startswith("配息-") or item.startswith("股利-"):
-        return {
-            "科目": item, "大類": "收入", "子類": "投資收入",
-            "資料角色": "investment_income",
-            "建議線上表": "cash_ledger_entries",
-            "收支屬性": "收入", "備註": "依配息/股利前綴自動判斷",
-        }
     if item.startswith("零用金-") or item.startswith("零用金--"):
         return {"科目": item, "大類": "支出", "子類": "零用金待確認", "資料角色": "expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依零用金前綴自動判斷"}
     if item.startswith("信用卡-"):
@@ -4385,7 +4415,10 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame | None = None) -> None:
     if table_df.empty:
         st.info("目前沒有台股股利記錄。可先按「掃描台股股利候選」或手動新增。")
         render_stock_dividend_upload_section(current_positions)
+        render_stock_dividend_upload_section(current_positions)
         render_manual_stock_dividend_form(current_positions)
+
+
         return
 
     display_df = table_df[STOCK_DIVIDEND_COLUMNS].copy()
@@ -4485,9 +4518,7 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame | None = None) -> None:
         else:
             st.info("沒有需要更新的台股股利記錄。")
 
-    render_stock_dividend_upload_section(current_positions)
     render_manual_stock_dividend_form(current_positions)
-
 
 
 def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> None:
@@ -5149,9 +5180,6 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出", "借入", "借出", "代墊"]
-CASHFLOW_TRANSFER_TYPES = {"轉帳"}
-CASHFLOW_INCOME_TYPES = {"收入", "利息收入", "投資賣出", "借入"}
-CASHFLOW_EXPENSE_TYPES = {"支出", "利息支出", "信用卡消費", "投資買入", "借出", "代墊"}
 CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
 LIABILITY_CATEGORIES = ["借款/代墊"]
@@ -5250,52 +5278,6 @@ def cash_subject_options() -> list[str]:
     return cash_subject_catalog_df()["科目"].dropna().astype(str).tolist()
 
 
-def _cashflow_kind(txn_type: str) -> str:
-    txn_type = normalize_text(txn_type)
-    if txn_type in CASHFLOW_TRANSFER_TYPES:
-        return "transfer"
-    if txn_type in CASHFLOW_INCOME_TYPES:
-        return "income"
-    if txn_type in CASHFLOW_EXPENSE_TYPES:
-        return "expense"
-    return "expense"
-
-
-def cash_subject_options_for_txn(txn_type: str) -> list[str]:
-    kind = _cashflow_kind(txn_type)
-    all_options = cash_subject_options()
-    if kind == "transfer":
-        return []
-
-    expense_roles = {
-        "expense", "advance_expense", "credit_card_expense",
-        "insurance_expense", "loan_or_investment_outflow",
-    }
-    income_roles = {
-        "income", "interest_income", "investment_income",
-        "insurance_rebate", "loan_payable",
-    }
-    wanted_roles = expense_roles if kind == "expense" else income_roles
-    wanted_cashflow = {"支出", "代墊", "借出/投資"} if kind == "expense" else {"收入", "借入"}
-
-    filtered = []
-    for subject in all_options:
-        rule = classify_cash_subject(subject)
-        role = normalize_text(rule.get("資料角色", ""))
-        cashflow_type = normalize_text(rule.get("收支屬性", ""))
-        if role in wanted_roles or cashflow_type in wanted_cashflow:
-            filtered.append(subject)
-    return filtered or all_options
-
-
-def _default_subject_index(options: list[str], preferred: str = "") -> int:
-    if not options:
-        return 0
-    if preferred and preferred in options:
-        return options.index(preferred)
-    return 0
-
-
 def _cash_subject_currency(subject: str) -> str:
     subject = normalize_text(subject)
     if any(token in subject for token in ["美金", "美元"]):
@@ -5348,9 +5330,27 @@ def _cash_account_category(rule: dict[str, str]) -> str:
 
 def _cash_account_bank_name(subject: str, account_category: str) -> tuple[str, str]:
     subject = normalize_text(subject)
-    # 科目名稱直接當帳戶識別，不再拆分
-    # bank = 科目名稱本身，name = 空字串（帳戶總覽顯示時只用 bank）
-    return subject, ""
+    if subject == "零用金":
+        return "零用金", "主帳戶"
+    if account_category in {"支出", "收入"}:
+        if "-" in subject:
+            bank, name = subject.split("-", 1)
+            return bank, name or subject
+        return account_category, subject
+    if account_category == "信用卡" and subject.startswith("信用卡-"):
+        return "信用卡", subject.replace("信用卡-", "", 1)
+    if account_category == "外幣" and subject in {"美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"}:
+        return "外幣現金", subject
+    if account_category == "保險":
+        return subject, "保單"
+    if "-" in subject:
+        bank, name = subject.split("-", 1)
+        return bank, name or subject
+    if account_category == "投資":
+        return subject, "投資帳戶"
+    if account_category == "借款/代墊":
+        return subject, "往來帳戶"
+    return subject, "主帳戶"
 
 
 def cash_account_preset_rows() -> list[dict[str, Any]]:
@@ -5436,22 +5436,15 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if row.empty:
         return str(acct_id)
     r = row.iloc[0]
-    bank = normalize_text(r.get("bank", ""))
-    name = normalize_text(r.get("name", ""))
-    cur = normalize_text(r.get("currency", ""))
-    label = bank if not name else f"{bank} {name}"
-    return f"{label}({cur})"
+    return f"{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})"
+
 
 def _acct_options(accts: pd.DataFrame) -> list[str]:
     opts: list[str] = []
     if accts.empty:
         return opts
     for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        bank = normalize_text(r.get("bank", ""))
-        name = normalize_text(r.get("name", ""))
-        cur  = normalize_text(r.get("currency", ""))
-        label = bank if not name else f"{bank} {name}"
-        opts.append(f"{r.get('id')}｜{label}({cur})")
+        opts.append(f"{r.get('id')}｜{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})")
     return opts
 
 
@@ -5462,15 +5455,6 @@ def _id_from_option(opt: str) -> int | None:
         return int(str(opt).split("｜")[0])
     except Exception:
         return None
-
-
-def _account_name_from_option(opt: str) -> str:
-    opt = normalize_text(opt)
-    if not opt or opt == "（無）":
-        return ""
-    if "｜" in opt:
-        return opt.split("｜", 1)[1]
-    return opt
 
 
 def _account_balance_twd(row: pd.Series) -> float:
@@ -5692,7 +5676,7 @@ def apply_cash_import_preview(preview: pd.DataFrame, update_existing: bool = Tru
 
 def render_cash_import_section() -> None:
     st.markdown("#### 📥 匯入目前資料")
-    st.caption("這裡把 Google Sheet 舊表資料匯入正式現金流；線上總表只做讀取、檢查與搬資料，不當作正式交易帳。")
+    st.caption("從 2026細帳選一個月份匯入帳戶目前餘額；轉帳來源/目標只列銀行、外幣、保險、投資、借款/代墊。零用金明細、信用卡消費、收入與彙總列只保留為交易分類。")
 
     source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
     ledger = pd.DataFrame()
@@ -5849,46 +5833,22 @@ def render_cashflow_tab() -> None:
         if accts.empty:
             st.warning("請先到「帳戶管理」建立帳戶。")
         else:
-            account_opts = _acct_options(accts)
-            if not account_opts:
-                st.warning("目前沒有可作付款、入帳或轉帳的帳戶；請先到「帳戶管理」建立銀行、外幣、投資、保險或借款/代墊帳戶。")
-            required_account_opts = account_opts if account_opts else ["（無）"]
-            acct_opts_optional = ["（無）"] + account_opts
-            txn_type = st.selectbox("類型", TXN_TYPES, key="new_txn_type")
-            flow_kind = _cashflow_kind(txn_type)
-            subject_opts = cash_subject_options_for_txn(txn_type)
-            if flow_kind == "transfer":
-                st.caption("轉帳只選轉出與轉入科目；支出、收入才需要選分類科目。")
-            elif flow_kind == "income":
-                st.caption("收入類：選收入科目與入帳科目，系統會增加入帳科目餘額。")
-            else:
-                st.caption("支出類：選付款科目與支出科目，系統會扣除付款科目餘額；付款科目留空時只記錄分類。")
-
+            acct_opts = ["（無）"] + _acct_options(accts)
+            subject_opts = cash_subject_options()
+            default_subject_idx = subject_opts.index("零用金-餐費") if "零用金-餐費" in subject_opts else 0
+            st.caption("來源/目標是帳戶互轉；轉入零用金或信用卡時，請在「分類 / 支出項目」選對應科目，並可填轉帳註記。")
             with st.form("new_txn_form"):
                 c1, c2, c3 = st.columns(3)
                 txn_date = c1.date_input("日期", value=pd.Timestamp.today())
-                if flow_kind == "transfer":
-                    txn_subject = txn_type
-                    role = "transfer"
-                    from_opt = c2.selectbox("轉出科目", required_account_opts, key="transfer_from_acct")
-                    to_opt = c3.selectbox("轉入科目", required_account_opts, key="transfer_to_acct")
-                    st.caption("科目分類：轉帳 / 帳戶互轉")
-                elif flow_kind == "income":
-                    default_subject_idx = _default_subject_index(subject_opts, "薪資入帳")
-                    txn_subject = c2.selectbox("收入科目", subject_opts, index=default_subject_idx, key="income_subject")
-                    to_opt = c3.selectbox("入帳科目", required_account_opts, key="income_to_acct")
-                    from_opt = "（無）"
-                    rule = classify_cash_subject(txn_subject)
-                    role = normalize_text(rule.get("資料角色", ""))
-                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
-                else:
-                    default_subject_idx = _default_subject_index(subject_opts, "零用金-餐費")
-                    from_opt = c2.selectbox("付款科目", acct_opts_optional, key="expense_from_acct")
-                    txn_subject = c3.selectbox("支出科目", subject_opts, index=default_subject_idx, key="expense_subject")
-                    to_opt = "（無）"
-                    rule = classify_cash_subject(txn_subject)
-                    role = normalize_text(rule.get("資料角色", ""))
-                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
+                txn_type = c2.selectbox("類型", TXN_TYPES)
+                txn_subject = c3.selectbox("分類 / 支出項目", subject_opts, index=default_subject_idx)
+                rule = classify_cash_subject(txn_subject)
+                role = normalize_text(rule.get("資料角色", ""))
+                st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
+
+                c4, c5 = st.columns(2)
+                from_opt = c4.selectbox("來源科目（扣款方）", acct_opts, key="from_acct")
+                to_opt = c5.selectbox("目標科目（入帳方）", acct_opts, key="to_acct")
 
                 c6, c7, c8 = st.columns(3)
                 amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
@@ -5898,23 +5858,19 @@ def render_cashflow_tab() -> None:
 
                 twd_est = amount * fx_rate_input
                 st.caption(f"估算台幣金額：**{money(twd_est)}**")
-                default_desc = txn_subject
-                if flow_kind == "transfer":
-                    default_desc = f"{_account_name_from_option(from_opt)} → {_account_name_from_option(to_opt)}"
-                desc = st.text_input("說明", value=default_desc)
-                note = st.text_input("備註")
+                desc = st.text_input("說明", value=txn_subject)
+                note = st.text_input("轉帳註記 / 備註")
 
                 if st.form_submit_button("💾 新增交易"):
                     from_id = _id_from_option(from_opt)
                     to_id = _id_from_option(to_opt)
+                    record_only_allowed = role in {"expense", "advance_expense", "credit_card_expense", "insurance_expense"}
                     if amount <= 0:
                         st.error("金額必須大於 0")
-                    elif flow_kind == "transfer" and (from_id is None or to_id is None):
-                        st.error("轉帳必須選轉出科目和轉入科目")
-                    elif flow_kind == "income" and to_id is None:
-                        st.error("收入必須選入帳科目")
+                    elif from_id is None and to_id is None and not record_only_allowed:
+                        st.error("來源和目標科目至少填一個")
                     elif from_id is not None and to_id is not None and from_id == to_id:
-                        st.error("轉出和轉入不能是同一個科目")
+                        st.error("來源和目標不能是同一個科目")
                     else:
                         try:
                             sb = supabase_client()
@@ -6077,20 +6033,20 @@ def render_cashflow_tab() -> None:
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
 
-        # 在「一鍵建立缺少的預設帳戶」expander 裡加這個
-        with st.expander("⚠️ 清除全部帳戶重建"):
-            confirm_clear = st.checkbox("確認刪除全部 accounts 重建", key="confirm_clear_accounts")
-            if st.button("刪除全部帳戶", disabled=not confirm_clear, key="clear_all_accounts"):
-                sb = supabase_client()
-                rows = load_accounts()
-                for _, r in rows.iterrows():
-                    rid = r.get("id")
-                    if not pd.isna(rid):
-                        sb.table("accounts").delete().eq("id", int(rid)).execute()
-                st.success(f"已刪除 {len(rows)} 筆帳戶。")
-                st.cache_data.clear()
-                st.rerun()
-    with tab5:          # ← 和 tab0~tab4 同層
+        with st.expander("一鍵建立缺少的預設帳戶"):
+            st.caption("會建立帳戶餘額科目；來源/目標互轉只列銀行、外幣、保險、投資、借款/代墊。現金類可做總覽但不列入互轉，支出/收入/信用卡消費只作分類；已存在者會略過。")
+            st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
+            confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
+            if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
+                try:
+                    count = create_missing_cash_account_presets()
+                    st.success(f"已新增 {count} 個預設帳戶。")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"建立失敗：{e}")
+
+    with tab5:
         catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
         st.markdown("#### 科目字典")
         c1, c2, c3 = st.columns(3)
@@ -6383,3 +6339,5 @@ with tabs[11]:
 
 with tabs[12]:
     render_cashflow_tab()
+
+一樣沒有出現📤 批次匯入台股股利補資料（CSV / Excel）
