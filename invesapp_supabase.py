@@ -68,6 +68,10 @@ TW_STOCK_EXCHANGES = {
     "6261.TWO":   "TAI",    # 久元
     "9802.TW":    "TPE",    # 鈺齊-KY
 }
+# 在 TW_STOCK_EXCHANGES 附近加這個常數
+TW_DELISTED_TICKERS = {
+    "2823.TW",   # 中壽，已下市
+}
 
 TW_PRESETS = {
     "儒鴻": "1476.TW", "大魯閣": "1432.TW", "中砂": "1560.TW", "中鴻": "2014.TW",
@@ -765,6 +769,11 @@ def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
     ticker = normalize_ticker(ticker)
+    
+    # ── 已下市黑名單：直接跳過，不查不 log ──
+    if ticker in TW_DELISTED_TICKERS:
+        return None, "已下市"
+        
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
