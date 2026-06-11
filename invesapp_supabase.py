@@ -6090,14 +6090,14 @@ def render_cashflow_tab() -> None:
                 st.success(f"已刪除 {len(rows)} 筆帳戶。")
                 st.cache_data.clear()
                 st.rerun()
-            with tab5:
-                catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
-                st.markdown("#### 科目字典")
-                c1, c2, c3 = st.columns(3)
-                c1.metric("科目數", f"{len(catalog):,}")
-                c2.metric("大類數", f"{catalog['大類'].nunique():,}")
-                c3.metric("預設帳戶數", f"{len(cash_account_preset_rows()):,}")
-                st.dataframe(catalog, use_container_width=True, hide_index=True, height=620)
+    with tab5:          # ← 和 tab0~tab4 同層
+        catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
+        st.markdown("#### 科目字典")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("科目數", f"{len(catalog):,}")
+        c2.metric("大類數", f"{catalog['大類'].nunique():,}")
+        c3.metric("預設帳戶數", f"{len(cash_account_preset_rows()):,}")
+        st.dataframe(catalog, use_container_width=True, hide_index=True, height=620)
 
 
 # ════════════════════════════════════════════════════════════════════════════
