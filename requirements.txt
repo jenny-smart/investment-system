@@ -1,8 +1,10 @@
 streamlit==1.44.0
-supabase
-yfinance
-beautifulsoup4
-lxml
-pandas
-requests
-openpyxl
+supabase==2.31.0
+yfinance==1.4.1
+beautifulsoup4==4.15.0
+lxml==6.1.1
+pandas==2.3.3
+requests==2.34.2
+openpyxl==3.1.5
+tzdata==2026.2
+numpy==2.4.6
