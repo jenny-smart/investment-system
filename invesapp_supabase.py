@@ -25,7 +25,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-06-11-v50-dividend-candidates-primary-total"
+APP_VERSION = "2026-06-11-v51-dividend-running-total-display"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3146,6 +3146,72 @@ def _fund_name_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str, str, str], s
     return lookup
 
 
+def _fund_lookup_key(fund_code: Any, platform: Any, currency: Any, name: Any = "") -> tuple[str, str, str]:
+    key_code = normalize_text(fund_code).lower() or normalize_match_name(name)
+    return (
+        key_code,
+        normalize_text(platform),
+        normalize_text(currency).upper(),
+    )
+
+
+def _position_dividend_total_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str, str, str], dict[str, float]]:
+    lookup: dict[tuple[str, str, str], dict[str, float]] = {}
+    if enriched_df is None or enriched_df.empty:
+        return lookup
+    funds = enriched_df[enriched_df["asset_type"].astype(str) == "基金"].copy()
+    if funds.empty:
+        return lookup
+    for _, grp in funds.groupby(
+        funds.apply(
+            lambda r: _fund_lookup_key(
+                r.get("fund_code", ""),
+                r.get("platform", ""),
+                r.get("currency", ""),
+                r.get("name", ""),
+            ),
+            axis=1,
+        ),
+        dropna=False,
+    ):
+        first = grp.iloc[0]
+        key = _fund_lookup_key(
+            first.get("fund_code", ""),
+            first.get("platform", ""),
+            first.get("currency", ""),
+            first.get("name", ""),
+        )
+        original_total = sum(normalize_number(v, 0) for v in grp.get("累計配息原幣", pd.Series(dtype=float)).tolist())
+        twd_total = sum(normalize_number(v, 0) for v in grp.get("累計已領配息", pd.Series(dtype=float)).tolist())
+        fx = _first_positive(grp.get("匯率", pd.Series(dtype=float)).tolist())
+        if twd_total <= 0 and original_total > 0 and fx > 0:
+            twd_total = original_total * fx
+        lookup[key] = {
+            "original": original_total,
+            "twd": twd_total,
+            "fx": fx,
+        }
+    return lookup
+
+
+def _position_dividend_totals_for(
+    lookup: dict[tuple[str, str, str], dict[str, float]],
+    fund_code: Any,
+    platform: Any,
+    currency: Any,
+    name: Any = "",
+    fx: float = 1.0,
+) -> dict[str, float]:
+    key = _fund_lookup_key(fund_code, platform, currency, name)
+    totals = lookup.get(key, {})
+    original = normalize_number(totals.get("original", 0), 0)
+    twd = normalize_number(totals.get("twd", 0), 0)
+    fx_value = normalize_number(totals.get("fx", fx), fx) or fx
+    if twd <= 0 and original > 0 and fx_value > 0:
+        twd = original * fx_value
+    return {"original": original, "twd": twd, "fx": fx_value}
+
+
 def _first_positive(values: list[Any]) -> float:
     for value in values:
         number = normalize_number(value, 0)
@@ -3399,6 +3465,7 @@ def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
 
 def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     name_lookup = _fund_name_lookup(enriched_df)
+    position_totals = _position_dividend_total_lookup(enriched_df)
     records = _combined_dividend_records()
     existing_keys = _existing_dividend_record_keys(records)
     history_index = _dividend_history_index(records)
@@ -3429,6 +3496,14 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             twd_total = total_amount * fx
         if total_amount is None and twd_total > 0 and fx > 0:
             total_amount = twd_total / fx
+        current_totals = _position_dividend_totals_for(
+            position_totals,
+            fund_code,
+            platform,
+            currency,
+            name,
+            fx,
+        )
         rows.append({
             "平台": platform,
             "基金名稱": name,
@@ -3440,6 +3515,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "匯率": fx,
             "實際配息台幣": twd_total if twd_total > 0 else None,
             "確認入帳": is_paid,
+            "累計配息原幣": current_totals["original"],
+            "累計配息台幣": current_totals["twd"],
             "_確認前": is_paid,
             "_累計用配息金額": total_amount if is_paid and total_amount is not None else 0,
             "_累計用配息台幣": twd_total if is_paid else 0,
@@ -3477,6 +3554,14 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             for row in rows
         ):
             continue
+        current_totals = _position_dividend_totals_for(
+            position_totals,
+            estimate["fund_code"],
+            estimate["platform"],
+            estimate["currency"],
+            estimate["fund_name"],
+            estimate["fx"],
+        )
         rows.append({
             "平台": estimate["platform"],
             "基金名稱": estimate["fund_name"],
@@ -3488,6 +3573,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "匯率": estimate["fx"],
             "實際配息台幣": round(estimate["twd_total"], 0),
             "確認入帳": False,
+            "累計配息原幣": current_totals["original"],
+            "累計配息台幣": current_totals["twd"],
             "_確認前": False,
             "_累計用配息金額": 0,
             "_累計用配息台幣": 0,
@@ -3515,13 +3602,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
-    df = df.sort_values(["平台", "基金名稱", "幣別", "_sort_date"], ascending=True).reset_index(drop=True)
-    df["累計配息原幣"] = (
-        df.groupby(["平台", "基金名稱", "幣別"], dropna=False)["_累計用配息金額"]
-        .cumsum()
-        .round(2)
-    )
-    df["累計配息台幣"] = (df["累計配息原幣"] * df["匯率"]).round(0)
+    df["累計配息原幣"] = df["累計配息原幣"].apply(lambda v: round(normalize_number(v, 0), 2))
+    df["累計配息台幣"] = df["累計配息台幣"].apply(lambda v: round(normalize_number(v, 0), 0))
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
 
@@ -4575,7 +4657,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("實際配息依發放日記錄；勾選確認入帳後，實際配息原幣會加入持倉的累計配息原幣，並以匯率換算累計配息台幣。")
+    st.caption("累計配息原幣 / 台幣是持倉目前累計。未確認時顯示目前累計；勾選確認入帳後，會把本月配息加入同基金第一筆主列，重算後顯示新的累計。")
     render_actual_dividend_table(actual_df)
     render_position_dividend_total_fix_tool()
 
