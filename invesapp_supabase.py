@@ -241,14 +241,16 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── CSS：移除 fixed-top sticky（避免蓋住標題），其餘原樣 ──────────────────
+# ── CSS：保留雲端工具列空間，避免標題被 Streamlit Cloud header 蓋住 ───────
 st.markdown("""
 <style>
 .stApp { background:#f8fafc; color:#1e293b; }
-.block-container { padding-top:0.6rem; max-width:1600px; }
+.block-container { padding-top:4.75rem; max-width:1600px; }
 .app-page-title {
     display: block !important;
-    margin: 0.2rem 0 0.35rem 0 !important;
+    position: relative !important;
+    z-index: 1 !important;
+    margin: 0 0 0.6rem 0 !important;
     color: #1e293b !important;
     font-size: 30px !important;
     line-height: 1.25 !important;
@@ -256,9 +258,10 @@ st.markdown("""
     letter-spacing: 0 !important;
 }
 @media (max-width: 640px) {
+    .block-container { padding-top:5.25rem; }
     .app-page-title { font-size: 24px !important; }
 }
-.hero { background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+.hero { position:relative; z-index:0; background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
 [data-testid="stMetric"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:12px !important; padding:16px 18px !important; box-shadow:0 1px 4px rgba(0,0,0,.05) !important; }
 [data-testid="stMetricValue"] { font-size:1.35rem !important; font-weight:700 !important; }
 [data-testid="stDataFrame"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:10px !important; }
@@ -3478,9 +3481,12 @@ def _stock_groups_from_positions(current_positions: pd.DataFrame) -> dict[str, p
         lambda r: _plain_stock_code(r.get("ticker", "")) or _plain_stock_code(TW_PRESETS.get(normalize_text(r.get("name", "")), "")),
         axis=1,
     )
-    stocks = stocks[
-        ~stocks.apply(lambda r: is_delisted_tw_stock(r.get("ticker", ""), r.get("name", "")), axis=1)
-    ].copy()
+    if not stocks.empty:
+        active_mask = ~stocks.apply(
+            lambda r: is_delisted_tw_stock(r.get("ticker", ""), r.get("name", "")),
+            axis=1,
+        )
+        stocks = stocks.loc[active_mask].copy()
     return {
         key: grp.copy()
         for key, grp in stocks.groupby("_stock_key", dropna=False)
@@ -5595,7 +5601,7 @@ stock_cash_dividend_this_year = stock_cash_dividend_total_for_year(tw_now().year
 
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
-    st.markdown('<div class="fixed-top"><div class="hero">', unsafe_allow_html=True)
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
     c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     # 顯示缺報價的台股名稱
     tw_missing = []
@@ -5606,10 +5612,13 @@ with st.container():
             (enriched["即時價格/淨值"].isna()) &
             (enriched["狀態"].astype(str) != "價格:已下市 匯率:ok")
         ]
-        tw_no_price = tw_no_price[
-            ~tw_no_price.apply(lambda row: is_delisted_tw_stock(row.get("ticker", ""), row.get("name", "")), axis=1)
-        ]
-        tw_missing = tw_no_price["name"].dropna().unique().tolist()
+        if not tw_no_price.empty:
+            active_mask = ~tw_no_price.apply(
+                lambda row: is_delisted_tw_stock(row.get("ticker", ""), row.get("name", "")),
+                axis=1,
+            )
+            tw_no_price = tw_no_price.loc[active_mask]
+            tw_missing = tw_no_price.get("name", pd.Series(dtype=str)).dropna().unique().tolist()
     if tw_missing:
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
@@ -5624,7 +5633,7 @@ with st.container():
     c6.metric("今年台股現金股利", money(stock_cash_dividend_this_year))
     if c7.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
-    st.markdown("</div></div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流"])
 
