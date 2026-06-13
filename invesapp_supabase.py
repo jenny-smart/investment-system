@@ -6072,7 +6072,12 @@ total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "�
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
 total_pnl_all = total_value - total_cost
-total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
+total_div_received = (
+    enriched[enriched["asset_type"].astype(str).str.strip() != "台股"]["累計已領配息"].dropna().sum()
+    if not enriched.empty and "累計已領配息" in enriched
+    else 0
+)
+
 stock_cash_dividend_this_year = stock_cash_dividend_total_for_year(tw_now().year)
 
 # Hero bar（不再 sticky，標題不被蓋）
