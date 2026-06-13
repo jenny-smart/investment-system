@@ -3214,9 +3214,9 @@ def _position_dividend_total_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str
             lambda r: _fund_lookup_key(
                 r.get("fund_code", ""),
                 r.get("platform", ""),
-                r.get("currency", ""),
+                effective_position_currency(r),
                 r.get("name", ""),
-            ),
+            )
             axis=1,
         ),
         dropna=False,
@@ -3688,18 +3688,26 @@ def update_position_dividend_original_total(
     delta_original = normalize_number(delta_original, 0)
     if not fund_code or delta_original == 0:
         return False
+
+    target_currency = normalize_text(currency).upper()
+    target_platform = normalize_text(platform)
+
     try:
         rows = supabase_client().table("positions").select(
-            "id,sort_order,fund_code,platform,currency,dividend_received_original_total"
-        ).eq("platform", platform).eq("currency", currency).execute().data or []
+            "id,sort_order,fund_code,platform,currency,name,asset_type,dividend_received_original_total"
+        ).eq("platform", target_platform).execute().data or []
     except Exception:
         rows = []
+
     matched = [
         row for row in rows
         if normalize_text(row.get("fund_code", "")).lower() == normalize_text(fund_code).lower()
+        and effective_position_currency(row).upper() == target_currency
     ]
+
     if not matched:
         return False
+
     matched = sorted(
         matched,
         key=lambda row: (
@@ -3707,18 +3715,23 @@ def update_position_dividend_original_total(
             normalize_number(row.get("id", 999999), 999999),
         ),
     )
+
     primary = matched[0]
     primary_id = int(float(primary["id"]))
     current_total = normalize_number(primary.get("dividend_received_original_total", 0), 0)
     new_total = max(0, current_total + delta_original)
+
     sb = supabase_client()
     for row in matched:
         rid = int(float(row["id"]))
         sb.table("positions").update({
+            "currency": target_currency,
             "dividend_received_original_total": new_total if rid == primary_id else 0,
             "dividend_received_total": 0,
         }).eq("id", rid).execute()
+
     return True
+
 
 
 def set_position_dividend_original_total(position_id: int, target_original_total: float) -> bool:
