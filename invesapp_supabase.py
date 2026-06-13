@@ -6081,8 +6081,13 @@ total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "�
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
 total_pnl_all = total_value - total_cost
+FUND_PLATFORMS_FOR_DIVIDEND = ["基富通", "渣打基金", "台新基金"]
+
 total_div_received = (
-    enriched[enriched["asset_type"].astype(str).str.strip() != "台股"]["累計已領配息"].dropna().sum()
+    enriched[
+        enriched["platform"].astype(str).str.strip().isin(FUND_PLATFORMS_FOR_DIVIDEND)
+        & enriched["asset_type"].astype(str).str.strip().eq("基金")
+    ]["累計已領配息"].dropna().sum()
     if not enriched.empty and "累計已領配息" in enriched
     else 0
 )
@@ -6118,7 +6123,7 @@ with st.container():
     c2.metric("總台幣成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("總損益（市值）", signed_money(total_pnl_all))
-    c4.metric("累計配息", money(total_div_received))
+    c4.metric("基金累計配息", money(total_div_received))
     c5.metric("預估每月配息", money(total_div))
     c6.metric("今年台股現金股利", money(stock_cash_dividend_this_year))
     if c7.button("🔄 更新即時價"):
