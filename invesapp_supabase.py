@@ -3209,16 +3209,17 @@ def _position_dividend_total_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str
 
     funds["_sort_num"] = funds["sort_order"].apply(lambda v: normalize_number(v, 999999))
     funds["_id_num"] = funds["id"].apply(lambda v: normalize_number(v, 999999))
+
+    def _position_lookup_key(row: pd.Series) -> tuple[str, str, str]:
+        return _fund_lookup_key(
+            row.get("fund_code", ""),
+            row.get("platform", ""),
+            effective_position_currency(row),
+            row.get("name", ""),
+        )
+
     for _, grp in funds.groupby(
-        funds.apply(
-            lambda r: _fund_lookup_key(
-                r.get("fund_code", ""),
-                r.get("platform", ""),
-                effective_position_currency(r),
-                r.get("name", ""),
-            )
-            axis=1,
-        ),
+        funds.apply(_position_lookup_key, axis=1),
         dropna=False,
     ):
         grp = grp.sort_values(["_sort_num", "_id_num"]).copy()
@@ -3226,13 +3227,19 @@ def _position_dividend_total_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str
         key = _fund_lookup_key(
             first.get("fund_code", ""),
             first.get("platform", ""),
-            first.get("currency", ""),
+            effective_position_currency(first),
             first.get("name", ""),
         )
-        primary_original = normalize_number(first.get("dividend_received_original_total", first.get("累計配息原幣", 0)), 0)
+        primary_original = normalize_number(
+            first.get("dividend_received_original_total", first.get("累計配息原幣", 0)),
+            0,
+        )
         group_original = sum(
             normalize_number(v, 0)
-            for v in grp.get("dividend_received_original_total", grp.get("累計配息原幣", pd.Series(dtype=float))).tolist()
+            for v in grp.get(
+                "dividend_received_original_total",
+                grp.get("累計配息原幣", pd.Series(dtype=float)),
+            ).tolist()
         )
         original_total = primary_original if primary_original > 0 else group_original
         fx = _first_positive(grp.get("匯率", pd.Series(dtype=float)).tolist())
@@ -3240,7 +3247,9 @@ def _position_dividend_total_lookup(enriched_df: pd.DataFrame) -> dict[tuple[str
             "original": original_total,
             "fx": fx,
         }
+
     return lookup
+
 
 
 def _position_dividend_totals_for(
