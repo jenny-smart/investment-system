@@ -3116,6 +3116,65 @@ def render_history_tab() -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
+        st.markdown("#### 🧹 刪除錯誤歷史紀錄")
+
+        delete_df = df[[
+            "id", "時間", "total_twd", "tw_stock", "us_stock",
+            "kifutong", "scb", "taishin", "total_cost", "total_pnl",
+            "cumulative_dividend", "trigger", "note"
+        ]].copy()
+
+        delete_df.insert(0, "刪除", False)
+        delete_df.columns = [
+            "刪除", "ID", "時間", "總市值", "台股", "美股",
+            "基富通", "渣打", "台新", "總成本", "市值損益",
+            "累計配息", "觸發方式", "備註"
+        ]
+
+        edited_delete = st.data_editor(
+            delete_df,
+            use_container_width=True,
+            hide_index=True,
+            height=260,
+            disabled=[c for c in delete_df.columns if c != "刪除"],
+            column_config={
+                "刪除": st.column_config.CheckboxColumn("刪除"),
+                "ID": st.column_config.NumberColumn("ID", format="%.0f"),
+                "總市值": st.column_config.NumberColumn("總市值", format="%.0f"),
+                "台股": st.column_config.NumberColumn("台股", format="%.0f"),
+                "美股": st.column_config.NumberColumn("美股", format="%.0f"),
+                "基富通": st.column_config.NumberColumn("基富通", format="%.0f"),
+                "渣打": st.column_config.NumberColumn("渣打", format="%.0f"),
+                "台新": st.column_config.NumberColumn("台新", format="%.0f"),
+            },
+            key="portfolio_snapshot_delete_editor_top",
+        )
+
+        selected_ids = edited_delete[edited_delete["刪除"] == True]["ID"].dropna().tolist()
+        confirm_delete = st.checkbox(
+            f"我確認要刪除勾選的 {len(selected_ids)} 筆歷史市值紀錄",
+            key="confirm_delete_portfolio_snapshots_top",
+        )
+
+        if st.button(
+        "刪除勾選紀錄",
+        disabled=not confirm_delete or len(selected_ids) == 0,
+        key="delete_selected_portfolio_snapshots_top",
+    ):
+        try:
+            deleted = 0
+            for row_id in selected_ids:
+                supabase_client().table("portfolio_snapshots").delete().eq("id", int(float(row_id))).execute()
+                deleted += 1
+
+            st.success(f"已刪除 {deleted} 筆歷史紀錄。")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"刪除失敗：{e}")
+
+        st.markdown("#### 歷史明細")
+
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
