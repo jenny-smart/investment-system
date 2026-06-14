@@ -2841,17 +2841,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         return
 
     action_col1, action_col2 = st.columns([1, 1])
-    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
-        try:
-            source_positions = globals().get("positions", pd.DataFrame())
-            n = auto_dividend_update(source_positions)
-            if n > 0:
-                st.success(f"配息更新完成：{n} 筆")
-                st.cache_data.clear()
-            else:
-                st.info("目前沒有需要認列或快照的配息。")
-        except Exception as exc:
-            st.warning(f"配息更新失敗：{exc}")
+
 
     # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
     # 即時計算，不寫回 Supabase，只用於顯示
@@ -2888,7 +2878,10 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
 
     # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
     # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
-    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
+    # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
+    # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
+    sync_col, _ = st.columns([1, 4])
+    if sync_col.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
         fund_rows = enriched[
             (enriched["asset_type"] == "基金") &
             (enriched["fund_code"].fillna("") != "") &
@@ -3116,47 +3109,41 @@ def render_history_tab() -> None:
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
-        st.markdown("#### 🧹 刪除錯誤歷史紀錄")
+    st.markdown("#### 🧹 刪除錯誤歷史紀錄")
 
-        delete_df = df[[
-            "id", "時間", "total_twd", "tw_stock", "us_stock",
-            "kifutong", "scb", "taishin", "total_cost", "total_pnl",
-            "cumulative_dividend", "trigger", "note"
-        ]].copy()
+    delete_df = df[[
+        "id", "時間", "total_twd", "tw_stock", "us_stock",
+        "kifutong", "scb", "taishin", "total_cost", "total_pnl",
+        "cumulative_dividend", "trigger", "note"
+    ]].copy()
 
-        delete_df.insert(0, "刪除", False)
-        delete_df.columns = [
-            "刪除", "ID", "時間", "總市值", "台股", "美股",
-            "基富通", "渣打", "台新", "總成本", "市值損益",
-            "累計配息", "觸發方式", "備註"
-        ]
+    delete_df.insert(0, "刪除", False)
+    delete_df.columns = [
+        "刪除", "ID", "時間", "總市值", "台股", "美股",
+        "基富通", "渣打", "台新", "總成本", "市值損益",
+        "累計配息", "觸發方式", "備註"
+    ]
 
-        edited_delete = st.data_editor(
-            delete_df,
-            use_container_width=True,
-            hide_index=True,
-            height=260,
-            disabled=[c for c in delete_df.columns if c != "刪除"],
-            column_config={
-                "刪除": st.column_config.CheckboxColumn("刪除"),
-                "ID": st.column_config.NumberColumn("ID", format="%.0f"),
-                "總市值": st.column_config.NumberColumn("總市值", format="%.0f"),
-                "台股": st.column_config.NumberColumn("台股", format="%.0f"),
-                "美股": st.column_config.NumberColumn("美股", format="%.0f"),
-                "基富通": st.column_config.NumberColumn("基富通", format="%.0f"),
-                "渣打": st.column_config.NumberColumn("渣打", format="%.0f"),
-                "台新": st.column_config.NumberColumn("台新", format="%.0f"),
-            },
-            key="portfolio_snapshot_delete_editor_top",
-        )
+    edited_delete = st.data_editor(
+        delete_df,
+        use_container_width=True,
+        hide_index=True,
+        height=260,
+        disabled=[c for c in delete_df.columns if c != "刪除"],
+        column_config={
+            "刪除": st.column_config.CheckboxColumn("刪除"),
+            "ID": st.column_config.NumberColumn("ID", format="%.0f"),
+        },
+        key="portfolio_snapshot_delete_editor_top",
+    )
 
-        selected_ids = edited_delete[edited_delete["刪除"] == True]["ID"].dropna().tolist()
-        confirm_delete = st.checkbox(
-            f"我確認要刪除勾選的 {len(selected_ids)} 筆歷史市值紀錄",
-            key="confirm_delete_portfolio_snapshots_top",
-        )
+    selected_ids = edited_delete[edited_delete["刪除"] == True]["ID"].dropna().tolist()
+    confirm_delete = st.checkbox(
+        f"我確認要刪除勾選的 {len(selected_ids)} 筆歷史市值紀錄",
+        key="confirm_delete_portfolio_snapshots_top",
+    )
 
-        if st.button(
+    if st.button(
         "刪除勾選紀錄",
         disabled=not confirm_delete or len(selected_ids) == 0,
         key="delete_selected_portfolio_snapshots_top",
@@ -3173,41 +3160,27 @@ def render_history_tab() -> None:
         except Exception as e:
             st.error(f"刪除失敗：{e}")
 
-        st.markdown("#### 歷史明細")
+    st.markdown("#### 歷史明細")
 
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
         "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
     ]].copy()
+
     df_show.columns = [
         "時間", "總市值", "台股", "美股",
         "基富通", "渣打", "台新",
         "總成本", "市值損益", "累計配息", "觸發方式", "備註"
     ]
 
-    col_cfg = {
-        "時間": st.column_config.TextColumn("時間", width="small"),
-        "總市值": st.column_config.NumberColumn("總市值", format="%.0f", width="medium"),
-        "台股": st.column_config.NumberColumn("台股", format="%.0f", width="medium"),
-        "美股": st.column_config.NumberColumn("美股", format="%.0f", width="medium"),
-        "基富通": st.column_config.NumberColumn("基富通", format="%.0f", width="medium"),
-        "渣打": st.column_config.NumberColumn("渣打", format="%.0f", width="medium"),
-        "台新": st.column_config.NumberColumn("台新", format="%.0f", width="medium"),
-        "總成本": st.column_config.NumberColumn("總成本", format="%.0f", width="medium"),
-        "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f", width="medium"),
-        "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f", width="medium"),
-        "觸發方式": st.column_config.TextColumn("觸發方式", width="small"),
-        "備註": st.column_config.TextColumn("備註", width="medium"),
-    }
-
     st.dataframe(
         df_show,
         use_container_width=True,
         hide_index=True,
         height=min(42 * len(df_show) + 44, 600),
-        column_config=col_cfg,
     )
+
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
@@ -4585,7 +4558,6 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.subheader("📈 台股股利")
     st.caption("現金股利會加到台股累計配息；股票股利會新增一筆 0 成本持倉列，不會改原本成本。")
     current_positions = globals().get("positions", pd.DataFrame())
-    action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button("掃描台股股利候選", key="scan_stock_dividend_candidates"):
         try:
             n = scan_stock_dividend_candidates(current_positions)
@@ -6215,7 +6187,6 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
 with tabs[0]:
-    render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
     if not enriched.empty:
