@@ -6075,6 +6075,15 @@ except Exception as e:
 
 enriched = enrich(positions)
 
+actual_dividend_df_for_kpi = build_actual_dividend_table(enriched)
+
+total_div_received = (
+    actual_dividend_df_for_kpi["累計配息台幣"].apply(lambda v: normalize_number(v, 0)).sum()
+    if not actual_dividend_df_for_kpi.empty and "累計配息台幣" in actual_dividend_df_for_kpi.columns
+    else 0
+)
+
+
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
@@ -6083,14 +6092,6 @@ total_rate  = total_pnl / total_cost if total_cost else None
 total_pnl_all = total_value - total_cost
 FUND_PLATFORMS_FOR_DIVIDEND = ["基富通", "渣打基金", "台新基金"]
 
-total_div_received = (
-    enriched[
-        enriched["platform"].astype(str).str.strip().isin(FUND_PLATFORMS_FOR_DIVIDEND)
-        & enriched["asset_type"].astype(str).str.strip().eq("基金")
-    ]["累計已領配息"].dropna().sum()
-    if not enriched.empty and "累計已領配息" in enriched
-    else 0
-)
 
 stock_cash_dividend_this_year = stock_cash_dividend_total_for_year(tw_now().year)
 
