@@ -2990,104 +2990,117 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
         "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
     }
     total_cost_sum = 0.0
-    total_div_sum  = 0.0
+    total_div_sum = 0.0
 
     for _, r in enriched.iterrows():
         plt = normalize_text(r.get("platform", ""))
         val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
+        cost = to_float(r.get("台幣成本"))
         div = to_float(r.get("累計已領配息"))
+
         if plt in platform_val and val:
             platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
+        if cost:
+            total_cost_sum += cost
+        if div:
+            total_div_sum += div
 
     total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    now_tw = tw_now()
 
     return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
+        "total_twd": round(total, 0),
+        "tw_stock": round(platform_val["台股"], 0),
+        "us_stock": round(platform_val["美股"], 0),
+        "kifutong": round(platform_val["基富通"], 0),
+        "scb": round(platform_val["渣打基金"], 0),
+        "taishin": round(platform_val["台新基金"], 0),
+        "total_cost": round(total_cost_sum, 0),
+        "total_pnl": round(total - total_cost_sum, 0),
         "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+        "trigger": trigger,
+        "note": f"手動快照 {now_tw.strftime('%Y-%m-%d %H:%M')}",
     }
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# ★ 歷史記錄 Tab
-# ════════════════════════════════════════════════════════════════════════════
+def history_snapshot_is_valid(enriched_df: pd.DataFrame, snapshot_data: dict | None = None) -> tuple[bool, str]:
+    """避免抓價失敗時，把部分平台為 0 的錯誤市值寫入歷史。"""
+    if enriched_df is None or enriched_df.empty:
+        return False, "目前沒有即時計算資料，已取消記錄。"
 
-def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
-    if enriched is None or enriched.empty:
-        return {}
+    if "台幣市值" not in enriched_df.columns:
+        return False, "缺少台幣市值欄位，已取消記錄。"
 
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
-    total_cost_sum = 0.0
-    total_div_sum  = 0.0
+    df = enriched_df.copy()
 
-    for _, r in enriched.iterrows():
-        plt = normalize_text(r.get("platform", ""))
-        val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
-        if plt in platform_val and val:
-            platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
+    if "市值股數" in df.columns:
+        active = df[df["市值股數"].fillna(0) > 0].copy()
+    else:
+        active = df[
+            df.get("units", pd.Series(dtype=float)).fillna(0).gt(0)
+            | df.get("original_units", pd.Series(dtype=float)).fillna(0).gt(0)
+        ].copy()
 
-    total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    if active.empty:
+        return False, "目前沒有有效持倉，已取消記錄。"
 
-    return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
-        "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
-    }
+    missing_price = active[
+        active["即時價格/淨值"].isna()
+    ].copy() if "即時價格/淨值" in active.columns else pd.DataFrame()
+
+    if not missing_price.empty:
+        names = missing_price["name"].dropna().astype(str).unique().tolist()
+        return False, "仍有持倉缺少即時價格/淨值，已取消記錄：" + "、".join(names[:12])
+
+    bad_platforms: list[str] = []
+    for platform in ["台股", "美股", "基富通", "渣打基金", "台新基金"]:
+        p_active = active[active["platform"].astype(str).str.strip() == platform]
+        if p_active.empty:
+            continue
+
+        p_value = p_active["台幣市值"].fillna(0).sum()
+        p_cost = p_active["台幣成本"].fillna(0).sum() if "台幣成本" in p_active.columns else 0
+
+        if p_cost > 0 and p_value <= 0:
+            bad_platforms.append(platform)
+
+    if bad_platforms:
+        return False, "以下平台有持倉成本但市值為 0，疑似抓價失敗，已取消記錄：" + "、".join(bad_platforms)
+
+    total_value = normalize_number(snapshot_data.get("total_twd", 0), 0) if snapshot_data else df["台幣市值"].fillna(0).sum()
+    if total_value <= 0:
+        return False, "總市值為 0，已取消記錄。"
+
+    return True, ""
 
 
 def render_history_tab() -> None:
     """📊 歷史市值"""
     st.subheader("📊 歷史市值走勢")
 
-    # ── 手動記錄按鈕 ──
     col_btn, col_info = st.columns([1, 4])
     if col_btn.button("📸 立即記錄當下市值", key="manual_snapshot_btn"):
         try:
             data = _take_snapshot_now("manual")
-            if data:
+            ok, reason = history_snapshot_is_valid(enriched, data)
+
+            if not data:
+                st.error("無法取得市值，請先更新即時價。")
+            elif not ok:
+                st.warning(reason)
+            else:
                 supabase_client().table("portfolio_snapshots").insert(data).execute()
                 st.success(f"✅ 已記錄！總市值：{money(data['total_twd'])}")
+                st.cache_data.clear()
                 st.rerun()
-            else:
-                st.error("無法取得市值，請先更新即時價。")
         except Exception as e:
             st.error(f"記錄失敗：{e}")
+
     col_info.caption("排程：每天 08:00 / 20:00 自動記錄。也可以手動點按鈕立即記錄。")
 
-    # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("id,snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
@@ -3099,11 +3112,10 @@ def render_history_tab() -> None:
         return
 
     df = pd.DataFrame(rows)
-    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"], utc=True).dt.tz_convert("Asia/Taipei")
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
-    # ── 明細表（愈新愈上）──
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
@@ -3114,26 +3126,88 @@ def render_history_tab() -> None:
         "基富通", "渣打", "台新",
         "總成本", "市值損益", "累計配息", "觸發方式", "備註"
     ]
+
     col_cfg = {
-        "時間":     st.column_config.TextColumn("時間",       width="small"),
-        "總市值":   st.column_config.NumberColumn("總市值",   format="%.0f", width="medium"),
-        "台股":     st.column_config.NumberColumn("台股",     format="%.0f", width="medium"),
-        "美股":     st.column_config.NumberColumn("美股",     format="%.0f", width="medium"),
-        "基富通":   st.column_config.NumberColumn("基富通",   format="%.0f", width="medium"),
-        "渣打":     st.column_config.NumberColumn("渣打",     format="%.0f", width="medium"),
-        "台新":     st.column_config.NumberColumn("台新",     format="%.0f", width="medium"),
-        "總成本":   st.column_config.NumberColumn("總成本",   format="%.0f", width="medium"),
+        "時間": st.column_config.TextColumn("時間", width="small"),
+        "總市值": st.column_config.NumberColumn("總市值", format="%.0f", width="medium"),
+        "台股": st.column_config.NumberColumn("台股", format="%.0f", width="medium"),
+        "美股": st.column_config.NumberColumn("美股", format="%.0f", width="medium"),
+        "基富通": st.column_config.NumberColumn("基富通", format="%.0f", width="medium"),
+        "渣打": st.column_config.NumberColumn("渣打", format="%.0f", width="medium"),
+        "台新": st.column_config.NumberColumn("台新", format="%.0f", width="medium"),
+        "總成本": st.column_config.NumberColumn("總成本", format="%.0f", width="medium"),
         "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f", width="medium"),
         "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f", width="medium"),
-        "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
-        "備註":     st.column_config.TextColumn("備註",       width="medium"),
+        "觸發方式": st.column_config.TextColumn("觸發方式", width="small"),
+        "備註": st.column_config.TextColumn("備註", width="medium"),
     }
+
     st.dataframe(
-        df_show, use_container_width=True, hide_index=True,
+        df_show,
+        use_container_width=True,
+        hide_index=True,
         height=min(42 * len(df_show) + 44, 600),
-        column_config=col_cfg
+        column_config=col_cfg,
     )
 
+    st.markdown("#### 🧹 刪除錯誤歷史紀錄")
+    with st.expander("選擇要刪除的歷史紀錄", expanded=False):
+        delete_df = df[[
+            "id", "時間", "total_twd", "tw_stock", "us_stock",
+            "kifutong", "scb", "taishin", "total_cost", "total_pnl",
+            "cumulative_dividend", "trigger", "note"
+        ]].copy()
+
+        delete_df.insert(0, "刪除", False)
+        delete_df.columns = [
+            "刪除", "ID", "時間", "總市值", "台股", "美股",
+            "基富通", "渣打", "台新", "總成本", "市值損益",
+            "累計配息", "觸發方式", "備註"
+        ]
+
+        edited_delete = st.data_editor(
+            delete_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(42 * len(delete_df) + 44, 520),
+            disabled=[c for c in delete_df.columns if c != "刪除"],
+            column_config={
+                "刪除": st.column_config.CheckboxColumn("刪除"),
+                "ID": st.column_config.NumberColumn("ID", format="%.0f"),
+                "總市值": st.column_config.NumberColumn("總市值", format="%.0f"),
+                "台股": st.column_config.NumberColumn("台股", format="%.0f"),
+                "美股": st.column_config.NumberColumn("美股", format="%.0f"),
+                "基富通": st.column_config.NumberColumn("基富通", format="%.0f"),
+                "渣打": st.column_config.NumberColumn("渣打", format="%.0f"),
+                "台新": st.column_config.NumberColumn("台新", format="%.0f"),
+                "總成本": st.column_config.NumberColumn("總成本", format="%.0f"),
+                "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f"),
+                "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f"),
+            },
+            key="portfolio_snapshot_delete_editor",
+        )
+
+        selected_ids = edited_delete[edited_delete["刪除"] == True]["ID"].dropna().tolist()
+        st.caption(f"已勾選 {len(selected_ids)} 筆。刪除後不能復原。")
+
+        confirm_delete = st.checkbox("我確認要刪除勾選的歷史市值紀錄", key="confirm_delete_portfolio_snapshots")
+
+        if st.button(
+            "刪除勾選紀錄",
+            disabled=not confirm_delete or len(selected_ids) == 0,
+            key="delete_selected_portfolio_snapshots",
+        ):
+            deleted = 0
+            try:
+                for row_id in selected_ids:
+                    supabase_client().table("portfolio_snapshots").delete().eq("id", int(float(row_id))).execute()
+                    deleted += 1
+
+                st.success(f"已刪除 {deleted} 筆歷史紀錄。")
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"刪除失敗：{e}")
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
