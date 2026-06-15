@@ -3075,7 +3075,7 @@ def render_history_tab() -> None:
     # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("id,snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
@@ -3093,16 +3093,20 @@ def render_history_tab() -> None:
 
     # ── 明細表（愈新愈上）──
     df_show = df[[
-        "時間", "total_twd", "tw_stock", "us_stock",
+        "id", "時間", "total_twd", "tw_stock", "us_stock",
         "kifutong", "scb", "taishin",
         "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
     ]].copy()
     df_show.columns = [
-        "時間", "總市值", "台股", "美股",
+        "id", "時間", "總市值", "台股", "美股",
         "基富通", "渣打", "台新",
         "總成本", "市值損益", "累計配息", "觸發方式", "備註"
     ]
+    df_show.insert(0, "選取", False)
+
     col_cfg = {
+        "選取":     st.column_config.CheckboxColumn("選取", width="small"),
+        "id":       st.column_config.NumberColumn("id", format="%.0f", width="small"),
         "時間":     st.column_config.TextColumn("時間",       width="small"),
         "總市值":   st.column_config.NumberColumn("總市值",   format="%.0f", width="medium"),
         "台股":     st.column_config.NumberColumn("台股",     format="%.0f", width="medium"),
@@ -3116,11 +3120,35 @@ def render_history_tab() -> None:
         "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
         "備註":     st.column_config.TextColumn("備註",       width="medium"),
     }
-    st.dataframe(
+
+    edited_df = st.data_editor(
         df_show, use_container_width=True, hide_index=True,
         height=min(42 * len(df_show) + 44, 600),
-        column_config=col_cfg
+        column_config=col_cfg,
+        disabled=[c for c in df_show.columns if c != "選取"],
+        key="history_snapshot_editor",
     )
+
+    # ── 批次刪除 ──
+    selected_ids = edited_df[edited_df["選取"] == True]["id"].tolist()
+    st.markdown("#### 🗑️ 批次刪除")
+    if not selected_ids:
+        st.caption("請先在上方表格勾選要刪除的列。")
+    else:
+        st.warning(f"已選取 {len(selected_ids)} 筆記錄，刪除後無法復原。")
+        confirm_delete = st.checkbox(
+            f"我確認要刪除這 {len(selected_ids)} 筆歷史市值記錄",
+            key="confirm_history_delete",
+        )
+        if st.button("🗑️ 刪除選取的記錄", key="delete_history_snapshots", disabled=not confirm_delete):
+            try:
+                sb = supabase_client()
+                for sid in selected_ids:
+                    sb.table("portfolio_snapshots").delete().eq("id", int(sid)).execute()
+                st.success(f"已刪除 {len(selected_ids)} 筆記錄。")
+                st.rerun()
+            except Exception as e:
+                st.error(f"刪除失敗：{e}")
 
 
 ESTIMATED_DIVIDEND_COLUMNS = [
