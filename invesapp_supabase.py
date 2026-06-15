@@ -2840,18 +2840,6 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         st.info("目前沒有資料。")
         return
 
-    action_col1, action_col2 = st.columns([1, 1])
-    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
-        try:
-            source_positions = globals().get("positions", pd.DataFrame())
-            n = auto_dividend_update(source_positions)
-            if n > 0:
-                st.success(f"配息更新完成：{n} 筆")
-                st.cache_data.clear()
-            else:
-                st.info("目前沒有需要認列或快照的配息。")
-        except Exception as exc:
-            st.warning(f"配息更新失敗：{exc}")
 
     # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
     # 即時計算，不寫回 Supabase，只用於顯示
