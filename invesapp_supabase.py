@@ -2876,33 +2876,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
 
     # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
     # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
-    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
-        fund_rows = enriched[
-            (enriched["asset_type"] == "基金") &
-            (enriched["fund_code"].fillna("") != "") &
-            (enriched["monthly_dividend_per_unit"].fillna(0) == 0)
-        ]
-        if not fund_rows.empty:
-            sb       = supabase_client()
-            updated  = 0
-            done_codes: set[str] = set()
-            for _, fr in fund_rows.iterrows():
-                fc = normalize_text(fr.get("fund_code", ""))
-                if not fc or fc in done_codes:
-                    continue
-                mdiv = _get_gas_monthly_div(fc)
-                if mdiv and mdiv > 0:
-                    # 更新 Supabase 裡所有相同 fund_code 的列
-                    sb.table("positions").update(
-                        {"monthly_dividend_per_unit": mdiv}
-                    ).eq("fund_code", fc).execute()
-                    done_codes.add(fc)
-                    updated += 1
-            if updated:
-                st.success(f"已更新 {updated} 檔基金每單位月配息。")
-                st.cache_data.clear()
-            else:
-                st.info("沒有需要回填的基金每月配息。")
+
 
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
