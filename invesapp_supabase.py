@@ -1329,7 +1329,7 @@ def parse_sheet_number(value: Any) -> float | None:
 
 def normalize_sheet_month_label(label: Any) -> str:
     text = str(label).strip()
-    match = re.fullmatch(r"(20\d{2})-/(?:[-/]\d{1,2})?", text)
+    match = re.fullmatch(r"(20\d{2})[-/](\d{1,2})(?:[-/]\d{1,2})?", text)
     if not match:
         return ""
     return f"{match.group(1)}-{int(match.group(2)):02d}"
@@ -1377,11 +1377,11 @@ def extract_monthly_total(df: pd.DataFrame, row_label: str = "合計") -> pd.Dat
 
 def build_monthly_long_entries(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(columns=["月份", "原始項目", "項目", "金額"])
+        return pd.DataFrame(columns=["列號", "月份", "原始項目", "項目", "金額"])
     label_col = df.columns[0]
     records = []
     occurrence_counts: dict[str, int] = {}
-    for _, row in df.iterrows():
+    for row_idx, (_, row) in enumerate(df.iterrows(), start=2):
         raw_item = normalize_text(row.get(label_col, ""))
         if not raw_item or raw_item in {"合計", "總計"}:
             continue
@@ -1391,6 +1391,7 @@ def build_monthly_long_entries(df: pd.DataFrame) -> pd.DataFrame:
             if amount is None or amount == 0:
                 continue
             records.append({
+                "列號": row_idx,
                 "月份": normalize_sheet_month_label(col),
                 "原始項目": raw_item,
                 "項目": item,
@@ -1447,7 +1448,16 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
         "後續可用公司代墊款入帳沖銷。",
     )
     + _cash_subject_record(
-        ["零用金", "零用金--總支出", "零用金-支出", "零用金-淨值", "月支出"],
+        ["零用金"],
+        "現金/銀行",
+        "零用金餘額",
+        "account_balance",
+        "cash_accounts",
+        "餘額",
+        "A25 是零用金餘額科目，可作為轉出/轉入端點；A2-A24 才是零用金支出分類。",
+    )
+    + _cash_subject_record(
+        ["零用金--總支出", "零用金-支出", "零用金-淨值", "月支出", "prettycash"],
         "彙總",
         "零用金彙總",
         "summary",
@@ -1489,7 +1499,7 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
         "收入",
     )
     + _cash_subject_record(
-        ["台銀人壽", "國泰人壽", "新光人壽", "保誠人壽"],
+        ["台銀人壽", "國泰人壽", "南山人壽", "台灣人壽", "中國人壽", "新光人壽", "保誠人壽"],
         "保險",
         "保單/保險資產",
         "insurance_balance",
@@ -1505,7 +1515,7 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
         "支出",
     )
     + _cash_subject_record(
-        ["保險回饋金"],
+        ["保險回饋金", "回饋金-保險"],
         "收入",
         "保險回饋",
         "insurance_rebate",
@@ -1563,7 +1573,7 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
     + _cash_subject_record(
         [
             "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
-            "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
+            "台新基金", "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
             "渣打-南非", "台新-美金", "台新-南非",
             "懷思投資", "懷思新增投資", "notyetincome",
         ],
@@ -1574,15 +1584,27 @@ CASH_SUBJECT_RULES: list[dict[str, str]] = (
         "投資/轉帳",
     )
     + _cash_subject_record(
-        ["懷思投資total"],
+        [
+            "銀行總額-台幣", "保險總額", "銀行總額-外幣", "銀行總額-台/外幣",
+            "借出/入總額", "台股投資總值", "基金投資總額", "懷思投資total",
+            "投資總額", "Taiwan", "totalincome", "總淨值", "net confirm",
+            "投資", "外幣",
+        ],
         "彙總",
-        "懷思投資彙總",
+        "總額/公式列",
         "summary",
-        "investment_snapshots",
+        "cash_monthly_snapshots",
         "彙總",
+        "Google Sheet 公式或區塊標題，不建立互轉帳戶。",
     )
     + _cash_subject_record(
-        ["懷思投資報酬", "基金配息", "j渣打-大華"],
+        [
+            "懷思投資報酬", "基金配息", "j渣打-大華",
+            "配息-懷思投資", "股利-台股",
+            "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
+            "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
+            "配息-台新-美金", "配息-台新-南非",
+        ],
         "收入",
         "投資收入",
         "investment_income",
@@ -1609,12 +1631,79 @@ CASH_SUBJECT_LOOKUP: dict[str, dict[str, str]] = {
 }
 
 
-def classify_cash_subject(subject: Any) -> dict[str, str]:
+def _sheet_row_number(sheet_row: Any) -> int | None:
+    try:
+        if sheet_row is None or pd.isna(sheet_row):
+            return None
+        return int(float(sheet_row))
+    except Exception:
+        return None
+
+
+def _is_sheet_petty_cash_expense_row(sheet_row: Any) -> bool:
+    row_num = _sheet_row_number(sheet_row)
+    return row_num in SHEET_PETTY_CASH_EXPENSE_ROWS if row_num is not None else False
+
+
+def _is_sheet_credit_card_expense_row(sheet_row: Any) -> bool:
+    row_num = _sheet_row_number(sheet_row)
+    return row_num in SHEET_CREDIT_CARD_EXPENSE_ROWS if row_num is not None else False
+
+
+def _is_sheet_summary_subject(subject: Any, sheet_row: Any = None) -> bool:
     item = normalize_text(subject)
+    row_num = _sheet_row_number(sheet_row)
+    return (row_num in SHEET_SUMMARY_ROWS if row_num is not None else False) or item in SHEET_SUMMARY_SUBJECTS
+
+
+def _infer_cash_account_category_from_subject(subject: Any, fallback: str = "其他") -> str:
+    item = normalize_text(subject)
+    if item == "零用金" or item in {"悠遊付", "一卡通"}:
+        return "現金"
+    if any(token in item for token in ["美金", "美元", "日幣", "日圓", "韓幣", "人民幣", "港幣", "泰幣", "歐元", "南非"]):
+        return "外幣"
+    if item.endswith("人壽") or "保險" in item:
+        return "保險"
+    if any(token in item for token in ["台股", "基金", "投資", "基富通", "渣打-", "台新-", "奈米投", "China"]):
+        return "投資"
+    if "借" in item or "代墊" in item:
+        return "借款/代墊"
+    if "銀行" in item or item in {"郵局", "中國信託", "樂天銀行", "連線銀行", "將來銀行"}:
+        return "銀行"
+    return fallback if fallback in CASH_ACCOUNT_CATEGORIES else "其他"
+
+
+def _sheet_transfer_account_rule(subject: str, raw_subject: str = "") -> dict[str, str]:
+    item = normalize_text(subject)
+    raw_item = normalize_text(raw_subject)
+    category = _infer_cash_account_category_from_subject(item)
+    source_note = "依目前 A 欄自動納入互轉科目"
+    if raw_item and raw_item != item:
+        source_note += f"（原始科目：{raw_item}）"
+    return {
+        "科目": item,
+        "大類": category,
+        "子類": "線上 A 欄互轉科目",
+        "資料角色": "sheet_transfer_account",
+        "建議線上表": "cash_accounts",
+        "收支屬性": "餘額/互轉",
+        "備註": source_note,
+    }
+
+
+def classify_cash_subject(subject: Any, sheet_row: Any = None, raw_subject: Any = "") -> dict[str, str]:
+    item = normalize_text(subject)
+    raw_item = normalize_text(raw_subject) or item
     if item in CASH_SUBJECT_LOOKUP:
         return CASH_SUBJECT_LOOKUP[item]
     if not item:
         return {"科目": item, "大類": "未分類", "子類": "空白", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": ""}
+    if _is_sheet_petty_cash_expense_row(sheet_row):
+        return {"科目": item, "大類": "支出", "子類": "零用金生活支出", "資料角色": "expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依 2026細帳 A2-A24 判斷"}
+    if _is_sheet_credit_card_expense_row(sheet_row):
+        return {"科目": item, "大類": "支出", "子類": "信用卡消費", "資料角色": "credit_card_expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依 2026細帳 A132-A137 判斷"}
+    if _is_sheet_summary_subject(raw_item, sheet_row) or _is_sheet_summary_subject(item, sheet_row):
+        return {"科目": item, "大類": "彙總", "子類": "總額/公式列", "資料角色": "summary", "建議線上表": "cash_monthly_snapshots", "收支屬性": "彙總", "備註": "Google Sheet 公式或區塊標題，不建立互轉帳戶"}
     if "銀行利息" in item or "bank-銀行利息" in item:
         return {"科目": item, "大類": "收入", "子類": "銀行利息", "資料角色": "interest_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
     if item.startswith("零用金-") or item.startswith("零用金--"):
@@ -1629,6 +1718,8 @@ def classify_cash_subject(subject: Any) -> dict[str, str]:
         return {"科目": item, "大類": "收入", "子類": "投資收入", "資料角色": "investment_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
     if "銀行" in item or item in {"郵局", "中國信託", "悠遊付", "一卡通"}:
         return {"科目": item, "大類": "現金/銀行", "子類": "帳戶待確認", "資料角色": "account_balance", "建議線上表": "cash_accounts", "收支屬性": "餘額", "備註": "依帳戶名稱自動判斷"}
+    if _sheet_row_number(sheet_row) is not None:
+        return _sheet_transfer_account_rule(item, raw_item)
     return {"科目": item, "大類": "未分類", "子類": "待確認", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": "需人工確認"}
 
 
@@ -1638,13 +1729,14 @@ def cash_subject_catalog_df() -> pd.DataFrame:
 
 def enrich_cash_ledger_entries(long_entries: pd.DataFrame) -> pd.DataFrame:
     if long_entries.empty:
-        return pd.DataFrame(columns=["月份", "原始項目", "項目", "金額", "大類", "子類", "資料角色", "建議線上表", "收支屬性", "備註"])
+        return pd.DataFrame(columns=["列號", "月份", "原始項目", "項目", "金額", "大類", "子類", "資料角色", "建議線上表", "收支屬性", "備註"])
     rows = []
     for _, row in long_entries.iterrows():
         raw_item = normalize_text(row.get("原始項目", row.get("項目", "")))
         item = normalize_text(row.get("項目", "")) or canonical_cash_subject(raw_item)
-        rule = classify_cash_subject(item)
+        rule = classify_cash_subject(item, row.get("列號"), raw_item)
         rows.append({
+            "列號": row.get("列號", ""),
             "月份": row.get("月份", ""),
             "原始項目": raw_item,
             "項目": item,
@@ -4988,11 +5080,22 @@ CASHFLOW_EXPENSE_TYPES = {"支出", "利息支出", "信用卡消費", "投資�
 CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
 NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
 LIABILITY_CATEGORIES = ["借款/代墊"]
-TRANSFER_ACCOUNT_CATEGORIES = {"銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
+TRANSFER_ACCOUNT_CATEGORIES = {"現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
 TRANSFER_ACCOUNT_ROLES = {
     "account_balance", "foreign_cash_balance", "foreign_account_balance",
     "insurance_balance", "investment_transfer_or_balance",
-    "loan_payable", "loan_or_investment_outflow",
+    "loan_payable", "loan_or_investment_outflow", "fx_transfer",
+    "sheet_transfer_account",
+}
+SHEET_PETTY_CASH_EXPENSE_ROWS = set(range(2, 25))
+SHEET_CREDIT_CARD_EXPENSE_ROWS = set(range(132, 138))
+SHEET_SUMMARY_ROWS = {26, 27, 28, 63, 72, 93, 94, 96, 99, 103, 111, 113, 114, 129, 131, 138, 140, 141, 142, 146, 147}
+SHEET_SUMMARY_SUBJECTS = {
+    "零用金--總支出", "零用金-支出", "零用金-淨值", "prettycash", "月支出", "總支出",
+    "銀行總額-台幣", "保險總額", "銀行總額-外幣", "銀行總額-台/外幣",
+    "借出/入總額", "利息+利得", "台股投資總值", "基金投資總額",
+    "懷思投資total", "投資總額", "Taiwan", "totalincome", "總淨值",
+    "net confirm", "投資", "外幣",
 }
 
 CASH_SUBJECT_ALIASES = {
@@ -5015,7 +5118,7 @@ CASH_SUBJECT_ALIASES = {
     "travel": "零用金-旅行",
     "friends": "零用金-朋友",
     "home": "零用金-家用",
-    "prettycash": "零用金",
+    "prettycash": "prettycash",
     "總支出": "零用金--總支出",
     "支出": "零用金-支出",
     "netprettycash": "零用金-淨值",
@@ -5156,6 +5259,10 @@ def _cash_account_category(rule: dict[str, str]) -> str:
     category = normalize_text(rule.get("大類", ""))
     if subject == "零用金":
         return "現金"
+    if role == "sheet_transfer_account":
+        return _infer_cash_account_category_from_subject(subject, category)
+    if role == "fx_transfer":
+        return "外幣"
     if role == "advance_expense":
         return "支出"
     if category.startswith("支出"):
@@ -5277,6 +5384,29 @@ def _transfer_accounts(accts: pd.DataFrame) -> pd.DataFrame:
     return accts[categories.isin(TRANSFER_ACCOUNT_CATEGORIES)].copy()
 
 
+def _account_sheet_subject(row: pd.Series) -> str:
+    note = normalize_text(row.get("note", ""))
+    if note.startswith("預設科目："):
+        candidate = normalize_text(note.split("預設科目：", 1)[-1])
+        if candidate:
+            return candidate
+    if note.startswith("匯入 2026細帳") and "：" in note:
+        candidate = normalize_text(note.rsplit("：", 1)[-1])
+        if candidate:
+            return candidate
+    bank = normalize_text(row.get("bank", ""))
+    name = normalize_text(row.get("name", ""))
+    if not bank and not name:
+        return ""
+    if name in {"主帳戶", "投資帳戶", "保單", "往來帳戶"}:
+        return bank
+    if bank == "外幣現金":
+        return name
+    if bank and name:
+        return f"{bank}-{name}"
+    return bank or name
+
+
 def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if acct_id is None or pd.isna(acct_id):
         return "—"
@@ -5287,7 +5417,8 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     if row.empty:
         return str(acct_id)
     r = row.iloc[0]
-    return f"{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})"
+    subject = _account_sheet_subject(r) or f"{r.get('bank', '')} {r.get('name', '')}".strip()
+    return f"{subject}({r.get('currency', '')})"
 
 
 def _acct_options(accts: pd.DataFrame) -> list[str]:
@@ -5295,7 +5426,8 @@ def _acct_options(accts: pd.DataFrame) -> list[str]:
     if accts.empty:
         return opts
     for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        opts.append(f"{r.get('id')}｜{r.get('bank', '')} {r.get('name', '')}({r.get('currency', '')})")
+        subject = _account_sheet_subject(r) or f"{r.get('bank', '')} {r.get('name', '')}".strip()
+        opts.append(f"{r.get('id')}｜{subject}({r.get('currency', '')})")
     return opts
 
 
@@ -5390,8 +5522,8 @@ def _cash_import_preview_columns() -> list[str]:
     return ["匯入", "可互轉", "月份", "原始科目", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "餘額", "台幣換算", "資料角色", "略過原因", "備註"]
 
 
-def _cash_subject_account_fields(subject: str) -> dict[str, str]:
-    rule = classify_cash_subject(subject)
+def _cash_subject_account_fields(subject: str, sheet_row: Any = None, raw_subject: Any = "") -> dict[str, str]:
+    rule = classify_cash_subject(subject, sheet_row, raw_subject)
     category = _cash_account_category(rule)
     bank, name = _cash_account_bank_name(subject, category)
     is_account = _is_transfer_account_rule(rule)
@@ -5423,15 +5555,18 @@ def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.Data
 
     rows: list[dict[str, Any]] = []
     occurrence_counts: dict[str, int] = {}
-    for _, row in ledger.iterrows():
+    for row_idx, (_, row) in enumerate(ledger.iterrows(), start=2):
         raw_subject = normalize_text(row.get(label_col, ""))
         if not raw_subject or raw_subject in {"合計", "總計"}:
             continue
         subject = canonical_cash_subject(raw_subject, occurrence_counts)
+        fields = _cash_subject_account_fields(subject, row_idx, raw_subject)
         amount = parse_sheet_number(row.get(source_col))
         if amount is None:
-            continue
-        fields = _cash_subject_account_fields(subject)
+            if fields["匯入帳戶"] == "是":
+                amount = 0
+            else:
+                continue
         role = fields["資料角色"]
         should_import = fields["匯入帳戶"] == "是"
         fx_val, _ = fetch_fx(fields["幣別"])
@@ -5465,8 +5600,12 @@ def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.Data
     importable = df[df["匯入"] == True].copy()
     skipped = df[df["匯入"] == False].copy()
     if not importable.empty:
-        group_cols = ["匯入", "可互轉", "月份", "原始科目", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "資料角色", "略過原因", "備註"]
-        importable = importable.groupby(group_cols, as_index=False, dropna=False).agg({"餘額": "sum", "台幣換算": "sum"})
+        group_cols = ["匯入", "可互轉", "月份", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "資料角色", "略過原因", "備註"]
+        importable = importable.groupby(group_cols, as_index=False, dropna=False).agg({
+            "原始科目": lambda values: " / ".join(_unique_keep_order([normalize_text(v) for v in values])),
+            "餘額": "sum",
+            "台幣換算": "sum",
+        })
     out = pd.concat([importable, skipped], ignore_index=True)
     return out[_cash_import_preview_columns()].sort_values(["匯入", "類別", "科目"], ascending=[False, True, True])
 
@@ -5922,7 +6061,7 @@ def render_cashflow_tab() -> None:
                         st.error(f"新增失敗：{e}")
 
         with st.expander("一鍵建立缺少的預設帳戶"):
-            st.caption("會建立帳戶餘額科目；來源/目標互轉只列銀行、外幣、保險、投資、借款/代墊。現金類可做總覽但不列入互轉，支出/收入/信用卡消費只作分類；已存在者會略過。")
+            st.caption("會建立帳戶餘額科目；來源/目標互轉會列現金、銀行、外幣、保險、投資、借款/代墊。零用金支出、收入與信用卡消費只作分類；已存在者會略過。")
             st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
             confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
             if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
