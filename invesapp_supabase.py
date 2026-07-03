@@ -693,12 +693,12 @@ def fmt_md(dt: datetime) -> str:
 
 
 def is_tw_market_session(dt: datetime | None = None) -> bool:
-    """台股一般交易時段附近：週一到週五 09:00 後到 13:40。"""
+    """台股即時更新時段：週一到週五台北時間 09:00-15:30。"""
     dt = dt or tw_now()
     if dt.weekday() >= 5:
         return False
     minutes = dt.hour * 60 + dt.minute
-    return 9 * 60 <= minutes <= 13 * 60 + 40
+    return 9 * 60 <= minutes <= 15 * 60 + 30
 
 
 def tw_stock_market_prefix(ticker: str) -> str:
@@ -795,6 +795,9 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
+        if not is_tw_market_session():
+            return None, "台股非即時更新時段(09:00-15:30)"
+
         # 台股優先走 TWSE，避免 Yahoo Finance 短時間大量查詢被 429 限流。
         tw_quote = fetch_twse_realtime_quote(ticker)
         if tw_quote.get("price") is not None:
@@ -4785,6 +4788,18 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     st.subheader("💰 配息記錄")
 
     source = enriched_df if enriched_df is not None else globals().get("enriched", pd.DataFrame())
+    auto_key = f"auto_dividend_update_done_{tw_now().strftime('%Y%m%d')}"
+    if not st.session_state.get(auto_key, False):
+        st.session_state[auto_key] = True
+        try:
+            updated = auto_dividend_update(source)
+            if updated:
+                st.cache_data.clear()
+                st.success(f"已自動檢查/更新配息 {updated} 筆")
+                st.rerun()
+        except Exception as e:
+            st.warning(f"自動檢查配息失敗：{str(e)[:80]}")
+
     estimate_df = build_estimated_dividend_table(source)
     actual_df = build_actual_dividend_table(source)
 
@@ -6244,7 +6259,7 @@ with st.container():
             )
             tw_no_price = tw_no_price.loc[active_mask]
             tw_missing = tw_no_price.get("name", pd.Series(dtype=str)).dropna().unique().tolist()
-    if tw_missing:
+    if tw_missing and is_tw_market_session():
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
     c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
