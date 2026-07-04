@@ -25,7 +25,7 @@ except Exception:
     HAS_BS4 = False
 
 
-APP_VERSION = "2026-06-11-v53-dividend-twd-from-original-fx"
+APP_VERSION = "2026-07-04-v54-tw-stock-type-fix"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -117,6 +117,30 @@ TW_STOCK_NAMES_DUPLICATE = [
     "華泰","圓剛","圓剛","中鴻","楠梓電",
     "富邦台50","南亞科","欣興","京元電子","國巨"
 ]
+
+
+def effective_asset_type_from_platform(r: pd.Series | dict[str, Any]) -> str:
+    asset_type = normalize_text(r.get("asset_type", ""))
+    if asset_type:
+        return asset_type
+    platform = normalize_text(r.get("platform", ""))
+    if platform in ["基富通", "渣打基金", "台新基金"]:
+        return "基金"
+    if platform in ["台股", "美股"]:
+        return platform
+    return asset_type
+
+
+def tw_preset_ticker_for_name(name: Any) -> str:
+    text = normalize_text(name)
+    if text in TW_PRESETS:
+        return TW_PRESETS[text]
+    key = normalize_match_name(text)
+    for preset_name, ticker in TW_PRESETS.items():
+        if normalize_match_name(preset_name) == key:
+            return ticker
+    return ""
+
 
 FUND_PRESETS = {
     "acft94":  ("富蘭克林華美新興國家固定收益B-新臺幣",  "yp010000", "TWD", "基富通"),
@@ -465,9 +489,7 @@ def infer_fund_fields(name: Any, fund_code: Any = "", fund_pattern: Any = "") ->
 
 def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     platform = normalize_text(r.get("platform", "台股"), "台股")
-    asset_type = normalize_text(r.get("asset_type", ""), "")
-    if not asset_type:
-        asset_type = "基金" if platform in ["基富通", "渣打基金", "台新基金"] else platform
+    asset_type = effective_asset_type_from_platform({"asset_type": r.get("asset_type", ""), "platform": platform})
     currency = normalize_text(r.get("currency", ""), "")
     if not currency:
         currency = "TWD" if platform in ["台股", "基富通"] else "USD"
@@ -477,8 +499,8 @@ def normalize_payload(r: dict[str, Any] | pd.Series) -> dict[str, Any]:
     fund_pattern = normalize_text(r.get("fund_pattern", ""), "")
     if asset_type == "基金" or platform in ["基富通", "渣打基金", "台新基金"]:
         fund_code, fund_pattern = infer_fund_fields(name, fund_code, fund_pattern)
-    if platform == "台股" and not ticker and name in TW_PRESETS:
-        ticker = TW_PRESETS.get(name, "")
+    if platform == "台股" and not ticker:
+        ticker = tw_preset_ticker_for_name(name)
     return {
         "sort_order": normalize_number(r.get("sort_order", 0), 0),
         "platform": platform, "asset_type": asset_type, "name": name,
@@ -580,7 +602,7 @@ def normalize_ticker(ticker: str) -> str:
 def is_delisted_tw_stock(ticker: str = "", name: str = "") -> bool:
     ticker = normalize_ticker(ticker)
     name = normalize_text(name)
-    preset_ticker = normalize_ticker(TW_PRESETS.get(name, ""))
+    preset_ticker = normalize_ticker(tw_preset_ticker_for_name(name))
     return (
         ticker in TW_DELISTED_TICKERS
         or preset_ticker in TW_DELISTED_TICKERS
@@ -1272,11 +1294,11 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         name = normalize_text(r.get("name", ""))
         currency = effective_position_currency(r)
         fund_nav_date = "—"
-        asset_type = normalize_text(r.get("asset_type", ""))
+        asset_type = effective_asset_type_from_platform(r)
         if asset_type in {"台股", "美股"}:
             ticker = normalize_text(r.get("ticker", ""))
-            if asset_type == "台股" and not ticker and name in TW_PRESETS:
-                ticker = TW_PRESETS.get(name, "")
+            if asset_type == "台股" and not ticker:
+                ticker = tw_preset_ticker_for_name(name)
             elif not ticker and name:
                 ticker = name.upper()
             if asset_type == "台股" and is_delisted_tw_stock(ticker, name):
@@ -2046,7 +2068,7 @@ def seed_presets() -> None:
     sort_order = 1
     for name in TW_STOCK_NAMES_DUPLICATE:
         add_position({"sort_order": sort_order, "platform": "台股", "asset_type": "台股",
-                      "name": name, "ticker": TW_PRESETS.get(name, ""), "fund_code": "",
+                      "name": name, "ticker": tw_preset_ticker_for_name(name), "fund_code": "",
                       "fund_pattern": "", "currency": "TWD", "original_units": 0, "units": 0,
                       "corporate_action": "", "avg_cost": 0, "total_cost_input": 0,
                       "monthly_dividend_per_unit": 0, "purchase_ym": "", "dividend_received_total": 0,
@@ -4234,7 +4256,7 @@ def _stock_groups_from_positions(current_positions: pd.DataFrame) -> dict[str, p
     if stocks.empty:
         return {}
     stocks["_stock_key"] = stocks.apply(
-        lambda r: _plain_stock_code(r.get("ticker", "")) or _plain_stock_code(TW_PRESETS.get(normalize_text(r.get("name", "")), "")),
+        lambda r: _plain_stock_code(r.get("ticker", "")) or _plain_stock_code(tw_preset_ticker_for_name(r.get("name", ""))),
         axis=1,
     )
     if not stocks.empty:
@@ -4442,7 +4464,7 @@ def update_stock_cash_dividend_total(ticker: str, platform: str, delta_cash: flo
         if normalize_text(row.get("asset_type", "")) == "台股"
         and (
             _plain_stock_code(row.get("ticker", "")) == target_code
-            or _plain_stock_code(TW_PRESETS.get(normalize_text(row.get("name", "")), "")) == target_code
+            or _plain_stock_code(tw_preset_ticker_for_name(row.get("name", ""))) == target_code
         )
     ]
     if not matched:
@@ -4474,7 +4496,7 @@ def add_zero_cost_stock_dividend_position(ticker: str, platform: str, shares: fl
         (stocks["platform"].astype(str) == normalize_text(platform, "台股"))
         & (
             (stocks["ticker"].apply(_plain_stock_code) == target_code)
-            | (stocks["name"].apply(lambda value: _plain_stock_code(TW_PRESETS.get(normalize_text(value), ""))) == target_code)
+            | (stocks["name"].apply(lambda value: _plain_stock_code(tw_preset_ticker_for_name(value))) == target_code)
         )
     ].copy()
     if matched.empty:
