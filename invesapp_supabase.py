@@ -1528,6 +1528,40 @@ def _cash_subject_record(
     ]
 
 
+CASH_2026_A_COLUMN_SUBJECTS = [
+    "零用金-餐費", "零用金-食材", "零用金-衣飾", "零用金-頭髮",
+    "零用金-化妝保養＋按摩", "零用金-交通1", "零用金-交通2",
+    "零用金-書", "零用金-用品", "零用金-電話", "零用金-電影",
+    "零用金-命理", "零用金-醫療", "零用金-拜拜", "零用金-其他",
+    "零用金-公司", "零用金-公司內勤", "零用金-公司代墊",
+    "零用金-旅行", "零用金-朋友", "零用金-代墊", "零用金-家用",
+    "零用金", "零用金--總支出", "零用金-支出", "零用金-淨值",
+    "薪資入帳", "公司代墊款入帳",
+    "富邦銀行", "富邦銀行-銀行利息", "元大銀行", "元大bank-銀行利息",
+    "郵局", "台新銀行-建北", "台新bank-銀行利息", "台新銀行-信義",
+    "台新銀行-Richard", "台新銀行-子帳戶", "台新銀行-內湖新轉",
+    "連線銀行", "連線bank-銀行利息", "將來銀行", "將來bank-銀行利息",
+    "渣打銀行", "中國信託", "樂天銀行", "樂天bank-銀行利息",
+    "悠遊付", "一卡通", "銀行總額-台幣",
+    "台銀人壽", "國泰人壽", "南山人壽", "台灣人壽", "中國人壽",
+    "保誠人壽", "保險總額", "台新基金", "Taiwan", "China",
+    "台幣換外幣", "美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣",
+    "歐元", "日幣 suica", "渣打美金", "渣打南非", "台新美金",
+    "台新日幣", "台新南非", "銀行總額-外幣", "銀行總額-台/外幣",
+    "借出+投資", "利息+利得", "借入", "借出/入總額",
+    "台股-舊資金", "台股-新資金", "台股投資總值", "富邦奈米投",
+    "基富通-台", "基富通-日", "渣打-美金", "渣打-南非",
+    "台新-美金", "台新-南非", "基金投資總額", "懷思新增投資",
+    "懷思投資total", "投資總額", "配息-懷思投資", "股利-台股",
+    "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
+    "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
+    "配息-台新-美金", "配息-台新-南非", "回饋金-保險",
+    "prettycash", "totalincome",
+    "信用卡-渣打 14", "信用卡-富邦 19", "信用卡-聯邦",
+    "信用卡-星展 08", "信用卡-台新 18", "信用卡-國泰世華 24",
+]
+
+
 CASH_SUBJECT_RULES: list[dict[str, str]] = (
     _cash_subject_record(
         [
@@ -1829,7 +1863,14 @@ def classify_cash_subject(subject: Any, sheet_row: Any = None, raw_subject: Any 
 
 
 def cash_subject_catalog_df() -> pd.DataFrame:
-    return pd.DataFrame(CASH_SUBJECT_RULES).drop_duplicates(subset=["科目"], keep="first")
+    rows = list(CASH_SUBJECT_RULES)
+    known = {normalize_text(row.get("科目", "")) for row in rows}
+    for subject in CASH_2026_A_COLUMN_SUBJECTS:
+        item = normalize_text(subject)
+        if item and item not in known:
+            rows.append(classify_cash_subject(item))
+            known.add(item)
+    return pd.DataFrame(rows).drop_duplicates(subset=["科目"], keep="first")
 
 
 def enrich_cash_ledger_entries(long_entries: pd.DataFrame) -> pd.DataFrame:
@@ -5449,7 +5490,17 @@ def _unique_keep_order(values: list[Any]) -> list[str]:
 
 
 def cash_subject_options() -> list[str]:
-    return cash_subject_catalog_df()["科目"].dropna().astype(str).tolist()
+    return _unique_keep_order(CASH_2026_A_COLUMN_SUBJECTS)
+
+
+def cash_transfer_subject_options() -> list[str]:
+    subjects: list[str] = []
+    for subject in cash_subject_options():
+        rule = classify_cash_subject(subject)
+        if normalize_text(rule.get("資料角色", "")) == "summary":
+            continue
+        subjects.append(subject)
+    return subjects
 
 
 def _cashflow_kind(txn_type: str) -> str:
@@ -5584,7 +5635,7 @@ def cash_account_preset_rows() -> list[dict[str, Any]]:
         subject = normalize_text(rule.get("科目", ""))
         role = normalize_text(rule.get("資料角色", ""))
         rule_dict = rule.to_dict()
-        if role == "summary" or not _is_transfer_account_rule(rule_dict):
+        if role == "summary" or subject not in cash_transfer_subject_options():
             continue
         if subject in seen:
             continue
@@ -5687,14 +5738,40 @@ def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
     return f"{subject}({r.get('currency', '')})"
 
 
+def _account_id_by_subject(accts: pd.DataFrame) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    if accts.empty:
+        return mapping
+    for _, row in _active_accounts(accts).iterrows():
+        subject = _account_sheet_subject(row)
+        if not subject or subject in mapping:
+            continue
+        try:
+            mapping[subject] = int(float(row.get("id")))
+        except Exception:
+            continue
+    return mapping
+
+
+def _subject_option_label(subject: str, account_id: int | None = None) -> str:
+    left = str(account_id) if account_id is not None else f"new:{subject}"
+    return f"{left}｜{subject}({_cash_subject_currency(subject)})"
+
+
 def _acct_options(accts: pd.DataFrame) -> list[str]:
     opts: list[str] = []
-    if accts.empty:
-        return opts
-    for _, r in _transfer_accounts(_active_accounts(accts)).iterrows():
-        subject = _account_sheet_subject(r) or f"{r.get('bank', '')} {r.get('name', '')}".strip()
-        opts.append(f"{r.get('id')}｜{subject}({r.get('currency', '')})")
+    account_ids = _account_id_by_subject(accts)
+    for subject in cash_transfer_subject_options():
+        opts.append(_subject_option_label(subject, account_ids.get(subject)))
     return opts
+
+
+def _subject_from_option(opt: str) -> str:
+    text = normalize_text(opt)
+    if not text or text == "（無）" or "｜" not in text:
+        return ""
+    label = text.split("｜", 1)[1]
+    return re.sub(r"\([A-Z]{3}\)$", "", label).strip()
 
 
 def _id_from_option(opt: str) -> int | None:
@@ -5704,6 +5781,60 @@ def _id_from_option(opt: str) -> int | None:
         return int(str(opt).split("｜")[0])
     except Exception:
         return None
+
+
+def ensure_cash_account_for_subject(subject: str, accts: pd.DataFrame | None = None) -> int | None:
+    subject = normalize_text(subject)
+    if not subject:
+        return None
+    current = accts if accts is not None else load_accounts()
+    existing = _account_id_by_subject(current)
+    if subject in existing:
+        return existing[subject]
+
+    rule = classify_cash_subject(subject)
+    if normalize_text(rule.get("資料角色", "")) == "summary":
+        return None
+    category = _cash_account_category(rule)
+    bank, name = _cash_account_bank_name(subject, category)
+    next_order = 1
+    if current is not None and not current.empty and "sort_order" in current.columns:
+        next_order = int(normalize_number(current["sort_order"].max(), 0)) + 1
+    payload = {
+        "sort_order": next_order,
+        "category": category,
+        "bank": bank,
+        "name": name,
+        "currency": _cash_subject_currency(subject),
+        "balance": 0,
+        "note": f"預設科目：{subject}",
+        "is_active": True,
+    }
+    result = supabase_client().table("accounts").insert(payload).execute()
+    data = result.data or []
+    if data and data[0].get("id") is not None:
+        return int(float(data[0]["id"]))
+    rows = supabase_client().table("accounts").select("id,note").execute().data or []
+    for row in rows:
+        if _account_sheet_subject(pd.Series(row)) == subject and row.get("id") is not None:
+            return int(float(row["id"]))
+    return None
+
+
+def _account_id_from_option(opt: str, accts: pd.DataFrame) -> int | None:
+    existing_id = _id_from_option(opt)
+    if existing_id is not None:
+        return existing_id
+    return ensure_cash_account_for_subject(_subject_from_option(opt), accts)
+
+
+def _account_currency_balance(accts: pd.DataFrame, acct_id: int, opt: str) -> tuple[str, float]:
+    row = accts[accts["id"] == acct_id] if not accts.empty and "id" in accts.columns else pd.DataFrame()
+    if not row.empty:
+        selected = row.iloc[0]
+        return normalize_text(selected.get("currency", "TWD"), "TWD"), normalize_number(selected.get("balance", 0), 0)
+    subject = _subject_from_option(opt)
+    return _cash_subject_currency(subject), 0.0
 
 
 def _account_name_from_option(opt: str) -> str:
@@ -5792,8 +5923,8 @@ def _cash_subject_account_fields(subject: str, sheet_row: Any = None, raw_subjec
     rule = classify_cash_subject(subject, sheet_row, raw_subject)
     category = _cash_account_category(rule)
     bank, name = _cash_account_bank_name(subject, category)
-    is_account = _is_transfer_account_rule(rule)
-    is_transfer_endpoint = is_account and category in TRANSFER_ACCOUNT_CATEGORIES
+    is_account = subject in cash_transfer_subject_options()
+    is_transfer_endpoint = is_account
     return {
         "科目": subject,
         "類別": category,
@@ -6096,11 +6227,11 @@ def render_cashflow_tab() -> None:
     with tab2:
         st.markdown("#### ➕ 新增一筆交易")
         if accts.empty:
-            st.warning("請先到「帳戶管理」建立帳戶。")
-        else:
+            st.info("尚無帳戶；新增交易時會依 2026細帳 A 欄科目自動建立。")
+        with st.container():
             account_opts = _acct_options(accts)
             if not account_opts:
-                st.warning("目前沒有可作付款、入帳或轉帳的帳戶；請先到「帳戶管理」建立銀行、外幣、投資、保險或借款/代墊帳戶。")
+                st.warning("目前沒有可作付款、入帳或轉帳的科目。")
             required_account_opts = account_opts if account_opts else ["（無）"]
             acct_opts_optional = ["（無）"] + account_opts
             txn_type = st.selectbox("類型", TXN_TYPES, key="new_txn_type")
@@ -6154,19 +6285,25 @@ def render_cashflow_tab() -> None:
                 note = st.text_input("備註")
 
                 if st.form_submit_button("💾 新增交易"):
-                    from_id = _id_from_option(from_opt)
-                    to_id = _id_from_option(to_opt)
+                    from_subject = _subject_from_option(from_opt)
+                    to_subject = _subject_from_option(to_opt)
                     if amount <= 0:
                         st.error("金額必須大於 0")
-                    elif flow_kind == "transfer" and (from_id is None or to_id is None):
+                    elif flow_kind == "transfer" and (not from_subject or not to_subject):
                         st.error("轉帳必須選轉出科目和轉入科目")
-                    elif flow_kind == "income" and to_id is None:
+                    elif flow_kind == "income" and not to_subject:
                         st.error("收入必須選入帳科目")
-                    elif from_id is not None and to_id is not None and from_id == to_id:
+                    elif from_subject and to_subject and from_subject == to_subject:
                         st.error("轉出和轉入不能是同一個科目")
                     else:
                         try:
                             sb = supabase_client()
+                            from_id = _account_id_from_option(from_opt, accts)
+                            to_id = _account_id_from_option(to_opt, accts)
+                            if flow_kind == "transfer" and (from_id is None or to_id is None):
+                                raise RuntimeError("無法建立轉出或轉入科目")
+                            if flow_kind == "income" and to_id is None:
+                                raise RuntimeError("無法建立入帳科目")
                             sb.table("transactions").insert({
                                 "txn_date": str(txn_date),
                                 "txn_type": txn_type,
@@ -6182,18 +6319,18 @@ def render_cashflow_tab() -> None:
                             }).execute()
 
                             if from_id:
-                                from_row = accts[accts["id"] == from_id].iloc[0]
+                                from_currency, from_balance = _account_currency_balance(accts, from_id, from_opt)
                                 from_amount = _amount_in_account_currency(
-                                    amount, currency, normalize_text(from_row.get("currency", "TWD")), fx_rate_input
+                                    amount, currency, from_currency, fx_rate_input
                                 )
-                                new_bal = normalize_number(from_row.get("balance", 0), 0) - from_amount
+                                new_bal = from_balance - from_amount
                                 sb.table("accounts").update({"balance": new_bal}).eq("id", from_id).execute()
                             if to_id:
-                                to_row = accts[accts["id"] == to_id].iloc[0]
+                                to_currency, to_balance = _account_currency_balance(accts, to_id, to_opt)
                                 to_amount = _amount_in_account_currency(
-                                    amount, currency, normalize_text(to_row.get("currency", "TWD")), fx_rate_input
+                                    amount, currency, to_currency, fx_rate_input
                                 )
-                                new_bal = normalize_number(to_row.get("balance", 0), 0) + to_amount
+                                new_bal = to_balance + to_amount
                                 sb.table("accounts").update({"balance": new_bal}).eq("id", to_id).execute()
 
                             st.success("✅ 已新增！")
