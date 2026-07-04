@@ -416,7 +416,9 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
         "purchase_ym": "", "dividend_received_original_total": 0.0,
         "dividend_received_total": 0.0, "dividend_note": "", "note": "",
-        "is_reinvest": False,
+        "is_reinvest": False, "latest_price": None,
+        "latest_market_value_original": None, "latest_market_value_twd": None,
+        "latest_price_updated_at": "", "latest_price_status": "",
     }
     out = df.copy()
     for col, default in defaults.items():
@@ -795,19 +797,19 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
-        if not is_tw_market_session():
-            return None, "台股非即時更新時段(09:00-15:30)"
-
-        # 台股優先走 TWSE，避免 Yahoo Finance 短時間大量查詢被 429 限流。
-        tw_quote = fetch_twse_realtime_quote(ticker)
-        if tw_quote.get("price") is not None:
-            return float(tw_quote["price"]), normalize_text(tw_quote.get("status", "TWSE即時"))
+        if is_tw_market_session():
+            # 台股盤中才走 TWSE 即時報價，避免盤外重複抓即時資料。
+            tw_quote = fetch_twse_realtime_quote(ticker)
+            if tw_quote.get("price") is not None:
+                return float(tw_quote["price"]), normalize_text(tw_quote.get("status", "TWSE即時"))
+        else:
+            return None, "台股盤外沿用資料庫最新版"
 
         y_price, y_status = fetch_yahoo_price(ticker)
         if y_price is not None:
             return y_price, "Yahoo"
 
-        # Google 台股只在前兩者都失敗時才試，且僅限有明確 exchange 的
+        # Google 台股只在前兩者都失敗時才試，且僅限有明確 exchange 的。
         g_price, g_status = fetch_google_finance_price(ticker, TW_STOCK_EXCHANGES.get(ticker))
         if g_price is not None:
             return g_price, "Google備援"
@@ -1128,6 +1130,58 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     }
 
 
+def _position_market_units(r: pd.Series | dict[str, Any]) -> float:
+    original_units = normalize_number(r.get("original_units", 0), 0)
+    units = normalize_number(r.get("units", 0), 0)
+    note = normalize_text(r.get("note", ""))
+    is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
+    return units if units > 0 or is_closed else original_units
+
+
+def latest_position_price_from_db(r: pd.Series | dict[str, Any]) -> float | None:
+    for col in ["latest_price", "即時價格/淨值", "market_price", "price"]:
+        value = normalize_number(r.get(col, None), 0)
+        if value > 0:
+            return value
+
+    units = _position_market_units(r)
+    if units <= 0:
+        return None
+
+    for col in ["latest_market_value_original", "市值原幣", "market_value_original"]:
+        value = normalize_number(r.get(col, None), 0)
+        if value > 0:
+            return value / units
+
+    for col in ["latest_market_value_twd", "台幣市值", "market_value_twd"]:
+        value = normalize_number(r.get(col, None), 0)
+        if value > 0:
+            return value / units
+
+    return None
+
+
+def save_latest_position_market_value(
+    position_id: Any,
+    price: float | None,
+    calc: dict[str, Any],
+    status: str,
+) -> None:
+    if price is None or position_id is None or normalize_text(position_id, "") in {"", "nan", "None"}:
+        return
+    payload = {
+        "latest_price": normalize_number(price, 0),
+        "latest_market_value_original": normalize_number(calc.get("市值原幣", 0), 0),
+        "latest_market_value_twd": normalize_number(calc.get("台幣市值", 0), 0),
+        "latest_price_updated_at": tw_now().isoformat(),
+        "latest_price_status": normalize_text(status, ""),
+    }
+    try:
+        supabase_client().table("positions").update(payload).eq("id", int(float(position_id))).execute()
+    except Exception:
+        pass
+
+
 def effective_position_currency(r: pd.Series | dict[str, Any]) -> str:
     name = normalize_text(r.get("name", ""))
     currency = normalize_text(r.get("currency", "TWD")).upper()
@@ -1188,6 +1242,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     rows = []
+    tw_market_session_now = is_tw_market_session()
     dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     dividend_original_totals = fund_dividend_original_totals(df)
     for _, r in df.iterrows():
@@ -1203,6 +1258,9 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
                 ticker = name.upper()
             if asset_type == "台股" and is_delisted_tw_stock(ticker, name):
                 price, p_status = None, "已下市"
+            elif asset_type == "台股" and not tw_market_session_now:
+                price = latest_position_price_from_db(r)
+                p_status = "沿用資料庫最新版" if price is not None else "台股盤外未存最新版"
             else:
                 price, p_status = fetch_stock_price(ticker, asset_type)
         else:
@@ -1229,6 +1287,8 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
                 calc_row["dividend_received_original_total"] = 0
                 calc_row["dividend_received_total"] = 0
         calc = calculate_cost_and_value(calc_row, price, fx)
+        if asset_type == "台股" and tw_market_session_now and price is not None:
+            save_latest_position_market_value(r.get("id"), price, calc, p_status)
         units = normalize_number(calc.get("市值股數", r.get("units", 0)), 0)
         if asset_type == "基金":
             _fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(normalize_text(r.get("name","")),normalize_text(r.get("fund_code","")),normalize_text(r.get("fund_pattern","")))[0]
@@ -3731,6 +3791,21 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
+    df["_dedupe_key"] = df.apply(
+        lambda r: (
+            normalize_text(r.get("_platform", "")),
+            normalize_text(r.get("_currency", "")).upper(),
+            normalize_text(r.get("_fund_code", "")).lower() or normalize_match_name(r.get("基金名稱", "")),
+        ),
+        axis=1,
+    )
+    df["_dedupe_paid"] = df["確認入帳"].apply(lambda v: 1 if normalize_bool(v, False) else 0)
+    df["_dedupe_source"] = df["_source_table"].map({"fund_dividends": 2, "dividend_log": 1}).fillna(0)
+    df = (
+        df.sort_values(["_sort_date", "_dedupe_paid", "_dedupe_source"], ascending=[False, False, False])
+        .drop_duplicates("_dedupe_key", keep="first")
+        .copy()
+    )
     df["累計配息原幣"] = df["累計配息原幣"].apply(lambda v: round(normalize_number(v, 0), 2))
     df["累計配息台幣"] = df["累計配息台幣"].apply(lambda v: round(normalize_number(v, 0), 0))
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
@@ -6237,6 +6312,11 @@ alter table positions add column if not exists dividend_received_total numeric d
 alter table positions add column if not exists dividend_note text default '';
 alter table positions add column if not exists dividend_pay_date text default '';
 alter table positions add column if not exists is_reinvest boolean default false;
+alter table positions add column if not exists latest_price numeric;
+alter table positions add column if not exists latest_market_value_original numeric;
+alter table positions add column if not exists latest_market_value_twd numeric;
+alter table positions add column if not exists latest_price_updated_at timestamptz;
+alter table positions add column if not exists latest_price_status text default '';
 
 alter table fund_dividends add column if not exists fund_name text default '';
 alter table fund_dividends add column if not exists actual_div_amount numeric default 0;
