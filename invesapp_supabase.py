@@ -3489,7 +3489,7 @@ def _dividend_business_key(
     ex_date: Any,
     pay_date: Any,
 ) -> tuple[str, str, str, str]:
-    fund_key = normalize_text(fund_code).lower() or _dividend_name_key(fund_name)
+    fund_key = _dividend_name_key(fund_name) or normalize_text(fund_code).lower()
     date_key = _record_date_key({"ex_date": ex_date, "pay_date": pay_date})
     return (
         fund_key,
@@ -4029,7 +4029,7 @@ def set_position_dividend_original_total(position_id: int, target_original_total
 
 
 def render_position_dividend_total_fix_tool() -> None:
-    with st.expander("修正持倉累計配息原幣", expanded=True):
+    with st.expander("修正持倉累計配息原幣", expanded=False):
         current = ensure_columns(load_positions())
         funds = current[current["asset_type"].astype(str) == "基金"].copy()
         funds = funds[funds["fund_code"].astype(str).str.strip() != ""].copy()
@@ -4073,11 +4073,20 @@ def render_position_dividend_total_fix_tool() -> None:
             axis=1,
         )
 
-        choice = st.selectbox(
-            "選擇要修正的持倉主列",
-            [""] + primary_df["_label"].tolist(),
-            key="fix_position_dividend_total_choice_primary_only",
-        )
+        choice_options = [""] + primary_df["_label"].tolist()
+        saved_choice = st.session_state.get("fix_position_dividend_total_choice_applied", "")
+        with st.form("fix_position_dividend_total_choice_form"):
+            pending_choice = st.selectbox(
+                "選擇要修正的持倉主列",
+                choice_options,
+                index=choice_options.index(saved_choice) if saved_choice in choice_options else 0,
+                key="fix_position_dividend_total_choice_primary_only",
+            )
+            choice_submitted = st.form_submit_button("載入這筆")
+        if choice_submitted:
+            st.session_state["fix_position_dividend_total_choice_applied"] = pending_choice
+            st.rerun()
+        choice = st.session_state.get("fix_position_dividend_total_choice_applied", "")
         if not choice:
             st.caption("只列出每檔基金的第一筆主列；更新後同基金其他持倉列會歸零，避免重複累計。")
             return
@@ -4997,7 +5006,20 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
         set(estimate_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
         | set(actual_df.get("平台", pd.Series(dtype=str)).dropna().astype(str))
     )
-    selected_platform = st.selectbox("篩選平台", ["全部"] + platforms, key="div_record_platform")
+    platform_options = ["全部"] + platforms
+    saved_platform = st.session_state.get("div_record_platform_applied", "全部")
+    with st.form("div_record_platform_form"):
+        pending_platform = st.selectbox(
+            "篩選平台",
+            platform_options,
+            index=platform_options.index(saved_platform) if saved_platform in platform_options else 0,
+            key="div_record_platform",
+        )
+        platform_submitted = st.form_submit_button("套用篩選")
+    if platform_submitted:
+        st.session_state["div_record_platform_applied"] = pending_platform
+        st.rerun()
+    selected_platform = st.session_state.get("div_record_platform_applied", "全部")
     if selected_platform != "全部":
         estimate_df = estimate_df[estimate_df["平台"] == selected_platform]
         actual_df = actual_df[actual_df["平台"] == selected_platform]
