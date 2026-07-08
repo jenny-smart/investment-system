@@ -2819,7 +2819,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
     2. 【認列】pay_date <= 今天 且 is_paid=False
        → twd_total = units_at_ex × actual_div_amount × fx_rate
        → is_paid = True
-       → dividend_received_original_total += units_at_ex × actual_div_amount（只加到排序第一筆）
+       → 依已確認記錄去重後重算持倉累計配息
     回傳：更新筆數
     """
     from datetime import date as dt_date
@@ -2942,22 +2942,7 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
                     "updated_at": "now()",
                 }).eq("id", int(row_id)).execute()
 
-            # 加到 positions 的原幣累積配息（只加到同基金排序第一筆）
-            pos_rows = sorted(
-                rows,
-                key=lambda r: (
-                    normalize_number(r.get("sort_order", 999999), 999999),
-                    normalize_number(r.get("id", 999999), 999999),
-                ),
-            )
-            primary_id = int(float(pos_rows[0].get("id")))
-            original_total = units_at_ex * actual_div_amount
-            cur_original_total = normalize_number(pos_rows[0].get("dividend_received_original_total", 0), 0)
-            sb.table("positions").update({
-                "dividend_received_original_total": cur_original_total + original_total,
-                "dividend_received_total": 0,
-                "dividend_pay_date": pay_date,
-            }).eq("id", primary_id).execute()
+            recompute_position_dividend_original_total(fc, plt, cur, pay_date)
 
             updated += 1
         except Exception:
@@ -3428,34 +3413,6 @@ def _latest_dividend_reference_date(gas: dict[str, Any], history_rows: list[dict
     return _latest_past_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
 
 
-def _combined_dividend_records() -> list[dict[str, Any]]:
-    records = _fetch_dividend_rows("fund_dividends")
-    log_records = _fetch_dividend_rows("dividend_log")
-    existing_keys = {
-        (
-            normalize_text(r.get("fund_code", "")),
-            normalize_text(r.get("platform", "")),
-            normalize_text(r.get("currency", "")),
-            normalize_text(r.get("ex_date", "")),
-        )
-        for r in records
-    }
-    for record in log_records:
-        key = (
-            normalize_text(record.get("fund_code", "")),
-            normalize_text(record.get("platform", "")),
-            normalize_text(record.get("currency", "")),
-            normalize_text(record.get("ex_date", "")),
-        )
-        if key not in existing_keys:
-            copy = dict(record)
-            copy["_source_table"] = "dividend_log"
-            records.append(copy)
-    for record in records:
-        record.setdefault("_source_table", "fund_dividends")
-    return records
-
-
 def _dividend_record_variants(fund_code: str, platform: str, currency: str) -> list[tuple[str, str, str]]:
     return [
         (fund_code, platform, currency),
@@ -3514,15 +3471,67 @@ def _record_date_key(record: dict[str, Any]) -> str:
     return "" if pay_date == "—" else pay_date
 
 
+def _dividend_name_key(value: Any) -> str:
+    text = normalize_match_name(value)
+    for old, new in {
+        "Ｕ": "u", "Ｙ": "y", "Ａ": "a", "Ｂ": "b",
+        "（": "(", "）": ")", "－": "-", "–": "-", "—": "-",
+    }.items():
+        text = text.replace(old.lower(), new).replace(old, new)
+    return text
+
+
+def _dividend_business_key(
+    fund_code: Any,
+    platform: Any,
+    currency: Any,
+    fund_name: Any,
+    ex_date: Any,
+    pay_date: Any,
+) -> tuple[str, str, str, str]:
+    fund_key = normalize_text(fund_code).lower() or _dividend_name_key(fund_name)
+    date_key = _record_date_key({"ex_date": ex_date, "pay_date": pay_date})
+    return (
+        fund_key,
+        normalize_text(platform),
+        normalize_text(currency).upper(),
+        date_key,
+    )
+
+
+def _dividend_record_key(record: dict[str, Any]) -> tuple[str, str, str, str]:
+    return _dividend_business_key(
+        record.get("fund_code", ""),
+        record.get("platform", ""),
+        record.get("currency", ""),
+        record.get("fund_name", record.get("name", "")),
+        record.get("ex_date", ""),
+        record.get("pay_date", ""),
+    )
+
+
+def _combined_dividend_records() -> list[dict[str, Any]]:
+    records = _fetch_dividend_rows("fund_dividends")
+    log_records = _fetch_dividend_rows("dividend_log")
+    existing_keys = {_dividend_record_key(r) for r in records}
+    for record in log_records:
+        key = _dividend_record_key(record)
+        if key not in existing_keys:
+            copy = dict(record)
+            copy["_source_table"] = "dividend_log"
+            records.append(copy)
+            existing_keys.add(key)
+    for record in records:
+        record.setdefault("_source_table", "fund_dividends")
+    return records
+
+
 def _existing_dividend_record_keys(records: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
     keys: set[tuple[str, str, str, str]] = set()
     for record in records:
-        fund_code = normalize_text(record.get("fund_code", "")).lower()
-        platform = normalize_text(record.get("platform", ""))
-        currency = normalize_text(record.get("currency", "")).upper()
-        date_key = _record_date_key(record)
-        if fund_code and date_key:
-            keys.add((fund_code, platform, currency, date_key))
+        key = _dividend_record_key(record)
+        if key[0] and key[3]:
+            keys.add(key)
     return keys
 
 
@@ -3720,13 +3729,15 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         if not estimate:
             continue
         fund_code = normalize_text(estimate.get("fund_code", "")).lower()
-        date_key = estimate.get("ex_date") or estimate.get("pay_date") or ""
-        if fund_code and date_key and (
+        estimate_key = _dividend_business_key(
             fund_code,
-            normalize_text(estimate.get("platform", "")),
-            normalize_text(estimate.get("currency", "")).upper(),
-            date_key,
-        ) in existing_keys:
+            estimate.get("platform", ""),
+            estimate.get("currency", ""),
+            estimate.get("fund_name", ""),
+            estimate.get("ex_date", ""),
+            estimate.get("pay_date", ""),
+        )
+        if estimate_key[0] and estimate_key[3] and estimate_key in existing_keys:
             continue
         if any(
             normalize_text(row.get("_source_table", "")) == "dividend_log_candidate"
@@ -3784,6 +3795,23 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     df["_sort_date"] = df["_sort_date"].apply(lambda d: pd.Timestamp(d) if d is not None else pd.Timestamp.min)
+    df["_dedupe_key"] = df.apply(
+        lambda r: _dividend_business_key(
+            r.get("_fund_code", ""),
+            r.get("_platform", ""),
+            r.get("_currency", ""),
+            r.get("_fund_name", r.get("基金名稱", "")),
+            r.get("_ex_date", ""),
+            r.get("_pay_date", ""),
+        ),
+        axis=1,
+    )
+    df["_dedupe_paid"] = df["確認入帳"].apply(lambda v: 1 if normalize_bool(v, False) else 0)
+    df["_dedupe_source"] = df["_source_table"].map({"fund_dividends": 2, "dividend_log": 1}).fillna(0)
+    df = df.sort_values(
+        ["_sort_date", "_dedupe_paid", "_dedupe_source"],
+        ascending=[False, False, False],
+    ).drop_duplicates("_dedupe_key", keep="first").copy()
     df["累計配息原幣"] = df["累計配息原幣"].apply(lambda v: round(normalize_number(v, 0), 2))
     df["累計配息台幣"] = df["累計配息台幣"].apply(lambda v: round(normalize_number(v, 0), 0))
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
@@ -3852,6 +3880,109 @@ def update_position_dividend_original_total(
             "dividend_received_total": 0,
         }).eq("id", rid).execute()
     return True
+
+
+def _paid_dividend_original_amount(record: dict[str, Any]) -> float:
+    if not normalize_bool(record.get("is_paid", False), False):
+        return 0.0
+    units = normalize_number(record.get("units_at_ex", 0), 0)
+    per_unit = normalize_number(record.get("actual_div_amount", 0), 0)
+    if per_unit <= 0:
+        per_unit = normalize_number(record.get("div_amount", 0), 0)
+    amount = units * per_unit if units > 0 and per_unit > 0 else 0
+    if amount <= 0:
+        twd_total = normalize_number(record.get("twd_total", 0), 0)
+        fx = normalize_number(record.get("fx_rate", 0), 0)
+        if twd_total > 0 and fx > 0:
+            amount = twd_total / fx
+    return max(0.0, amount)
+
+
+def set_position_dividend_original_total_by_fund(
+    fund_code: str,
+    platform: str,
+    currency: str,
+    target_original_total: float,
+    dividend_pay_date: str = "",
+) -> bool:
+    fund_code_key = normalize_text(fund_code).lower()
+    platform_key = normalize_text(platform)
+    currency_key = normalize_text(currency).upper()
+    if not fund_code_key:
+        return False
+    try:
+        rows = supabase_client().table("positions").select(
+            "id,sort_order,fund_code,platform,currency"
+        ).eq("platform", platform_key).eq("currency", currency_key).execute().data or []
+    except Exception:
+        rows = []
+    matched = [
+        row for row in rows
+        if normalize_text(row.get("fund_code", "")).lower() == fund_code_key
+    ]
+    if not matched:
+        return False
+    matched = sorted(
+        matched,
+        key=lambda row: (
+            normalize_number(row.get("sort_order", 999999), 999999),
+            normalize_number(row.get("id", 999999), 999999),
+        ),
+    )
+    primary_id = int(float(matched[0]["id"]))
+    sb = supabase_client()
+    target = max(0, normalize_number(target_original_total, 0))
+    for row in matched:
+        rid = int(float(row["id"]))
+        payload = {
+            "dividend_received_original_total": target if rid == primary_id else 0,
+            "dividend_received_total": 0,
+        }
+        if rid == primary_id and dividend_pay_date:
+            payload["dividend_pay_date"] = dividend_pay_date
+        sb.table("positions").update(payload).eq("id", rid).execute()
+    return True
+
+
+def recompute_position_dividend_original_total(
+    fund_code: str,
+    platform: str,
+    currency: str,
+    fallback_pay_date: str = "",
+) -> bool:
+    fund_code_key = normalize_text(fund_code).lower()
+    platform_key = normalize_text(platform)
+    currency_key = normalize_text(currency).upper()
+    if not fund_code_key:
+        return False
+
+    paid_by_key: dict[tuple[str, str, str, str], float] = {}
+    pay_dates: list[Any] = []
+    for record in _combined_dividend_records():
+        if normalize_text(record.get("fund_code", "")).lower() != fund_code_key:
+            continue
+        if normalize_text(record.get("platform", "")) != platform_key:
+            continue
+        if normalize_text(record.get("currency", "")).upper() != currency_key:
+            continue
+        amount = _paid_dividend_original_amount(record)
+        if amount <= 0:
+            continue
+        key = _dividend_record_key(record)
+        paid_by_key[key] = max(amount, paid_by_key.get(key, 0))
+        pay_dates.append(record.get("pay_date") or record.get("ex_date"))
+
+    latest_date = fallback_pay_date
+    parsed_dates = [d for d in (_parse_dividend_date(v) for v in pay_dates) if d is not None]
+    if parsed_dates:
+        latest_date = max(parsed_dates).strftime("%Y/%m/%d")
+    return set_position_dividend_original_total_by_fund(
+        fund_code_key,
+        platform_key,
+        currency_key,
+        sum(paid_by_key.values()),
+        latest_date,
+    )
 
 
 def set_position_dividend_original_total(position_id: int, target_original_total: float) -> bool:
@@ -4737,25 +4868,59 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "累計配息原幣": st.column_config.NumberColumn("累計配息原幣", format="localized"),
         "累計配息台幣": st.column_config.NumberColumn("累計配息台幣", format="localized"),
     }
-    edited = st.data_editor(
+    st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
         height=min(42 * len(display_df) + 44, height_cap),
         column_config=col_cfg,
-        disabled=[c for c in ACTUAL_DIVIDEND_COLUMNS if c != "確認入帳"],
-        key="actual_dividend_editor",
     )
-    if st.button("💾 儲存確認入帳", key="save_actual_dividend_confirm"):
+
+    def _option_label(idx: int, row: pd.Series) -> str:
+        return (
+            f"{idx + 1}｜{normalize_text(row.get('平台', ''))}｜"
+            f"{normalize_text(row.get('基金名稱', ''))}｜{normalize_text(row.get('發放日期', ''))}｜"
+            f"{money(normalize_number(row.get('實際配息原幣', 0), 0), 2)} {normalize_text(row.get('幣別', ''))}"
+        )
+
+    pending_options: dict[str, int] = {}
+    confirmed_options: dict[str, int] = {}
+    for idx, row in df.iterrows():
+        label = _option_label(int(idx), row)
+        if normalize_bool(row.get("_確認前", row.get("確認入帳", False)), False):
+            confirmed_options[label] = int(idx)
+        else:
+            pending_options[label] = int(idx)
+
+    with st.form("actual_dividend_confirm_form"):
+        confirm_labels = st.multiselect("確認入帳", list(pending_options.keys()))
+        cancel_labels = st.multiselect("取消確認", list(confirmed_options.keys()))
+        submitted = st.form_submit_button("💾 套用確認狀態")
+        recompute_submitted = st.form_submit_button("重算已確認累計")
+
+    if submitted or recompute_submitted:
+        changes = {pending_options[label]: True for label in confirm_labels}
+        changes.update({confirmed_options[label]: False for label in cancel_labels})
+        if not changes and not recompute_submitted:
+            st.info("沒有選擇需要更新的記錄。")
+            return
         sb = supabase_client()
         updated = 0
-        for idx, row in edited.iterrows():
+        affected_groups: dict[tuple[str, str, str], str] = {}
+        warnings: list[str] = []
+        existing_keys = _existing_dividend_record_keys(_combined_dividend_records())
+        for idx, new_confirmed in changes.items():
+            row = display_df.iloc[idx]
             old_confirmed = normalize_bool(df.iloc[idx].get("_確認前", False), False)
-            new_confirmed = normalize_bool(row.get("確認入帳", False), False)
             if old_confirmed == new_confirmed:
                 continue
             row_id = df.iloc[idx].get("_id")
             source_table = normalize_text(df.iloc[idx].get("_source_table", "fund_dividends"), "fund_dividends")
+            fund_code = normalize_text(df.iloc[idx].get("_fund_code", ""))
+            platform = normalize_text(df.iloc[idx].get("_platform", row.get("平台", "")))
+            currency = normalize_text(df.iloc[idx].get("_currency", row.get("幣別", "")))
+            pay_date = normalize_text(df.iloc[idx].get("_pay_date", row.get("發放日期", "")))
+            ex_date = normalize_text(df.iloc[idx].get("_ex_date", ""))
             units = normalize_number(row.get("配息單位數", 0), 0)
             div_amount = normalize_number(row.get("每單位配息", 0), 0)
             total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
@@ -4771,13 +4936,13 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             if source_table == "dividend_log_candidate":
                 if not new_confirmed:
                     continue
-                supabase_client().table("dividend_log").insert({
-                    "fund_code": normalize_text(df.iloc[idx].get("_fund_code", "")),
+                insert_payload = {
+                    "fund_code": fund_code,
                     "fund_name": normalize_text(df.iloc[idx].get("_fund_name", row.get("基金名稱", ""))),
-                    "platform": normalize_text(df.iloc[idx].get("_platform", row.get("平台", ""))),
-                    "currency": normalize_text(df.iloc[idx].get("_currency", row.get("幣別", ""))),
-                    "ex_date": normalize_text(df.iloc[idx].get("_ex_date", "")),
-                    "pay_date": normalize_text(df.iloc[idx].get("_pay_date", row.get("發放日期", ""))),
+                    "platform": platform,
+                    "currency": currency,
+                    "ex_date": ex_date,
+                    "pay_date": pay_date,
                     "div_amount": div_amount,
                     "actual_div_amount": actual_div,
                     "units_at_ex": units,
@@ -4785,24 +4950,35 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                     "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
                     "is_paid": True,
                     "note": f"持倉候選確認入帳 {tw_now().strftime('%Y/%m/%d')}",
-                }).execute()
+                }
+                insert_key = _dividend_record_key(insert_payload)
+                if insert_key not in existing_keys:
+                    sb.table("dividend_log").insert(insert_payload).execute()
+                    existing_keys.add(insert_key)
             else:
                 if row_id is None or normalize_text(row_id, "") in {"", "nan", "None"}:
+                    warnings.append(f"{row.get('基金名稱', '')} 缺少記錄 ID，略過。")
                     continue
                 if source_table == "fund_dividends":
                     payload["updated_at"] = "now()"
                 sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
-            if total_amount > 0:
-                delta_original = total_amount if new_confirmed else -total_amount
-                update_position_dividend_original_total(
-                    normalize_text(df.iloc[idx].get("_fund_code", "")),
-                    normalize_text(df.iloc[idx].get("_platform", "")),
-                    normalize_text(df.iloc[idx].get("_currency", "")),
-                    delta_original,
-                )
+            affected_groups[(fund_code, platform, currency)] = pay_date or ex_date
             updated += 1
-        if updated:
-            st.success(f"已更新 {updated} 筆確認狀態。")
+        if recompute_submitted:
+            for _, row in df[df["確認入帳"].apply(lambda v: normalize_bool(v, False))].iterrows():
+                affected_groups[(
+                    normalize_text(row.get("_fund_code", "")),
+                    normalize_text(row.get("_platform", row.get("平台", ""))),
+                    normalize_text(row.get("_currency", row.get("幣別", ""))),
+                )] = normalize_text(row.get("_pay_date", row.get("發放日期", ""))) or normalize_text(row.get("_ex_date", ""))
+        for (fund_code, platform, currency), pay_date in affected_groups.items():
+            if not recompute_position_dividend_original_total(fund_code, platform, currency, pay_date):
+                warnings.append(f"{fund_code} 累計配息重算失敗，請確認持倉主列。")
+        if warnings:
+            st.warning("\n".join(warnings))
+        if updated or recompute_submitted:
+            msg = f"已更新 {updated} 筆確認狀態。" if updated else "已重算已確認配息累計。"
+            st.success(msg)
             st.cache_data.clear()
             st.rerun()
         else:
@@ -4839,7 +5015,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("累計配息原幣 / 台幣是持倉目前累計。未確認時顯示目前累計；勾選確認入帳後，會把本月配息加入同基金第一筆主列，重算後顯示新的累計。")
+    st.caption("累計配息原幣 / 台幣是持倉目前累計；確認狀態送出後會依已確認記錄去重重算。")
     render_actual_dividend_table(actual_df)
     render_position_dividend_total_fix_tool()
 
@@ -4889,12 +5065,12 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
                             "note": m_note or "手動新增",
                         }
                         supabase_client().table("dividend_log").insert(payload).execute()
-                        if m_is_paid and m_total > 0:
-                            update_position_dividend_original_total(
+                        if m_is_paid:
+                            recompute_position_dividend_original_total(
                                 m_fund_code,
                                 m_platform,
                                 m_currency,
-                                m_total,
+                                m_pay_date or m_ex_date,
                             )
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
