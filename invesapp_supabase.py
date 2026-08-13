@@ -415,6 +415,7 @@ def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "original_units": 0.0, "units": 0.0, "corporate_action": "",
         "avg_cost": 0.0, "total_cost_input": 0.0, "monthly_dividend_per_unit": 0.0,
         "purchase_ym": "", "dividend_received_original_total": 0.0,
+        "dividend_received_original_base": 0.0,
         "dividend_received_total": 0.0, "dividend_note": "", "note": "",
         "is_reinvest": False,
     }
@@ -3912,7 +3913,7 @@ def set_position_dividend_original_total_by_fund(
         return False
     try:
         rows = supabase_client().table("positions").select(
-            "id,sort_order,fund_code,platform,currency"
+            "id,sort_order,fund_code,platform,currency,dividend_received_original_base"
         ).eq("platform", platform_key).eq("currency", currency_key).execute().data or []
     except Exception:
         rows = []
@@ -3930,12 +3931,13 @@ def set_position_dividend_original_total_by_fund(
         ),
     )
     primary_id = int(float(matched[0]["id"]))
+    historical_base = normalize_number(matched[0].get("dividend_received_original_base", 0), 0)
     sb = supabase_client()
     target = max(0, normalize_number(target_original_total, 0))
     for row in matched:
         rid = int(float(row["id"]))
         payload = {
-            "dividend_received_original_total": target if rid == primary_id else 0,
+            "dividend_received_original_total": (historical_base + target) if rid == primary_id else 0,
             "dividend_received_total": 0,
         }
         if rid == primary_id and dividend_pay_date:
@@ -4017,11 +4019,26 @@ def set_position_dividend_original_total(position_id: int, target_original_total
     matched = matched.sort_values(["_sort_num", "_id_num"])
     primary_id = int(float(matched.iloc[0]["id"]))
 
+    paid_by_key: dict[tuple[str, str, str, str], float] = {}
+    for record in _combined_dividend_records():
+        if normalize_text(record.get("fund_code", "")).lower() != target_fund_code:
+            continue
+        if normalize_text(record.get("platform", "")) != target_platform:
+            continue
+        if normalize_text(record.get("currency", "")).upper() != target_currency:
+            continue
+        amount = _paid_dividend_original_amount(record)
+        if amount > 0:
+            key = _dividend_record_key(record)
+            paid_by_key[key] = max(amount, paid_by_key.get(key, 0))
+    historical_base = max(0, target_original_total - sum(paid_by_key.values()))
+
     sb = supabase_client()
     for _, row in matched.iterrows():
         rid = int(float(row["id"]))
         sb.table("positions").update({
             "dividend_received_original_total": target_original_total if rid == primary_id else 0,
+            "dividend_received_original_base": historical_base if rid == primary_id else 0,
             "dividend_received_total": 0,
         }).eq("id", rid).execute()
 
@@ -5037,7 +5054,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame | None = None) -> None:
     render_estimated_dividend_table(estimate_df)
 
     st.markdown("#### 配息記錄表")
-    st.caption("累計配息原幣 / 台幣是持倉目前累計；確認狀態送出後會依已確認記錄去重重算。")
+    st.caption("累計配息原幣 / 台幣＝歷史累計基準＋已確認記錄（去重）；重算不會再清掉先前配息。")
     render_actual_dividend_table(actual_df)
     render_position_dividend_total_fix_tool()
 
@@ -6411,6 +6428,7 @@ with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
     st.code("""
 alter table positions add column if not exists purchase_ym text default '';
 alter table positions add column if not exists dividend_received_original_total numeric default 0;
+alter table positions add column if not exists dividend_received_original_base numeric default 0;
 alter table positions add column if not exists dividend_received_total numeric default 0;
 alter table positions add column if not exists dividend_note text default '';
 alter table positions add column if not exists dividend_pay_date text default '';
