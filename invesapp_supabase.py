@@ -4184,9 +4184,19 @@ def _parse_stock_api_date(value: Any) -> str:
 
 def _stock_year_from_record(row: pd.Series | dict[str, Any]) -> int | None:
     for col in ["cash_pay_date", "ex_date", "現金發放日", "除權息日"]:
-        parsed = _parse_dividend_date(row.get(col, ""))
+        normalized = _parse_stock_api_date(row.get(col, ""))
+        parsed = _parse_dividend_date(normalized)
         if parsed is not None:
             return parsed.year
+    # 自動掃描的候選可能沒有除息日；確認入帳後以記錄建立年度認列。
+    created_at = normalize_text(row.get("created_at", ""))
+    if created_at:
+        try:
+            parsed_created = pd.to_datetime(created_at, errors="coerce")
+            if not pd.isna(parsed_created):
+                return int(parsed_created.year)
+        except Exception:
+            pass
     return None
 
 
