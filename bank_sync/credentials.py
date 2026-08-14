@@ -31,5 +31,5 @@ def has_secret(account_key: str, field: str) -> bool:
     try:
         load_secret(account_key, field)
         return True
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return False

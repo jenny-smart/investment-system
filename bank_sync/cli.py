@@ -45,11 +45,11 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list")
     setup = sub.add_parser("setup"); setup.add_argument("account")
-    launch = sub.add_parser("open"); launch.add_argument("account")
+    launch = sub.add_parser("open"); launch.add_argument("account"); launch.add_argument("--no-prompt", action="store_true")
     imp = sub.add_parser("import-csv"); imp.add_argument("account"); imp.add_argument("input", type=Path); imp.add_argument("--currency", default="TWD"); imp.add_argument("--output", type=Path, default=Path("bank_sync_output/transactions.csv")); imp.add_argument("--db", type=Path, default=DEFAULT_DB)
     args = parser.parse_args()
     if args.command == "list": _list()
     elif args.command == "setup": _setup(args.account)
-    elif args.command == "open": open_and_prefill(get_account(args.account))
+    elif args.command == "open": open_and_prefill(get_account(args.account), interactive=not args.no_prompt)
     else: _import(args)
     return 0

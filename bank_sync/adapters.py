@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Iterable
 
 from .catalog import BankAccountSpec
@@ -50,7 +51,7 @@ def _fill_by_hint(page, hints: tuple[str, ...], value: str) -> bool:
     return False
 
 
-def open_and_prefill(account: BankAccountSpec, profile_dir: Path | None = None) -> None:
+def open_and_prefill(account: BankAccountSpec, profile_dir: Path | None = None, interactive: bool = True) -> None:
     if account.channel != "web":
         raise ValueError(f"{account.bank} 目前只支援 App 匯出後匯入")
     bank = BANKS[account.bank]
@@ -74,5 +75,10 @@ def open_and_prefill(account: BankAccountSpec, profile_dir: Path | None = None) 
             print("渣打：先點登入，再點網路銀行；若已到登入頁可直接填寫。")
         print("請手動輸入驗證碼並登入。" if bank.captcha else "帳密已預填，請確認後登入。")
         print("登入後路徑：" + " → ".join(bank.after_login))
-        input("完成查詢或下載後，回到終端機按 Enter 關閉銀行視窗…")
+        if interactive:
+            input("完成查詢或下載後，回到終端機按 Enter 關閉銀行視窗…")
+        else:
+            print("關閉銀行視窗後，本次測試會自動結束。")
+            while context.pages:
+                time.sleep(1)
         context.close()
