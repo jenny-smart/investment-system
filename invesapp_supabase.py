@@ -4,6 +4,9 @@ import os
 import io
 import re
 import html as html_lib
+import subprocess
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -6594,7 +6597,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6731,3 +6734,51 @@ with tabs[11]:
 
 with tabs[12]:
     render_cashflow_tab()
+
+with tabs[13]:
+    st.subheader("🏦 銀行明細（本機測試）")
+    st.caption("帳密只存 macOS Keychain；圖片驗證碼需本人輸入。請勿在 Streamlit Cloud 設定帳密。")
+    try:
+        from bank_sync.adapters import BANKS
+        from bank_sync.catalog import BANK_ACCOUNTS, get_account
+        from bank_sync.credentials import has_secret, save_secret
+
+        labels = {
+            item.key: f"{item.bank}｜{item.owner}｜{','.join(item.currencies)}"
+            for item in BANK_ACCOUNTS
+        }
+        selected_key = st.selectbox("選擇帳戶", list(labels), format_func=labels.get, key="bank_sync_account")
+        selected = get_account(selected_key)
+        st.write(f"分行：{'、'.join(selected.branches) or '—'}")
+        fields = BANKS[selected.bank].credential_fields
+        ready = all(has_secret(selected.login_key, field) for field in fields)
+        st.success("Keychain 帳密已設定") if ready else st.warning("尚未完成 Keychain 帳密設定")
+
+        field_labels = {"id_number": "身分證字號", "user_code": "使用者代號", "password": "密碼"}
+        with st.form("bank_sync_secret_form", clear_on_submit=True):
+            values = {field: st.text_input(field_labels[field], type="password") for field in fields}
+            if st.form_submit_button("安全存入 Keychain"):
+                if not all(values.values()):
+                    st.error("請完整填寫帳密")
+                else:
+                    try:
+                        for field, value in values.items():
+                            save_secret(selected.login_key, field, value)
+                        st.success("已存入 Keychain，不會寫入專案或 Supabase。")
+                    except Exception as exc:
+                        st.error(f"Keychain 寫入失敗：{exc}")
+
+        command = f"{sys.executable} -m bank_sync open {selected.key}"
+        st.code(command, language="bash")
+        if st.button("開啟銀行登入測試", disabled=not ready, key="bank_sync_launch"):
+            try:
+                subprocess.Popen(
+                    [sys.executable, "-m", "bank_sync", "open", selected.key, "--no-prompt"],
+                    cwd=str(Path(__file__).resolve().parent),
+                    start_new_session=True,
+                )
+                st.success("已啟動銀行專用瀏覽器；請切換視窗輸入驗證碼。")
+            except Exception as exc:
+                st.error(f"無法啟動：{exc}")
+    except Exception as exc:
+        st.error(f"銀行工具載入失敗：{exc}")
