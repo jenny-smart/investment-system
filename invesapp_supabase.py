@@ -1400,7 +1400,8 @@ def render_bank_fund_query_tab() -> None:
         txn_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["bank_transactions"])
         fund_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["fund_positions"])
     except Exception as exc:
-        st.error(f"讀取試算表失敗：{exc}")
+        st.error(f"讀取試算表失敗（{type(exc).__name__}）")
+        st.exception(exc)
         st.caption("請確認 Streamlit Secrets 的 [gcp_service_account] 已設定，且該服務帳戶已被加為試算表的檢視者。")
         return
 
