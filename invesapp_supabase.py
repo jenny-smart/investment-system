@@ -6566,9 +6566,9 @@ try:
             "total_cost":          _live_snap["total_cost"],
             "cumulative_dividend": _live_snap["cumulative_dividend"],
             "updated_at":          tw_now().isoformat(),
-        }).execute()
-except Exception:
-    pass
+        }, on_conflict="id").execute()
+except Exception as _e:
+    st.warning(f"⚠️ latest_portfolio_values 更新失敗：{_e}")
 
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
