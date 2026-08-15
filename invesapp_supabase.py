@@ -6879,7 +6879,10 @@ with tabs[13]:
         st.write(f"分行：{'、'.join(selected.branches) or '—'}")
         fields = BANKS[selected.bank].credential_fields
         ready = all(has_secret(selected.login_key, field) for field in fields)
-        st.success("Keychain 帳密已設定") if ready else st.warning("尚未完成 Keychain 帳密設定")
+        if ready:
+            st.success("Keychain 帳密已設定")
+        else:
+            st.warning("尚未完成 Keychain 帳密設定")
 
         field_labels = {"id_number": "身分證字號", "user_code": "使用者代號", "password": "密碼"}
         with st.form("bank_sync_secret_form", clear_on_submit=True):
