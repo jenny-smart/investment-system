@@ -6552,6 +6552,24 @@ except Exception as e:
 
 enriched = enrich(positions)
 
+try:
+    _live_snap = _take_snapshot_now("auto")
+    if _live_snap:
+        supabase_client().table("latest_portfolio_values").upsert({
+            "id":                  1,
+            "total_twd":           _live_snap["total_twd"],
+            "tw_stock":            _live_snap["tw_stock"],
+            "us_stock":            _live_snap["us_stock"],
+            "kifutong":            _live_snap["kifutong"],
+            "scb":                 _live_snap["scb"],
+            "taishin":             _live_snap["taishin"],
+            "total_cost":          _live_snap["total_cost"],
+            "cumulative_dividend": _live_snap["cumulative_dividend"],
+            "updated_at":          tw_now().isoformat(),
+        }).execute()
+except Exception:
+    pass
+
 total_value = enriched["台幣市值"].dropna().sum() if not enriched.empty and "台幣市值" in enriched else 0
 total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and "台幣成本" in enriched else 0
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
