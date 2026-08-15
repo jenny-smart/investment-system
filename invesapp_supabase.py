@@ -27,6 +27,13 @@ try:
 except Exception:
     HAS_BS4 = False
 
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials as GoogleCredentials
+    HAS_GSPREAD = True
+except Exception:
+    HAS_GSPREAD = False
+
 
 APP_VERSION = "2026-06-11-v53-dividend-twd-from-original-fx"
 
@@ -40,6 +47,13 @@ ONLINE_SHEET_SOURCES = {
 }
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
+
+BANK_FUND_TRACKING_SHEET_ID = "1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw"
+BANK_FUND_WORKSHEETS = {
+    "accounts": "銀行帳戶",
+    "bank_transactions": "銀行明細",
+    "fund_positions": "基金明細",
+}
 
 PLATFORMS = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
 ASSET_TYPES = ["台股", "美股", "基金"]
@@ -1355,6 +1369,101 @@ def load_online_sheet_csv(gid: str) -> pd.DataFrame:
     if empty_cols:
         df = df.drop(columns=empty_cols)
     return df
+
+
+@st.cache_resource(show_spinner=False)
+def get_bank_fund_sheet_client():
+    if not HAS_GSPREAD:
+        raise RuntimeError("缺少 gspread / google-auth 套件，請確認 requirements.txt 已安裝。")
+    if "gcp_service_account" not in st.secrets:
+        raise RuntimeError("尚未在 Streamlit Secrets 設定 [gcp_service_account]。")
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    creds = GoogleCredentials.from_service_account_info(dict(st.secrets["gcp_service_account"]), scopes=scopes)
+    return gspread.authorize(creds)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_bank_fund_worksheet(worksheet_name: str) -> pd.DataFrame:
+    client = get_bank_fund_sheet_client()
+    ws = client.open_by_key(BANK_FUND_TRACKING_SHEET_ID).worksheet(worksheet_name)
+    records = ws.get_all_records()
+    return pd.DataFrame(records)
+
+
+def render_bank_fund_query_tab() -> None:
+    st.subheader("🔍 銀行 / 基金明細查詢")
+    try:
+        accounts_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["accounts"])
+        txn_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["bank_transactions"])
+        fund_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["fund_positions"])
+    except Exception as exc:
+        st.error(f"讀取試算表失敗：{exc}")
+        st.caption("請確認 Streamlit Secrets 的 [gcp_service_account] 已設定，且該服務帳戶已被加為試算表的檢視者。")
+        return
+
+    if st.button("🔄 重新整理明細", key="refresh_bank_fund_query"):
+        load_bank_fund_worksheet.clear()
+        st.rerun()
+
+    st.markdown("### 🏦 銀行明細")
+    if txn_df.empty or "銀行" not in txn_df.columns:
+        st.info("目前「銀行明細」分頁尚無資料。")
+    else:
+        banks = sorted(b for b in txn_df["銀行"].dropna().unique() if str(b).strip())
+        bank_choice = st.selectbox("選擇銀行", banks, key="bank_query_bank_choice")
+        bank_view = txn_df[txn_df["銀行"] == bank_choice].copy()
+
+        col1, col2, col3 = st.columns(3)
+        branch_options = ["全部"] + sorted(b for b in bank_view.get("分行", pd.Series(dtype=str)).dropna().unique() if str(b).strip())
+        branch_choice = col1.selectbox("分行", branch_options, key=f"branch_choice_{bank_choice}")
+        currency_options = ["全部"] + sorted(c for c in bank_view.get("幣別", pd.Series(dtype=str)).dropna().unique() if str(c).strip())
+        currency_choice = col2.selectbox("幣別", currency_options, key=f"currency_choice_{bank_choice}")
+        owner_options = ["全部"] + sorted(o for o in bank_view.get("本人/媽媽", pd.Series(dtype=str)).dropna().unique() if str(o).strip())
+        owner_choice = col3.selectbox("本人/媽媽", owner_options, key=f"owner_choice_{bank_choice}")
+
+        if branch_choice != "全部":
+            bank_view = bank_view[bank_view["分行"] == branch_choice]
+        if currency_choice != "全部":
+            bank_view = bank_view[bank_view["幣別"] == currency_choice]
+        if owner_choice != "全部":
+            bank_view = bank_view[bank_view["本人/媽媽"] == owner_choice]
+
+        keyword = st.text_input("關鍵字搜尋（摘要／明細描述／交易對象）", key=f"keyword_{bank_choice}")
+        if keyword:
+            search_cols = [c for c in ("摘要", "明細描述", "交易對象") if c in bank_view.columns]
+            if search_cols:
+                mask = pd.concat(
+                    [bank_view[c].astype(str).str.contains(keyword, case=False, na=False) for c in search_cols],
+                    axis=1,
+                ).any(axis=1)
+                bank_view = bank_view[mask]
+
+        if "交易時間" in bank_view.columns:
+            bank_view = bank_view.sort_values("交易時間", ascending=False)
+        st.caption(f"共 {len(bank_view)} 筆")
+        st.dataframe(bank_view, use_container_width=True, hide_index=True, height=420)
+
+        if not accounts_df.empty and "銀行" in accounts_df.columns:
+            acc_view = accounts_df[accounts_df["銀行"] == bank_choice]
+            if not acc_view.empty:
+                st.caption("帳戶資料（來自「銀行帳戶」分頁）")
+                st.dataframe(acc_view, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("### 💰 基金明細")
+    if fund_df.empty or "平台" not in fund_df.columns:
+        st.info("目前「基金明細」分頁尚無資料。")
+    else:
+        platforms = sorted(p for p in fund_df["平台"].dropna().unique() if str(p).strip())
+        platform_choice = st.selectbox("選擇基金平台", platforms, key="fund_query_platform_choice")
+        fund_view = fund_df[fund_df["平台"] == platform_choice].copy()
+        if "資料日期" in fund_view.columns:
+            fund_view = fund_view.sort_values("資料日期", ascending=False)
+        st.caption(f"共 {len(fund_view)} 筆")
+        st.dataframe(fund_view, use_container_width=True, hide_index=True, height=420)
 
 
 def month_columns(df: pd.DataFrame) -> list[str]:
@@ -6615,7 +6724,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6800,3 +6909,6 @@ with tabs[13]:
                 st.error(f"無法啟動：{exc}")
     except Exception as exc:
         st.error(f"銀行工具載入失敗：{exc}")
+
+with tabs[14]:
+    render_bank_fund_query_tab()
