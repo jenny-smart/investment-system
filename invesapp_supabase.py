@@ -1400,7 +1400,8 @@ def render_bank_fund_query_tab() -> None:
         txn_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["bank_transactions"])
         fund_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["fund_positions"])
     except Exception as exc:
-        st.error(f"讀取試算表失敗：{exc}")
+        st.error(f"讀取試算表失敗（{type(exc).__name__}）")
+        st.exception(exc)
         st.caption("請確認 Streamlit Secrets 的 [gcp_service_account] 已設定，且該服務帳戶已被加為試算表的檢視者。")
         return
 
@@ -6879,7 +6880,10 @@ with tabs[13]:
         st.write(f"分行：{'、'.join(selected.branches) or '—'}")
         fields = BANKS[selected.bank].credential_fields
         ready = all(has_secret(selected.login_key, field) for field in fields)
-        st.success("Keychain 帳密已設定") if ready else st.warning("尚未完成 Keychain 帳密設定")
+        if ready:
+            st.success("Keychain 帳密已設定")
+        else:
+            st.warning("尚未完成 Keychain 帳密設定")
 
         field_labels = {"id_number": "身分證字號", "user_code": "使用者代號", "password": "密碼"}
         with st.form("bank_sync_secret_form", clear_on_submit=True):
