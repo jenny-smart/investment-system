@@ -23,7 +23,16 @@ def sb():
 def calc_portfolio() -> dict:
     """從 latest_portfolio_values 讀取 Streamlit 已算好的市值"""
     client = sb()
-    rows = client.table("latest_portfolio_values").select("*").eq("id", 1).execute().data or []
+    rows = (
+        client.table("latest_portfolio_values")
+        .select("*")
+        .eq("id", 1)
+        .order("updated_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
 
     if not rows:
         print("⚠️ latest_portfolio_values 沒有資料，請先在 Streamlit 頁面載入一次")
