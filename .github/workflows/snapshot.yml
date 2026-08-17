@@ -28,7 +28,12 @@ jobs:
           python-version: "3.11"
 
       - name: Install packages
-        run: pip install supabase
-        
+        run: |
+          pip install supabase playwright
+          playwright install --with-deps chromium
+
+      - name: Wake up Streamlit app（強制重新計算，避免抓到舊資料）
+        run: python wake_app.py
+
       - name: Run snapshot
         run: python record_snapshot.py
