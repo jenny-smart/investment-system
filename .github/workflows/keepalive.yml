@@ -1,0 +1,30 @@
+name: Keep App Warm
+
+on:
+  schedule:
+    # 每 30 分鐘喚醒一次，避免 Streamlit Cloud 休眠冷啟動、也讓價格快取保持新鮮
+    - cron: "*/30 * * * *"
+  workflow_dispatch:   # 手動觸發
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packages
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Wake up Streamlit app
+        run: python wake_app.py
