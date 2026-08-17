@@ -2,8 +2,9 @@ name: Keep App Warm
 
 on:
   schedule:
-    # 每 10 分鐘喚醒一次，避免 Streamlit Cloud 休眠冷啟動、也讓價格快取保持新鮮
-    - cron: "*/10 * * * *"
+    # 每 30 分鐘喚醒一次，避免 Streamlit Cloud 休眠冷啟動、也讓價格快取保持新鮮
+    # 只喚醒，不寫入歷史市值（記錄快照仍是 snapshot.yml 一天兩次）
+    - cron: "*/30 * * * *"
   workflow_dispatch:   # 手動觸發
 
 permissions:
