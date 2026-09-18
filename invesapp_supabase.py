@@ -6725,7 +6725,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢", "🤖 AI交易研究"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6916,3 +6916,7 @@ with tabs[13]:
 
 with tabs[14]:
     render_bank_fund_query_tab()
+
+with tabs[15]:
+    from ai_trading_dashboard import render_ai_trading_dashboard
+    render_ai_trading_dashboard(enriched)
