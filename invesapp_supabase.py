@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v58-target-upside-value"
+APP_VERSION = "2026-09-25-v59-two-decimals"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6891,7 +6891,13 @@ with tabs[6]:
                     "含息總損益率": total_pnl / cost if cost > 0 else None,
                 })
             tw_holdings_grouped = pd.DataFrame(grouped_rows)
-            st.dataframe(tw_holdings_grouped, use_container_width=True, hide_index=True)
+            grouped_numeric_cols = [x for x in tw_holdings_grouped.columns if x not in ["name", "ticker"]]
+            st.dataframe(
+                tw_holdings_grouped,
+                use_container_width=True,
+                hide_index=True,
+                column_config={x: st.column_config.NumberColumn(x, format="%.2f") for x in grouped_numeric_cols},
+            )
             st.markdown("#### 今日持股分析")
             holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings_grouped.iterrows() if normalize_ticker(r.get("ticker", "")))
             holding_analysis = _batch_stock_analysis(holding_items)
@@ -6911,8 +6917,12 @@ with tabs[6]:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "持股數": st.column_config.NumberColumn("持股數", format="%.4f"),
-                        "目標價潛在價差": st.column_config.NumberColumn("(目標價－目前股價) × 持股數", format="%.0f"),
+                        x: st.column_config.NumberColumn(
+                            "(目標價－目前股價) × 持股數" if x == "目標價潛在價差" else x,
+                            format="%.2f",
+                        )
+                        for x in holding_analysis.columns
+                        if x not in ["股票", "代號", "分析註記", "分析原因"]
                     },
                 )
                 st.caption("技術目標價為近期支撐、壓力與價格區間的觀察位，不是券商目標價。")
