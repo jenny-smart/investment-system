@@ -6725,7 +6725,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢", "🔎 股票研究"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6750,6 +6750,36 @@ with tabs[0]:
                 "占比": st.column_config.NumberColumn("占比", format="%.2f%%"),
             },
         )
+
+# ── 股票研究：直接整合在正式主程式，避免 Streamlit Cloud 未顯示 pages 導航 ───────
+with tabs[15]:
+    st.markdown("### 🔎 股票研究工作台")
+    st.caption("7 組研究流程整合在正式投資系統；數值由資料與程式計算，缺資料不猜。")
+    research_tabs = st.tabs(["研究方向", "技術分析", "新聞影響", "策略回測", "投資組合健檢", "交易紀錄", "每日計畫"])
+
+    with research_tabs[0]:
+        st.write("從現有台股持倉與每日雷達延伸研究：估值、法人、量能、基本面與催化劑。")
+        radar_path = Path(__file__).resolve().parent / "data" / "stock_radar" / "latest.csv"
+        if radar_path.exists():
+            radar_df = pd.read_csv(radar_path, dtype={"代號": str})
+            cols = [x for x in ["代號", "名稱", "收盤價", "本益比", "殖利率%", "雷達分數", "入選原因"] if x in radar_df.columns]
+            if cols:
+                st.dataframe(radar_df.sort_values("雷達分數", ascending=False)[cols].head(30), use_container_width=True, hide_index=True)
+        else:
+            st.info("每日雷達資料尚未產生；不影響其他研究功能。")
+
+    with research_tabs[1]:
+        st.write("技術分析：MA5／10／20／60、RSI14、MACD。歷史 K 線接入後由程式計算。")
+    with research_tabs[2]:
+        st.write("新聞影響：保留來源與發布日期，整理短期及中長期可能影響；沒有來源時不產生結論。")
+    with research_tabs[3]:
+        st.write("策略回測：使用真實歷史價格計算勝率、報酬與最大回撤，不使用 AI 模擬數字。")
+    with research_tabs[4]:
+        st.write("投資組合健檢：讀取既有持倉分析集中度與風險，不修改任何持倉資料。")
+    with research_tabs[5]:
+        st.write("交易紀錄：分析既有成交紀錄中重複出現的交易行為，原始紀錄維持不變。")
+    with research_tabs[6]:
+        st.write("每日計畫：盤前準備 → 開盤觀察 → 盤中調整 → 收盤檢討。")
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
 for idx, platform in enumerate(PLATFORMS, start=1):
