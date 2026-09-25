@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v56-daily-stock-analysis"
+APP_VERSION = "2026-09-25-v57-holdings-by-stock"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6865,11 +6865,35 @@ with tabs[6]:
         if tw_holdings.empty:
             st.info("目前沒有台股持倉資料。")
         else:
-            st.markdown("#### ① 先看全部持股")
-            own_cols = [x for x in ["name", "ticker", "avg_cost", "即時價格/淨值", "台幣市值", "價差損益", "價差損益率", "含息總損益", "含息總損益率"] if x in tw_holdings.columns]
-            st.dataframe(tw_holdings[own_cols], use_container_width=True, hide_index=True)
+            st.markdown("#### ① 先看全部持股（依股票加總）")
+            grouped_rows = []
+            for ticker, group in tw_holdings.groupby("ticker", dropna=False):
+                units = pd.to_numeric(group.get("units", 0), errors="coerce").fillna(0).sum()
+                cost = pd.to_numeric(group.get("台幣成本", 0), errors="coerce").fillna(0).sum()
+                value = pd.to_numeric(group.get("台幣市值", 0), errors="coerce").fillna(0).sum()
+                dividend = pd.to_numeric(group.get("累計已領配息", 0), errors="coerce").fillna(0).sum()
+                price = pd.to_numeric(group.get("即時價格/淨值", 0), errors="coerce").dropna()
+                avg_cost = cost / units if units > 0 else 0
+                pnl = value - cost
+                total_pnl = pnl + dividend
+                grouped_rows.append({
+                    "name": group["name"].dropna().iloc[0] if "name" in group and not group["name"].dropna().empty else "",
+                    "ticker": ticker,
+                    "units": units,
+                    "avg_cost": avg_cost,
+                    "即時價格/淨值": float(price.iloc[0]) if not price.empty else None,
+                    "台幣成本": cost,
+                    "台幣市值": value,
+                    "價差損益": pnl,
+                    "價差損益率": pnl / cost if cost > 0 else None,
+                    "累計已領配息": dividend,
+                    "含息總損益": total_pnl,
+                    "含息總損益率": total_pnl / cost if cost > 0 else None,
+                })
+            tw_holdings_grouped = pd.DataFrame(grouped_rows)
+            st.dataframe(tw_holdings_grouped, use_container_width=True, hide_index=True)
             st.markdown("#### 今日持股分析")
-            holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings.iterrows() if normalize_ticker(r.get("ticker", "")))
+            holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings_grouped.iterrows() if normalize_ticker(r.get("ticker", "")))
             holding_analysis = _batch_stock_analysis(holding_items)
             if not holding_analysis.empty:
                 st.dataframe(holding_analysis, use_container_width=True, hide_index=True)
@@ -6879,10 +6903,10 @@ with tabs[6]:
                     st.markdown("#### 📍 今日持股注意清單")
                     st.dataframe(focus[["股票", "代號", "分析註記", "分析原因", "最新價", "技術目標價"]], use_container_width=True, hide_index=True)
             st.markdown("#### ② 選一檔做技術分析")
-            labels = tw_holdings.apply(lambda r: f"{r.get('name','')}｜{r.get('ticker','')}", axis=1).tolist()
+            labels = tw_holdings_grouped.apply(lambda r: f"{r.get('name','')}｜{r.get('ticker','')}", axis=1).tolist()
             selected_label = st.selectbox("選擇持股", labels, key="research_owned_stock")
             if selected_label:
-                row = tw_holdings.iloc[labels.index(selected_label)]
+                row = tw_holdings_grouped.iloc[labels.index(selected_label)]
                 ticker = normalize_ticker(row.get("ticker", ""))
                 if st.button("分析這檔持股", key="analyze_owned_stock", type="primary"):
                     snap = _technical_snapshot(ticker)
