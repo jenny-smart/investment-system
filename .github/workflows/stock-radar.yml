@@ -2,6 +2,12 @@ name: Taiwan Stock Daily Radar
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/stock-radar.yml"
+      - "stock_radar/**"
+      - "pages/5_台股每日雷達.py"
   schedule:
     - cron: "30 6 * * 1-5"
 
@@ -22,7 +28,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install pandas requests
+        run: pip install pandas requests pytest
+      - name: Run radar tests
+        run: python -m pytest -q stock_radar/test_pipeline.py
       - name: Build daily radar
         run: python -m stock_radar.pipeline
       - name: Commit generated data
