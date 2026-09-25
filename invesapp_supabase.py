@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v54-stock-research"
+APP_VERSION = "2026-09-25-v55-research-feature-area"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6725,11 +6725,7 @@ with st.container():
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-st.markdown("### 🔎 股票研究")
-st.caption("新增的 7 組股票研究功能已整合完成；可直接開啟研究工作台。")
-st.page_link("pages/6_股票研究工作台.py", label="🔎 開啟股票研究工作台", use_container_width=True)
-
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢", "🔎 股票研究"])
+tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "🔎 股票研究", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6755,35 +6751,145 @@ with tabs[0]:
             },
         )
 
-# ── 股票研究：直接整合在正式主程式，避免 Streamlit Cloud 未顯示 pages 導航 ───────
-with tabs[15]:
-    st.markdown("### 🔎 股票研究工作台")
-    st.caption("7 組研究流程整合在正式投資系統；數值由資料與程式計算，缺資料不猜。")
-    research_tabs = st.tabs(["研究方向", "技術分析", "新聞影響", "策略回測", "投資組合健檢", "交易紀錄", "每日計畫"])
+# ── 股票研究：放在正式功能區，不使用左側 multipage 導航 ─────────────────
+with tabs[6]:
+    st.markdown("### 🔎 股票研究")
+    st.caption("直接分成「目前台股持股」與「熱門中短線候選」兩個入口。選股票後按分析即可。")
 
-    with research_tabs[0]:
-        st.write("從現有台股持倉與每日雷達延伸研究：估值、法人、量能、基本面與催化劑。")
+    own_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "🔥 熱門中短線候選"])
+
+    def _technical_snapshot(ticker: str) -> dict[str, Any]:
+        if not HAS_YF or not ticker:
+            return {}
+        try:
+            hist = yf.Ticker(ticker).history(period="6mo", interval="1d", auto_adjust=False)
+            if hist is None or hist.empty or "Close" not in hist:
+                return {}
+            close = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+            volume = pd.to_numeric(hist.get("Volume", pd.Series(index=hist.index, dtype=float)), errors="coerce")
+            if len(close) < 25:
+                return {}
+            ma5 = close.rolling(5).mean().iloc[-1]
+            ma20 = close.rolling(20).mean().iloc[-1]
+            ma60 = close.rolling(60).mean().iloc[-1] if len(close) >= 60 else None
+            delta = close.diff()
+            gain = delta.clip(lower=0).rolling(14).mean()
+            loss = (-delta.clip(upper=0)).rolling(14).mean().replace(0, pd.NA)
+            rsi = (100 - 100 / (1 + gain / loss)).iloc[-1]
+            ema12 = close.ewm(span=12, adjust=False).mean()
+            ema26 = close.ewm(span=26, adjust=False).mean()
+            macd = (ema12 - ema26).iloc[-1]
+            signal = (ema12 - ema26).ewm(span=9, adjust=False).mean().iloc[-1]
+            ret5 = (close.iloc[-1] / close.iloc[-6] - 1) * 100 if len(close) >= 6 else None
+            ret20 = (close.iloc[-1] / close.iloc[-21] - 1) * 100 if len(close) >= 21 else None
+            vol20 = volume.rolling(20).mean().iloc[-1] if len(volume.dropna()) >= 20 else None
+            vol_ratio = (volume.iloc[-1] / vol20) if vol20 and vol20 > 0 else None
+            support = close.tail(20).min()
+            resistance = close.tail(20).max()
+            trend = "偏多" if close.iloc[-1] > ma20 and ma5 > ma20 else ("偏空" if close.iloc[-1] < ma20 and ma5 < ma20 else "盤整")
+            return {
+                "close": float(close.iloc[-1]), "ma5": float(ma5), "ma20": float(ma20),
+                "ma60": float(ma60) if ma60 is not None and pd.notna(ma60) else None,
+                "rsi": float(rsi) if pd.notna(rsi) else None,
+                "macd": float(macd), "signal": float(signal),
+                "ret5": float(ret5) if ret5 is not None else None,
+                "ret20": float(ret20) if ret20 is not None else None,
+                "vol_ratio": float(vol_ratio) if vol_ratio is not None else None,
+                "support": float(support), "resistance": float(resistance), "trend": trend,
+            }
+        except Exception:
+            return {}
+
+    def _render_snapshot(s: dict[str, Any]) -> None:
+        if not s:
+            st.warning("目前無法取得足夠歷史行情，稍後再試。")
+            return
+        a, b, c1, d = st.columns(4)
+        a.metric("最新價", f"{s['close']:.2f}")
+        b.metric("技術趨勢", s["trend"])
+        c1.metric("近 5 日", f"{s['ret5']:+.1f}%" if s.get("ret5") is not None else "-")
+        d.metric("近 20 日", f"{s['ret20']:+.1f}%" if s.get("ret20") is not None else "-")
+        st.write(
+            f"MA5 **{s['ma5']:.2f}**｜MA20 **{s['ma20']:.2f}**"
+            + (f"｜MA60 **{s['ma60']:.2f}**" if s.get("ma60") is not None else "")
+            + (f"｜RSI14 **{s['rsi']:.1f}**" if s.get("rsi") is not None else "")
+            + f"｜20 日支撐約 **{s['support']:.2f}**｜壓力約 **{s['resistance']:.2f}**"
+        )
+        notes = []
+        if s["trend"] == "偏多":
+            notes.append("價格與短均線結構偏強")
+        elif s["trend"] == "偏空":
+            notes.append("價格與短均線結構偏弱")
+        else:
+            notes.append("均線仍在整理")
+        if s.get("rsi") is not None:
+            if s["rsi"] >= 70:
+                notes.append("RSI 偏高，追價風險增加")
+            elif s["rsi"] <= 30:
+                notes.append("RSI 偏低，留意是否只是弱勢反彈")
+        if s.get("vol_ratio") is not None and s["vol_ratio"] >= 1.5:
+            notes.append("今日量能明顯高於 20 日均量")
+        st.info("；".join(notes) + "。")
+
+    with own_tab:
+        tw_holdings = enriched[enriched["platform"] == "台股"].copy() if not enriched.empty else pd.DataFrame()
+        if tw_holdings.empty:
+            st.info("目前沒有台股持倉資料。")
+        else:
+            st.markdown("#### ① 先看全部持股")
+            own_cols = [x for x in ["name", "ticker", "avg_cost", "即時價格/淨值", "台幣市值", "價差損益", "價差損益率", "含息總損益", "含息總損益率"] if x in tw_holdings.columns]
+            st.dataframe(tw_holdings[own_cols], use_container_width=True, hide_index=True)
+            st.markdown("#### ② 選一檔做技術分析")
+            labels = tw_holdings.apply(lambda r: f"{r.get('name','')}｜{r.get('ticker','')}", axis=1).tolist()
+            selected_label = st.selectbox("選擇持股", labels, key="research_owned_stock")
+            if selected_label:
+                row = tw_holdings.iloc[labels.index(selected_label)]
+                ticker = normalize_ticker(row.get("ticker", ""))
+                if st.button("分析這檔持股", key="analyze_owned_stock", type="primary"):
+                    snap = _technical_snapshot(ticker)
+                    st.session_state["owned_research_snapshot"] = snap
+                    st.session_state["owned_research_name"] = row.get("name", ticker)
+                if st.session_state.get("owned_research_name") == row.get("name", ticker):
+                    _render_snapshot(st.session_state.get("owned_research_snapshot", {}))
+                    st.caption("搭配上方成本與現有損益一起看；這裡不會修改持股資料。")
+
+    with hot_tab:
+        st.markdown("#### ① 更新今日熱門候選")
+        st.write("以台股上市股票的估值、外資／投信、三大法人、成交量與當日價格方向先篩選，再查看技術面。")
+        if st.button("更新熱門候選", key="refresh_hot_radar", type="primary"):
+            try:
+                from stock_radar.pipeline import build_daily_radar
+                build_daily_radar()
+                st.success("今日熱門候選已更新。")
+            except Exception as e:
+                st.error(f"更新失敗：{e}")
+
         radar_path = Path(__file__).resolve().parent / "data" / "stock_radar" / "latest.csv"
         if radar_path.exists():
             radar_df = pd.read_csv(radar_path, dtype={"代號": str})
-            cols = [x for x in ["代號", "名稱", "收盤價", "本益比", "殖利率%", "雷達分數", "入選原因"] if x in radar_df.columns]
-            if cols:
-                st.dataframe(radar_df.sort_values("雷達分數", ascending=False)[cols].head(30), use_container_width=True, hide_index=True)
+            hot = radar_df[radar_df["雷達分數"] >= 4].sort_values(
+                ["雷達分數", "三大法人買賣超", "成交股數"], ascending=[False, False, False]
+            ).head(20).copy()
+            if hot.empty:
+                st.info("今天沒有股票達到目前雷達門檻。")
+            else:
+                st.markdown("#### ② 今日研究候選")
+                hot_cols = [x for x in ["代號", "名稱", "收盤價", "漲跌幅%", "本益比", "外資買賣超", "投信買賣超", "成交股數", "雷達分數", "入選原因"] if x in hot.columns]
+                st.dataframe(hot[hot_cols], use_container_width=True, hide_index=True)
+                options = hot.apply(lambda r: f"{r['代號']}｜{r['名稱']}", axis=1).tolist()
+                selected_hot = st.selectbox("選一檔進一步分析", options, key="research_hot_stock")
+                if selected_hot and st.button("分析這檔熱門股", key="analyze_hot_stock"):
+                    code = selected_hot.split("｜", 1)[0]
+                    snap = _technical_snapshot(f"{code}.TW")
+                    st.session_state["hot_research_snapshot"] = snap
+                    st.session_state["hot_research_code"] = code
+                if selected_hot:
+                    code = selected_hot.split("｜", 1)[0]
+                    if st.session_state.get("hot_research_code") == code:
+                        _render_snapshot(st.session_state.get("hot_research_snapshot", {}))
+                        st.caption("熱門候選代表目前條件較值得研究，不代表保證獲利或自動買進。")
         else:
-            st.info("每日雷達資料尚未產生；不影響其他研究功能。")
-
-    with research_tabs[1]:
-        st.write("技術分析：MA5／10／20／60、RSI14、MACD。歷史 K 線接入後由程式計算。")
-    with research_tabs[2]:
-        st.write("新聞影響：保留來源與發布日期，整理短期及中長期可能影響；沒有來源時不產生結論。")
-    with research_tabs[3]:
-        st.write("策略回測：使用真實歷史價格計算勝率、報酬與最大回撤，不使用 AI 模擬數字。")
-    with research_tabs[4]:
-        st.write("投資組合健檢：讀取既有持倉分析集中度與風險，不修改任何持倉資料。")
-    with research_tabs[5]:
-        st.write("交易紀錄：分析既有成交紀錄中重複出現的交易行為，原始紀錄維持不變。")
-    with research_tabs[6]:
-        st.write("每日計畫：盤前準備 → 開盤觀察 → 盤中調整 → 收盤檢討。")
+            st.info("尚未有雷達資料，請先按「更新熱門候選」。")
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
 for idx, platform in enumerate(PLATFORMS, start=1):
@@ -6864,7 +6970,7 @@ with tabs[6]:
         else:
             seed_presets(); st.success("已手動建立預設清單。"); st.rerun()
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("工具")
     tool_choice = st.selectbox(
         "選擇工具",
@@ -6882,22 +6988,22 @@ with tabs[7]:
     elif tool_choice == "抓價測試":
         price_test_section()
 
-with tabs[8]:
+with tabs[9]:
     render_history_tab()
 
-with tabs[9]:
+with tabs[10]:
     render_dividend_log_tab(enriched)
 
-with tabs[10]:
+with tabs[11]:
     render_stock_dividend_tab(enriched)
 
-with tabs[11]:
+with tabs[12]:
     render_online_sheets_tab()
 
-with tabs[12]:
+with tabs[13]:
     render_cashflow_tab()
 
-with tabs[13]:
+with tabs[14]:
     st.subheader("🏦 銀行明細（本機測試）")
     st.caption("帳密只存 macOS Keychain；圖片驗證碼需本人輸入。請勿在 Streamlit Cloud 設定帳密。")
     try:
@@ -6948,5 +7054,5 @@ with tabs[13]:
     except Exception as exc:
         st.error(f"銀行工具載入失敗：{exc}")
 
-with tabs[14]:
+with tabs[15]:
     render_bank_fund_query_tab()
