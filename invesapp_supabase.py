@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v60-research-events-flow"
+APP_VERSION = "2026-09-25-v61-numeric-right-align"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6833,8 +6833,14 @@ with tabs[6]:
         out = df.copy()
         for col in out.columns:
             if col not in text_cols:
-                out[col] = pd.to_numeric(out[col], errors="coerce").map(lambda v: f"{v:,.2f}" if pd.notna(v) else "")
+                out[col] = pd.to_numeric(out[col], errors="coerce").round(2)
         return out
+
+    def _research_column_config(df: pd.DataFrame, text_cols: list[str]) -> dict:
+        return {
+            col: st.column_config.NumberColumn(col, format="%.2f")
+            for col in df.columns if col not in text_cols
+        }
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _corporate_event_note(ticker: str) -> str:
@@ -6928,10 +6934,12 @@ with tabs[6]:
                 })
             tw_holdings_grouped = pd.DataFrame(grouped_rows)
             grouped_numeric_cols = [x for x in tw_holdings_grouped.columns if x not in ["name", "ticker"]]
+            grouped_display = _two_decimal_display(tw_holdings_grouped, ["name", "ticker"])
             st.dataframe(
-                _two_decimal_display(tw_holdings_grouped, ["name", "ticker"]),
+                grouped_display,
                 use_container_width=True,
                 hide_index=True,
+                column_config=_research_column_config(grouped_display, ["name", "ticker"]),
             )
             st.markdown("#### 今日持股分析")
             holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings_grouped.iterrows() if normalize_ticker(r.get("ticker", "")))
@@ -6960,10 +6968,12 @@ with tabs[6]:
                            "近期股利/資本事件", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
                 holding_analysis = holding_analysis[[x for x in ordered if x in holding_analysis.columns]]
                 display_analysis = holding_analysis.rename(columns={"目標價潛在價差": "(目標價－目前股價) × 持股數"})
+                display_analysis = _two_decimal_display(display_analysis, ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"])
                 st.dataframe(
-                    _two_decimal_display(display_analysis, ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"]),
+                    display_analysis,
                     use_container_width=True,
                     hide_index=True,
+                    column_config=_research_column_config(display_analysis, ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"]),
                 )
                 st.caption("技術目標價為近期支撐、壓力與價格區間的觀察位，不是券商目標價。")
                 focus = holding_analysis[holding_analysis["分析註記"].isin(["動能偏強", "注意追高風險", "弱勢觀察"])]
