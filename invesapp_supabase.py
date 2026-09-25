@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v55-research-feature-area"
+APP_VERSION = "2026-09-25-v56-daily-stock-analysis"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6800,6 +6800,35 @@ with tabs[6]:
         except Exception:
             return {}
 
+    def _analysis_label(s: dict[str, Any]) -> tuple[str, str, float | None]:
+        if not s:
+            return "資料不足", "缺少足夠行情", None
+        rsi, ret5, ret20 = s.get("rsi"), s.get("ret5") or 0, s.get("ret20") or 0
+        close, trend = s.get("close") or 0, s.get("trend", "盤整")
+        target = s.get("resistance")
+        if trend == "偏多" and close >= (target or 0):
+            price_range = max(0, (s.get("resistance") or close) - (s.get("support") or close))
+            target = close + price_range * 0.5 if price_range else close * 1.05
+        if trend == "偏多" and (rsi is None or rsi < 75) and ret20 > 0:
+            return "動能偏強", "價格站上 MA20、短均線偏多", float(target) if target else None
+        if (rsi is not None and rsi >= 75) or ret5 >= 15:
+            return "注意追高風險", "短線漲幅或 RSI 已偏高", float(target) if target else None
+        if trend == "偏空":
+            return "弱勢觀察", "價格與短均線結構偏弱", float(target) if target else None
+        return "整理觀察", "趨勢尚未形成明確方向", float(target) if target else None
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _batch_stock_analysis(items: tuple[tuple[str, str], ...]) -> pd.DataFrame:
+        rows = []
+        for name, ticker in items:
+            s = _technical_snapshot(ticker)
+            label, reason, target = _analysis_label(s)
+            rows.append({"股票": name, "代號": ticker, "最新價": s.get("close"), "技術目標價": target,
+                         "分析註記": label, "分析原因": reason, "近5日%": s.get("ret5"),
+                         "近20日%": s.get("ret20"), "RSI14": s.get("rsi"),
+                         "支撐": s.get("support"), "壓力": s.get("resistance")})
+        return pd.DataFrame(rows)
+
     def _render_snapshot(s: dict[str, Any]) -> None:
         if not s:
             st.warning("目前無法取得足夠歷史行情，稍後再試。")
@@ -6839,6 +6868,16 @@ with tabs[6]:
             st.markdown("#### ① 先看全部持股")
             own_cols = [x for x in ["name", "ticker", "avg_cost", "即時價格/淨值", "台幣市值", "價差損益", "價差損益率", "含息總損益", "含息總損益率"] if x in tw_holdings.columns]
             st.dataframe(tw_holdings[own_cols], use_container_width=True, hide_index=True)
+            st.markdown("#### 今日持股分析")
+            holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings.iterrows() if normalize_ticker(r.get("ticker", "")))
+            holding_analysis = _batch_stock_analysis(holding_items)
+            if not holding_analysis.empty:
+                st.dataframe(holding_analysis, use_container_width=True, hide_index=True)
+                st.caption("技術目標價為近期支撐、壓力與價格區間的觀察位，不是券商目標價。")
+                focus = holding_analysis[holding_analysis["分析註記"].isin(["動能偏強", "注意追高風險", "弱勢觀察"])]
+                if not focus.empty:
+                    st.markdown("#### 📍 今日持股注意清單")
+                    st.dataframe(focus[["股票", "代號", "分析註記", "分析原因", "最新價", "技術目標價"]], use_container_width=True, hide_index=True)
             st.markdown("#### ② 選一檔做技術分析")
             labels = tw_holdings.apply(lambda r: f"{r.get('name','')}｜{r.get('ticker','')}", axis=1).tolist()
             selected_label = st.selectbox("選擇持股", labels, key="research_owned_stock")
@@ -6876,6 +6915,16 @@ with tabs[6]:
                 st.markdown("#### ② 今日研究候選")
                 hot_cols = [x for x in ["代號", "名稱", "收盤價", "漲跌幅%", "本益比", "外資買賣超", "投信買賣超", "成交股數", "雷達分數", "入選原因"] if x in hot.columns]
                 st.dataframe(hot[hot_cols], use_container_width=True, hide_index=True)
+                market_items = tuple((str(r["名稱"]), f"{r['代號']}.TW") for _, r in hot.iterrows())
+                market_analysis = _batch_stock_analysis(market_items)
+                if not market_analysis.empty:
+                    market_focus = market_analysis[market_analysis["分析註記"].isin(["動能偏強", "注意追高風險"])]
+                    st.markdown("#### 📍 今日市場注意清單")
+                    if market_focus.empty:
+                        st.info("目前候選中沒有形成明確中短線動能訊號的股票。")
+                    else:
+                        st.dataframe(market_focus[["股票", "代號", "最新價", "技術目標價", "分析註記", "分析原因", "近5日%", "近20日%", "RSI14"]], use_container_width=True, hide_index=True)
+                    st.caption("依每日雷達與技術條件整理研究優先順序，不代表保證獲利。")
                 options = hot.apply(lambda r: f"{r['代號']}｜{r['名稱']}", axis=1).tolist()
                 selected_hot = st.selectbox("選一檔進一步分析", options, key="research_hot_stock")
                 if selected_hot and st.button("分析這檔熱門股", key="analyze_hot_stock"):
