@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v57-holdings-by-stock"
+APP_VERSION = "2026-09-25-v58-target-upside-value"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6896,7 +6896,25 @@ with tabs[6]:
             holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings_grouped.iterrows() if normalize_ticker(r.get("ticker", "")))
             holding_analysis = _batch_stock_analysis(holding_items)
             if not holding_analysis.empty:
-                st.dataframe(holding_analysis, use_container_width=True, hide_index=True)
+                units_map = tw_holdings_grouped.set_index("ticker")["units"].to_dict()
+                holding_analysis["持股數"] = holding_analysis["代號"].map(units_map).fillna(0)
+                holding_analysis["目標價潛在價差"] = (
+                    (pd.to_numeric(holding_analysis["技術目標價"], errors="coerce")
+                     - pd.to_numeric(holding_analysis["最新價"], errors="coerce"))
+                    * pd.to_numeric(holding_analysis["持股數"], errors="coerce").fillna(0)
+                )
+                ordered = ["股票", "代號", "持股數", "最新價", "技術目標價", "目標價潛在價差",
+                           "分析註記", "分析原因", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
+                holding_analysis = holding_analysis[[x for x in ordered if x in holding_analysis.columns]]
+                st.dataframe(
+                    holding_analysis,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "持股數": st.column_config.NumberColumn("持股數", format="%.4f"),
+                        "目標價潛在價差": st.column_config.NumberColumn("(目標價－目前股價) × 持股數", format="%.0f"),
+                    },
+                )
                 st.caption("技術目標價為近期支撐、壓力與價格區間的觀察位，不是券商目標價。")
                 focus = holding_analysis[holding_analysis["分析註記"].isin(["動能偏強", "注意追高風險", "弱勢觀察"])]
                 if not focus.empty:
