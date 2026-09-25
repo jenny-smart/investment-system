@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-06-11-v53-dividend-twd-from-original-fx"
+APP_VERSION = "2026-09-25-v54-stock-research"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6724,6 +6724,10 @@ with st.container():
     if c7.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("### 🔎 股票研究")
+st.caption("新增的 7 組股票研究功能已整合完成；可直接開啟研究工作台。")
+st.page_link("pages/6_股票研究工作台.py", label="🔎 開啟股票研究工作台", use_container_width=True)
 
 tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢", "🔎 股票研究"])
 
