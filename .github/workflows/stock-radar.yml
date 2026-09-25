@@ -1,0 +1,38 @@
+name: Taiwan Stock Daily Radar
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stock-radar
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install pandas requests
+      - name: Build daily radar
+        run: python -m stock_radar.pipeline
+      - name: Commit generated data
+        run: |
+          if git diff --quiet -- data/stock_radar; then
+            echo "No radar data changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/stock_radar
+          git commit -m "data: update Taiwan stock daily radar"
+          git push
