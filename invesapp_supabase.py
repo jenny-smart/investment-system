@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v59-two-decimals"
+APP_VERSION = "2026-09-25-v60-research-events-flow"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6829,6 +6829,42 @@ with tabs[6]:
                          "支撐": s.get("support"), "壓力": s.get("resistance")})
         return pd.DataFrame(rows)
 
+    def _two_decimal_display(df: pd.DataFrame, text_cols: list[str]) -> pd.DataFrame:
+        out = df.copy()
+        for col in out.columns:
+            if col not in text_cols:
+                out[col] = pd.to_numeric(out[col], errors="coerce").map(lambda v: f"{v:,.2f}" if pd.notna(v) else "")
+        return out
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _corporate_event_note(ticker: str) -> str:
+        if not HAS_YF or not ticker:
+            return ""
+        try:
+            t = yf.Ticker(ticker)
+            notes = []
+            div = t.dividends
+            if div is not None and not div.empty:
+                recent = div.tail(1)
+                dt, amount = recent.index[-1], float(recent.iloc[-1])
+                if (pd.Timestamp.now(tz=dt.tz) - dt).days <= 120:
+                    notes.append(f"近期現金股利 {amount:.2f}（{dt.date()}）")
+            splits = t.splits
+            if splits is not None and not splits.empty:
+                dt, ratio = splits.index[-1], float(splits.iloc[-1])
+                if (pd.Timestamp.now(tz=dt.tz) - dt).days <= 180:
+                    notes.append(f"近期股票分割/股票事件 {ratio:.2f}（{dt.date()}）")
+            actions = getattr(t, "actions", None)
+            if actions is not None and not actions.empty:
+                recent_actions = actions.tail(8)
+                for dt, row in recent_actions.iterrows():
+                    for col in recent_actions.columns:
+                        if "capital" in str(col).lower() and pd.notna(row[col]) and float(row[col]) != 0:
+                            notes.append(f"近期資本事件 {dt.date()}")
+            return "；".join(dict.fromkeys(notes))
+        except Exception:
+            return ""
+
     def _render_snapshot(s: dict[str, Any]) -> None:
         if not s:
             st.warning("目前無法取得足夠歷史行情，稍後再試。")
@@ -6893,15 +6929,25 @@ with tabs[6]:
             tw_holdings_grouped = pd.DataFrame(grouped_rows)
             grouped_numeric_cols = [x for x in tw_holdings_grouped.columns if x not in ["name", "ticker"]]
             st.dataframe(
-                tw_holdings_grouped,
+                _two_decimal_display(tw_holdings_grouped, ["name", "ticker"]),
                 use_container_width=True,
                 hide_index=True,
-                column_config={x: st.column_config.NumberColumn(x, format="%.2f") for x in grouped_numeric_cols},
             )
             st.markdown("#### 今日持股分析")
             holding_items = tuple((str(r.get("name", "")), normalize_ticker(r.get("ticker", ""))) for _, r in tw_holdings_grouped.iterrows() if normalize_ticker(r.get("ticker", "")))
             holding_analysis = _batch_stock_analysis(holding_items)
             if not holding_analysis.empty:
+                radar_path_for_holdings = Path(__file__).resolve().parent / "data" / "stock_radar" / "latest.csv"
+                if radar_path_for_holdings.exists():
+                    radar_hold = pd.read_csv(radar_path_for_holdings, dtype={"代號": str})
+                    radar_hold["代號_key"] = radar_hold["代號"].astype(str).str.replace(r"\.0$", "", regex=True)
+                    holding_analysis["代號_key"] = holding_analysis["代號"].astype(str).str.extract(r"(\d{4,6})", expand=False)
+                    inst_cols = [x for x in ["代號_key", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超"] if x in radar_hold.columns]
+                    holding_analysis = holding_analysis.merge(radar_hold[inst_cols], on="代號_key", how="left").drop(columns=["代號_key"])
+                for col in ["外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超"]:
+                    if col not in holding_analysis:
+                        holding_analysis[col] = pd.NA
+                holding_analysis["近期股利/資本事件"] = holding_analysis["代號"].map(_corporate_event_note)
                 units_map = tw_holdings_grouped.set_index("ticker")["units"].to_dict()
                 holding_analysis["持股數"] = holding_analysis["代號"].map(units_map).fillna(0)
                 holding_analysis["目標價潛在價差"] = (
@@ -6910,20 +6956,14 @@ with tabs[6]:
                     * pd.to_numeric(holding_analysis["持股數"], errors="coerce").fillna(0)
                 )
                 ordered = ["股票", "代號", "持股數", "最新價", "技術目標價", "目標價潛在價差",
-                           "分析註記", "分析原因", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
+                           "分析註記", "分析原因", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超",
+                           "近期股利/資本事件", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
                 holding_analysis = holding_analysis[[x for x in ordered if x in holding_analysis.columns]]
+                display_analysis = holding_analysis.rename(columns={"目標價潛在價差": "(目標價－目前股價) × 持股數"})
                 st.dataframe(
-                    holding_analysis,
+                    _two_decimal_display(display_analysis, ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"]),
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        x: st.column_config.NumberColumn(
-                            "(目標價－目前股價) × 持股數" if x == "目標價潛在價差" else x,
-                            format="%.2f",
-                        )
-                        for x in holding_analysis.columns
-                        if x not in ["股票", "代號", "分析註記", "分析原因"]
-                    },
                 )
                 st.caption("技術目標價為近期支撐、壓力與價格區間的觀察位，不是券商目標價。")
                 focus = holding_analysis[holding_analysis["分析註記"].isin(["動能偏強", "注意追高風險", "弱勢觀察"])]
@@ -6975,7 +7015,16 @@ with tabs[6]:
                     if market_focus.empty:
                         st.info("目前候選中沒有形成明確中短線動能訊號的股票。")
                     else:
-                        st.dataframe(market_focus[["股票", "代號", "最新價", "技術目標價", "分析註記", "分析原因", "近5日%", "近20日%", "RSI14"]], use_container_width=True, hide_index=True)
+                        market_focus = market_focus.copy()
+                        market_focus["近期股利/資本事件"] = market_focus["代號"].map(_corporate_event_note)
+                        st.dataframe(
+                            _two_decimal_display(
+                                market_focus[["股票", "代號", "最新價", "技術目標價", "分析註記", "分析原因", "近期股利/資本事件", "近5日%", "近20日%", "RSI14"]],
+                                ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"],
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
                     st.caption("依每日雷達與技術條件整理研究優先順序，不代表保證獲利。")
                 options = hot.apply(lambda r: f"{r['代號']}｜{r['名稱']}", axis=1).tolist()
                 selected_hot = st.selectbox("選一檔進一步分析", options, key="research_hot_stock")
