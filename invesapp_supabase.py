@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-26-v62-unified-research"
+APP_VERSION = "2026-09-26-v64-full-watchlist"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6756,7 +6756,7 @@ with tabs[6]:
     st.markdown("### 🔎 股票研究")
     st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
-    own_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "🔥 熱門中短線候選"])
+    own_tab, watch_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "👀 觀察股票池", "🔥 熱門中短線候選"])
 
     def _technical_snapshot(ticker: str) -> dict[str, Any]:
         if not HAS_YF or not ticker:
@@ -6987,6 +6987,64 @@ with tabs[6]:
         staged = out.apply(_stage, axis=1)
         staged.columns = ["提前階段","提前分數","提前觸發原因"]
         return pd.concat([out, staged], axis=1)
+
+    WATCHLIST_STOCKS = [
+        ("富邦金","2881.TW"),("國泰金","2882.TW"),("王品","2727.TW"),("五福","2745.TWO"),("意騰-KY","7749.TW"),
+        ("士電","1503.TW"),("達興材料","5234.TW"),("創意","3443.TW"),("光寶科","2301.TW"),("台積電","2330.TW"),
+        ("台達電","2308.TW"),("盟立","2464.TW"),("昇達科","3491.TWO"),("啟碁","6285.TW"),("國巨*","2327.TW"),
+        ("華新科","2492.TW"),("旺宏","2337.TW"),("力積電","6770.TW"),("南亞科","2408.TW"),("群聯","8299.TWO"),
+        ("勝一","1773.TW"),("富邦科技","0052.TW"),("南電","8046.TW"),("鴻勁","7769.TW"),("高僑","6234.TWO"),
+        ("聯電","2303.TW"),("穩懋","3105.TWO"),("尚茂","8291.TWO"),("致茂","2360.TW"),("宇隆","2233.TW"),
+        ("京元電子","2449.TW"),("益登","3048.TW"),("合晶","6182.TWO"),("泰創工程","6750.TW"),("雷虎","8033.TW"),
+        ("漢唐","2404.TW"),("倍利科","7822.TW"),("台光電","2383.TW"),("華通","2313.TW"),("耀華","2367.TW"),
+        ("麗嬰房","2911.TW"),("臻鼎-KY","4958.TW"),("同欣電","6271.TW"),("信昌電","6173.TWO"),("金山電","8042.TW"),
+        ("禾伸堂","3026.TW"),("康舒","6282.TW"),("茂迪","6244.TWO"),("高力","8996.TW"),("振發","5426.TWO"),
+        ("所羅門","2359.TW"),("日月光投控","3711.TW"),("聯發科","2454.TW"),("大立光","3008.TW"),("南茂","8150.TW"),
+        ("希華","2484.TW"),("健策","3653.TW"),("聯亞","3081.TWO"),("全新","2455.TW"),("金像電","2368.TW"),
+        ("川湖","2059.TW"),("寶雅","5904.TWO"),("仁寶","2324.TW"),("鼎元","2426.TW"),("友達","2409.TW"),
+        ("世紀*","5314.TWO"),("新鼎","5209.TWO"),("晉泰","6221.TWO"),("環球晶","6488.TWO"),("台特化","4772.TW"),
+        ("崇越","5434.TWO"),("昇陽半導體","8028.TW"),("台塑","1301.TW"),
+    ]
+
+    @st.cache_data(ttl=21600, show_spinner=False)
+    def _analyst_snapshot(ticker: str) -> dict[str, Any]:
+        if not HAS_YF or not ticker: return {}
+        try:
+            info = yf.Ticker(ticker).info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            target = info.get("targetMeanPrice")
+            return {"市場目標價": target, "目標價低": info.get("targetLowPrice"), "目標價高": info.get("targetHighPrice"),
+                    "目標價空間%": ((target/current-1)*100) if target and current else None,
+                    "Forward EPS": info.get("forwardEps"), "Forward PE": info.get("forwardPE")}
+        except Exception: return {}
+
+    with watch_tab:
+        st.markdown("#### 👀 完整觀察股票池")
+        st.caption("已納入本次截圖與影片股票；目標價取可取得的分析師共識，缺資料留空，不猜數字。")
+        watch = _batch_stock_analysis(tuple(WATCHLIST_STOCKS))
+        if not watch.empty:
+            radar_path_watch = Path(__file__).resolve().parent / "data" / "stock_radar" / "latest.csv"
+            if radar_path_watch.exists():
+                rw = pd.read_csv(radar_path_watch, dtype={"代號": str})
+                rw["代號_key"] = rw["代號"].astype(str).str.replace(r"\.0$", "", regex=True)
+                watch["代號_key"] = watch["代號"].astype(str).str.extract(r"(\d{4,6})", expand=False)
+                cols = [x for x in ["代號_key","外資買賣超","投信買賣超","自營商買賣超","三大法人買賣超"] if x in rw.columns]
+                watch = watch.merge(rw[cols], on="代號_key", how="left").drop(columns=["代號_key"])
+            for col in ["外資買賣超","投信買賣超","自營商買賣超","三大法人買賣超"]:
+                if col not in watch: watch[col] = pd.NA
+            watch = _apply_early_discovery(watch)
+            analyst = [_analyst_snapshot(t) for t in watch["代號"].tolist()]
+            for col in ["市場目標價","目標價低","目標價高","目標價空間%","Forward EPS","Forward PE"]:
+                watch[col] = [x.get(col) for x in analyst]
+            watch["近期股利/資本事件"] = watch["代號"].map(_corporate_event_note)
+            wanted = ["股票","代號","最新價","市場目標價","目標價空間%","目標價低","目標價高","Forward EPS","Forward PE",
+                      "EPS YoY%","EPS加速度","營收 YoY%","外資買賣超","投信買賣超","三大法人買賣超","提前階段","提前分數",
+                      "提前觸發原因","量比","相對強度1月","相對強度3月","近5日%","近20日%","RSI14","技術目標價","分析註記","近期股利/資本事件"]
+            wanted = [x for x in wanted if x in watch.columns]
+            text_cols = ["股票","代號","提前階段","提前觸發原因","分析註記","近期股利/資本事件"]
+            out = _two_decimal_display(watch[wanted], text_cols)
+            st.dataframe(out, use_container_width=True, hide_index=True, column_config=_research_column_config(out, text_cols))
+            st.caption("市場目標價與 Forward EPS/PE 依資料源即時可得值；缺漏的 2026/2027 年度 EPS 不自行推估。")
 
     with own_tab:
         tw_holdings = enriched[enriched["platform"] == "台股"].copy() if not enriched.empty else pd.DataFrame()
