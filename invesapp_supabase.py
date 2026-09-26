@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-26-v63-early-discovery"
+APP_VERSION = "2026-09-26-v62-unified-research"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6754,9 +6754,9 @@ with tabs[0]:
 # ── 股票研究：放在正式功能區，不使用左側 multipage 導航 ─────────────────
 with tabs[6]:
     st.markdown("### 🔎 股票研究")
-    st.caption("直接分成「目前台股持股」與「熱門中短線候選」兩個入口。選股票後按分析即可。")
+    st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
-    own_tab, early_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "🚨 提前發現", "🔥 熱門中短線候選"])
+    own_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "🔥 熱門中短線候選"])
 
     def _technical_snapshot(ticker: str) -> dict[str, Any]:
         if not HAS_YF or not ticker:
@@ -6902,6 +6902,92 @@ with tabs[6]:
             notes.append("今日量能明顯高於 20 日均量")
         st.info("；".join(notes) + "。")
 
+    @st.cache_data(ttl=21600, show_spinner=False)
+    def _growth_snapshot(ticker: str) -> dict[str, Any]:
+        if not HAS_YF or not ticker:
+            return {}
+        try:
+            t = yf.Ticker(ticker)
+            inc = t.quarterly_income_stmt
+            def _series(names):
+                if inc is None or inc.empty:
+                    return pd.Series(dtype=float)
+                for name in names:
+                    if name in inc.index:
+                        return pd.to_numeric(inc.loc[name], errors="coerce").dropna()
+                return pd.Series(dtype=float)
+            eps = _series(["Diluted EPS", "Basic EPS"])
+            rev = _series(["Total Revenue", "Operating Revenue"])
+            eps_yoy = ((eps.iloc[0] / eps.iloc[4] - 1) * 100) if len(eps) >= 5 and eps.iloc[4] != 0 else None
+            rev_yoy = ((rev.iloc[0] / rev.iloc[4] - 1) * 100) if len(rev) >= 5 and rev.iloc[4] != 0 else None
+            eps_accel = None
+            if len(eps) >= 6 and eps.iloc[4] != 0 and eps.iloc[5] != 0:
+                prev_yoy = (eps.iloc[1] / eps.iloc[5] - 1) * 100
+                eps_accel = eps_yoy - prev_yoy if eps_yoy is not None else None
+            return {"EPS YoY%": eps_yoy, "營收 YoY%": rev_yoy, "EPS加速度": eps_accel}
+        except Exception:
+            return {}
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _relative_strength(ticker: str) -> dict[str, Any]:
+        if not HAS_YF or not ticker:
+            return {}
+        try:
+            stock = yf.Ticker(ticker).history(period="4mo", interval="1d", auto_adjust=False)["Close"].dropna()
+            market = yf.Ticker("^TWII").history(period="4mo", interval="1d", auto_adjust=False)["Close"].dropna()
+            def _ret(s, n):
+                return (s.iloc[-1] / s.iloc[-n-1] - 1) * 100 if len(s) > n else None
+            s20, s60, m20, m60 = _ret(stock, 20), _ret(stock, 60), _ret(market, 20), _ret(market, 60)
+            return {
+                "相對強度1月": s20 - m20 if s20 is not None and m20 is not None else None,
+                "相對強度3月": s60 - m60 if s60 is not None and m60 is not None else None,
+                "大盤1月%": m20,
+            }
+        except Exception:
+            return {}
+
+
+    def _apply_early_discovery(df: pd.DataFrame) -> pd.DataFrame:
+        """Apply early-discovery signals to any stock analysis table."""
+        out = df.copy()
+        if out.empty or "代號" not in out.columns:
+            return out
+        growth = [_growth_snapshot(t) for t in out["代號"].tolist()]
+        rs = [_relative_strength(t) for t in out["代號"].tolist()]
+        snaps = [_technical_snapshot(t) for t in out["代號"].tolist()]
+        for col in ["EPS YoY%","營收 YoY%","EPS加速度"]:
+            out[col] = [x.get(col) for x in growth]
+        for col in ["相對強度1月","相對強度3月","大盤1月%"]:
+            out[col] = [x.get(col) for x in rs]
+        out["量比"] = [x.get("vol_ratio") for x in snaps]
+
+        def _stage(row):
+            score, why = 0, []
+            eps, rev, accel = row.get("EPS YoY%"), row.get("營收 YoY%"), row.get("EPS加速度")
+            foreign, trust = row.get("外資買賣超"), row.get("投信買賣超")
+            rs1, rs3, vr = row.get("相對強度1月"), row.get("相對強度3月"), row.get("量比")
+            rsi, ret5 = row.get("RSI14"), row.get("近5日%")
+            if pd.notna(eps) and eps > 15: score += 2; why.append("EPS成長")
+            if pd.notna(accel) and accel > 0: score += 1; why.append("EPS加速")
+            if pd.notna(rev) and rev > 10: score += 2; why.append("營收成長")
+            if pd.notna(foreign) and foreign > 0: score += 1; why.append("外資買超")
+            if pd.notna(trust) and trust > 0: score += 1; why.append("投信買超")
+            if pd.notna(rs1) and rs1 > 0: score += 1; why.append("1月強於大盤")
+            if pd.notna(rs3) and rs3 > 0: score += 1; why.append("3月強於大盤")
+            if pd.notna(vr) and vr >= 1.2: score += 1; why.append("量能放大")
+            if row.get("分析註記") == "動能偏強": score += 1; why.append("均線轉強")
+            if (pd.notna(rsi) and rsi >= 75) or (pd.notna(ret5) and ret5 >= 15):
+                return pd.Series(["🔴 過熱期", score, "短線漲幅/RSI偏高"])
+            if score >= 7:
+                return pd.Series(["🟡 啟動期", score, "、".join(why)])
+            if score >= 4:
+                return pd.Series(["🟢 潛伏期", score, "、".join(why)])
+            return pd.Series(["⚪ 觀察", score, "、".join(why) or "訊號不足"])
+
+        staged = out.apply(_stage, axis=1)
+        staged.columns = ["提前階段","提前分數","提前觸發原因"]
+        return pd.concat([out, staged], axis=1)
+
     with own_tab:
         tw_holdings = enriched[enriched["platform"] == "台股"].copy() if not enriched.empty else pd.DataFrame()
         if tw_holdings.empty:
@@ -6993,6 +7079,7 @@ with tabs[6]:
                 holding_analysis["現金"] = [x.get("現金") for x in fundamentals]
                 holding_analysis["負債"] = [x.get("負債") for x in fundamentals]
                 holding_analysis["毛利率%"] = [x.get("毛利率%") for x in fundamentals]
+                holding_analysis = _apply_early_discovery(holding_analysis)
                 units_map = tw_holdings_grouped.set_index("ticker")["units"].to_dict()
                 holding_analysis["持股數"] = holding_analysis["代號"].map(units_map).fillna(0)
                 holding_analysis["目標價潛在價差"] = (
@@ -7001,11 +7088,11 @@ with tabs[6]:
                     * pd.to_numeric(holding_analysis["持股數"], errors="coerce").fillna(0)
                 )
                 ordered = ["股票", "代號", "持股數", "最新價", "技術目標價", "目標價潛在價差",
-                           "分析註記", "分析原因", "現金", "負債", "毛利率%", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超",
+                           "提前階段", "提前分數", "提前觸發原因", "分析註記", "分析原因", "EPS YoY%", "EPS加速度", "營收 YoY%", "量比", "相對強度1月", "相對強度3月", "現金", "負債", "毛利率%", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超",
                            "近期股利/資本事件", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
                 holding_analysis = holding_analysis[[x for x in ordered if x in holding_analysis.columns]]
                 display_analysis = holding_analysis.rename(columns={"目標價潛在價差": "(目標價－目前股價) × 持股數"})
-                display_analysis = _two_decimal_display(display_analysis, ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"])
+                display_analysis = _two_decimal_display(display_analysis, ["股票", "代號", "提前階段", "提前觸發原因", "分析註記", "分析原因", "近期股利/資本事件"])
                 st.dataframe(
                     display_analysis,
                     use_container_width=True,
@@ -7030,108 +7117,6 @@ with tabs[6]:
                 if st.session_state.get("owned_research_name") == row.get("name", ticker):
                     _render_snapshot(st.session_state.get("owned_research_snapshot", {}))
                     st.caption("搭配上方成本與現有損益一起看；這裡不會修改持股資料。")
-
-    @st.cache_data(ttl=21600, show_spinner=False)
-    def _growth_snapshot(ticker: str) -> dict[str, Any]:
-        if not HAS_YF or not ticker:
-            return {}
-        try:
-            t = yf.Ticker(ticker)
-            inc = t.quarterly_income_stmt
-            def _series(names):
-                if inc is None or inc.empty:
-                    return pd.Series(dtype=float)
-                for name in names:
-                    if name in inc.index:
-                        return pd.to_numeric(inc.loc[name], errors="coerce").dropna()
-                return pd.Series(dtype=float)
-            eps = _series(["Diluted EPS", "Basic EPS"])
-            rev = _series(["Total Revenue", "Operating Revenue"])
-            eps_yoy = ((eps.iloc[0] / eps.iloc[4] - 1) * 100) if len(eps) >= 5 and eps.iloc[4] != 0 else None
-            rev_yoy = ((rev.iloc[0] / rev.iloc[4] - 1) * 100) if len(rev) >= 5 and rev.iloc[4] != 0 else None
-            eps_accel = None
-            if len(eps) >= 6 and eps.iloc[4] != 0 and eps.iloc[5] != 0:
-                prev_yoy = (eps.iloc[1] / eps.iloc[5] - 1) * 100
-                eps_accel = eps_yoy - prev_yoy if eps_yoy is not None else None
-            return {"EPS YoY%": eps_yoy, "營收 YoY%": rev_yoy, "EPS加速度": eps_accel}
-        except Exception:
-            return {}
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def _relative_strength(ticker: str) -> dict[str, Any]:
-        if not HAS_YF or not ticker:
-            return {}
-        try:
-            stock = yf.Ticker(ticker).history(period="4mo", interval="1d", auto_adjust=False)["Close"].dropna()
-            market = yf.Ticker("^TWII").history(period="4mo", interval="1d", auto_adjust=False)["Close"].dropna()
-            def _ret(s, n):
-                return (s.iloc[-1] / s.iloc[-n-1] - 1) * 100 if len(s) > n else None
-            s20, s60, m20, m60 = _ret(stock, 20), _ret(stock, 60), _ret(market, 20), _ret(market, 60)
-            return {
-                "相對強度1月": s20 - m20 if s20 is not None and m20 is not None else None,
-                "相對強度3月": s60 - m60 if s60 is not None and m60 is not None else None,
-                "大盤1月%": m20,
-            }
-        except Exception:
-            return {}
-
-    with early_tab:
-        st.markdown("#### 🚨 提前發現：基本面＋籌碼＋價格同步改善")
-        st.caption("用 O'Neil/CAN SLIM 類型的研究框架找『剛開始變好』，再用財務品質做第二層過濾；不是等股票已大漲才標示。")
-        early_path = Path(__file__).resolve().parent / "data" / "stock_radar" / "latest.csv"
-        if not early_path.exists():
-            st.info("尚未有今日雷達資料，請先到「熱門中短線候選」更新今日資料。")
-        else:
-            base = pd.read_csv(early_path, dtype={"代號": str})
-            base = base[(base["雷達分數"] >= 3)].sort_values(["雷達分數", "三大法人買賣超"], ascending=[False, False]).head(35).copy()
-            items = tuple((str(r["名稱"]), f"{r['代號']}.TW") for _, r in base.iterrows())
-            tech = _batch_stock_analysis(items)
-            tech["代號_key"] = tech["代號"].astype(str).str.extract(r"(\d{4,6})", expand=False)
-            base["代號_key"] = base["代號"].astype(str).str.replace(r"\.0$", "", regex=True)
-            keep = [x for x in ["代號_key","外資買賣超","投信買賣超","三大法人買賣超","成交股數","本益比","殖利率%"] if x in base.columns]
-            early = tech.merge(base[keep], on="代號_key", how="left").drop(columns=["代號_key"])
-            growth = [_growth_snapshot(t) for t in early["代號"]]
-            rs = [_relative_strength(t) for t in early["代號"]]
-            for col in ["EPS YoY%","營收 YoY%","EPS加速度"]:
-                early[col] = [x.get(col) for x in growth]
-            for col in ["相對強度1月","相對強度3月","大盤1月%"]:
-                early[col] = [x.get(col) for x in rs]
-            snaps = [_technical_snapshot(t) for t in early["代號"]]
-            early["量比"] = [x.get("vol_ratio") for x in snaps]
-
-            def _stage(row):
-                score, why = 0, []
-                eps, rev, accel = row.get("EPS YoY%"), row.get("營收 YoY%"), row.get("EPS加速度")
-                foreign, trust = row.get("外資買賣超"), row.get("投信買賣超")
-                rs1, rs3, vr = row.get("相對強度1月"), row.get("相對強度3月"), row.get("量比")
-                rsi, ret5 = row.get("RSI14"), row.get("近5日%")
-                if pd.notna(eps) and eps > 15: score += 2; why.append("EPS成長")
-                if pd.notna(accel) and accel > 0: score += 1; why.append("EPS加速")
-                if pd.notna(rev) and rev > 10: score += 2; why.append("營收成長")
-                if pd.notna(foreign) and foreign > 0: score += 1; why.append("外資買超")
-                if pd.notna(trust) and trust > 0: score += 1; why.append("投信買超")
-                if pd.notna(rs1) and rs1 > 0: score += 1; why.append("1月強於大盤")
-                if pd.notna(rs3) and rs3 > 0: score += 1; why.append("3月強於大盤")
-                if pd.notna(vr) and vr >= 1.2: score += 1; why.append("量能放大")
-                if row.get("分析註記") == "動能偏強": score += 1; why.append("均線轉強")
-                if (pd.notna(rsi) and rsi >= 75) or (pd.notna(ret5) and ret5 >= 15):
-                    return "🔴 過熱期", score, "短線漲幅/RSI偏高"
-                if score >= 7: return "🟡 啟動期", score, "、".join(why)
-                if score >= 4: return "🟢 潛伏期", score, "、".join(why)
-                return "⚪ 觀察", score, "、".join(why) or "訊號不足"
-
-            staged = early.apply(_stage, axis=1, result_type="expand")
-            staged.columns = ["階段","提前分數","觸發原因"]
-            early = pd.concat([early, staged], axis=1)
-            early = early[early["階段"].isin(["🟢 潛伏期","🟡 啟動期"])].sort_values(["提前分數","三大法人買賣超"], ascending=[False,False]).head(10)
-            if early.empty:
-                st.info("今天沒有同時達到基本面、籌碼與價格改善門檻的股票。")
-            else:
-                cols = [x for x in ["股票","代號","階段","提前分數","最新價","技術目標價","EPS YoY%","EPS加速度","營收 YoY%","外資買賣超","投信買賣超","量比","相對強度1月","相對強度3月","RSI14","觸發原因"] if x in early.columns]
-                out = _two_decimal_display(early[cols], ["股票","代號","階段","觸發原因"])
-                st.dataframe(out, use_container_width=True, hide_index=True, column_config=_research_column_config(out, ["股票","代號","階段","觸發原因"]))
-                st.caption("EPS/營收取可取得的季度財報；法人為當日資料。若資料源缺漏就留空，不補猜。『新成長題材』需有可靠新聞來源才會納入，避免把傳聞當訊號。")
-                st.markdown("**階段判讀：** 🟢 潛伏＝基本面/籌碼開始改善、價格尚未過熱；🟡 啟動＝成長、籌碼、相對強度與量價有較多條件同時成立；🔴 過熱不列入提前名單。")
 
     with hot_tab:
         st.markdown("#### ① 更新今日熱門候選")
@@ -7159,7 +7144,15 @@ with tabs[6]:
                 market_items = tuple((str(r["名稱"]), f"{r['代號']}.TW") for _, r in hot.iterrows())
                 market_analysis = _batch_stock_analysis(market_items)
                 if not market_analysis.empty:
-                    market_focus = market_analysis[market_analysis["分析註記"].isin(["動能偏強", "注意追高風險"])]
+                    market_analysis["代號_key"] = market_analysis["代號"].astype(str).str.extract(r"(\d{4,6})", expand=False)
+                    hot_merge = hot.copy()
+                    hot_merge["代號_key"] = hot_merge["代號"].astype(str).str.replace(r"\.0$", "", regex=True)
+                    merge_cols = [x for x in ["代號_key","外資買賣超","投信買賣超","自營商買賣超","三大法人買賣超"] if x in hot_merge.columns]
+                    market_analysis = market_analysis.merge(hot_merge[merge_cols], on="代號_key", how="left").drop(columns=["代號_key"])
+                    market_analysis = _apply_early_discovery(market_analysis)
+                    market_focus = market_analysis[
+                        market_analysis["提前階段"].isin(["🟢 潛伏期","🟡 啟動期","🔴 過熱期"])
+                    ].copy()
                     st.markdown("#### 📍 今日市場注意清單")
                     if market_focus.empty:
                         st.info("目前候選中沒有形成明確中短線動能訊號的股票。")
@@ -7168,8 +7161,8 @@ with tabs[6]:
                         market_focus["近期股利/資本事件"] = market_focus["代號"].map(_corporate_event_note)
                         st.dataframe(
                             _two_decimal_display(
-                                market_focus[["股票", "代號", "最新價", "技術目標價", "分析註記", "分析原因", "近期股利/資本事件", "近5日%", "近20日%", "RSI14"]],
-                                ["股票", "代號", "分析註記", "分析原因", "近期股利/資本事件"],
+                                market_focus[["股票", "代號", "提前階段", "提前分數", "提前觸發原因", "最新價", "技術目標價", "分析註記", "分析原因", "近期股利/資本事件", "EPS YoY%", "EPS加速度", "營收 YoY%", "外資買賣超", "投信買賣超", "量比", "相對強度1月", "相對強度3月", "近5日%", "近20日%", "RSI14"]],
+                                ["股票", "代號", "提前階段", "提前觸發原因", "分析註記", "分析原因", "近期股利/資本事件"],
                             ),
                             use_container_width=True,
                             hide_index=True,
