@@ -35,7 +35,7 @@ except Exception:
     HAS_GSPREAD = False
 
 
-APP_VERSION = "2026-09-25-v61-numeric-right-align"
+APP_VERSION = "2026-09-26-v62-cash-debt-margin"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -6956,6 +6956,43 @@ with tabs[6]:
                     if col not in holding_analysis:
                         holding_analysis[col] = pd.NA
                 holding_analysis["近期股利/資本事件"] = holding_analysis["代號"].map(_corporate_event_note)
+
+                @st.cache_data(ttl=21600, show_spinner=False)
+                def _fundamental_snapshot(ticker: str) -> dict[str, Any]:
+                    if not HAS_YF or not ticker:
+                        return {}
+                    try:
+                        t = yf.Ticker(ticker)
+                        bs = t.quarterly_balance_sheet
+                        inc = t.quarterly_income_stmt
+                        def _latest(frame, names):
+                            if frame is None or frame.empty:
+                                return None
+                            for name in names:
+                                if name in frame.index:
+                                    vals = pd.to_numeric(frame.loc[name], errors="coerce").dropna()
+                                    if not vals.empty:
+                                        return float(vals.iloc[0])
+                            return None
+                        cash = _latest(bs, ["Cash Cash Equivalents And Short Term Investments", "Cash And Cash Equivalents", "Cash"])
+                        debt = _latest(bs, ["Total Debt"])
+                        if debt is None:
+                            current_debt = _latest(bs, ["Current Debt", "Current Debt And Capital Lease Obligation"]) or 0
+                            long_debt = _latest(bs, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]) or 0
+                            debt = current_debt + long_debt if current_debt or long_debt else None
+                        revenue = _latest(inc, ["Total Revenue", "Operating Revenue"])
+                        gross_profit = _latest(inc, ["Gross Profit"])
+                        gross_margin = (gross_profit / revenue * 100) if gross_profit is not None and revenue not in (None, 0) else None
+                        return {"現金": cash, "負債": debt, "毛利率%": gross_margin}
+                    except Exception:
+                        return {}
+
+                fundamentals = []
+                for ticker in holding_analysis["代號"].tolist():
+                    fundamentals.append(_fundamental_snapshot(ticker))
+                holding_analysis["現金"] = [x.get("現金") for x in fundamentals]
+                holding_analysis["負債"] = [x.get("負債") for x in fundamentals]
+                holding_analysis["毛利率%"] = [x.get("毛利率%") for x in fundamentals]
                 units_map = tw_holdings_grouped.set_index("ticker")["units"].to_dict()
                 holding_analysis["持股數"] = holding_analysis["代號"].map(units_map).fillna(0)
                 holding_analysis["目標價潛在價差"] = (
@@ -6964,7 +7001,7 @@ with tabs[6]:
                     * pd.to_numeric(holding_analysis["持股數"], errors="coerce").fillna(0)
                 )
                 ordered = ["股票", "代號", "持股數", "最新價", "技術目標價", "目標價潛在價差",
-                           "分析註記", "分析原因", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超",
+                           "分析註記", "分析原因", "現金", "負債", "毛利率%", "外資買賣超", "投信買賣超", "自營商買賣超", "三大法人買賣超",
                            "近期股利/資本事件", "近5日%", "近20日%", "RSI14", "支撐", "壓力"]
                 holding_analysis = holding_analysis[[x for x in ordered if x in holding_analysis.columns]]
                 display_analysis = holding_analysis.rename(columns={"目標價潛在價差": "(目標價－目前股價) × 持股數"})
