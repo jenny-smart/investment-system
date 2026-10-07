@@ -280,8 +280,21 @@ st.markdown("""
     .app-page-title { font-size: 24px !important; }
 }
 .hero { position:relative; z-index:0; background:#fff; border:1px solid #e2e8f0; border-radius:16px; padding:16px 20px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
-[data-testid="stMetric"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:12px !important; padding:16px 18px !important; box-shadow:0 1px 4px rgba(0,0,0,.05) !important; }
-[data-testid="stMetricValue"] { font-size:1.35rem !important; font-weight:700 !important; }
+[data-testid="stMetric"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:12px !important; padding:16px 18px !important; box-shadow:0 1px 4px rgba(0,0,0,.05) !important; min-width:0 !important; }
+[data-testid="stMetricValue"] {
+    width:100% !important;
+    min-width:0 !important;
+    font-size:clamp(.82rem, 1.7vw, 1.35rem) !important;
+    line-height:1.25 !important;
+    font-weight:700 !important;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap !important;
+}
+[data-testid="stMetricValue"] > div { overflow:visible !important; }
+@media (max-width: 640px) {
+    [data-testid="stMetric"] { padding:12px 10px !important; }
+    [data-testid="stMetricValue"] { font-size:clamp(.78rem, 3.3vw, 1.12rem) !important; }
+}
 [data-testid="stDataFrame"] { background:#fff !important; border:1px solid #e2e8f0 !important; border-radius:10px !important; }
 .stButton > button { background:#10b981 !important; color:#fff !important; border-radius:10px !important; border:0 !important; font-weight:600 !important; }
 .stButton > button:hover { background:#059669 !important; }
