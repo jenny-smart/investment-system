@@ -1,12 +1,8 @@
 name: Portfolio Snapshot
 
 on:
-  schedule:
-    # 台灣時間 08:00 = UTC 00:00
-    - cron: "0 0 * * *"
-    # 台灣時間 20:00 = UTC 12:00
-    - cron: "0 12 * * *"
-  workflow_dispatch:   # 手動觸發
+  # 由 cron-job.org 依 Asia/Taipei 08:00 / 20:00 觸發，避免 Runner 排程延遲。
+  workflow_dispatch:
 
 permissions:
   contents: read
