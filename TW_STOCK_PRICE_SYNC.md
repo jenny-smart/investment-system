@@ -1,6 +1,10 @@
 # 台股股價每日回填
 
-GitHub Actions 每天台北時間 15:00（UTC 07:00）執行；GitHub 排程可能延遲。
+cron-job.org 每天台北時間 15:00（Asia/Taipei）觸發 GitHub Actions 回填。GitHub 原生 schedule 已移除，避免重複執行；工作流程仍需等待 Runner，回填可能稍晚完成。
+
+排程管理：https://console.cron-job.org/jobs/8593700
+
+觸發方式：POST `https://api.github.com/repos/jenny-smart/investment-system/actions/workflows/tw-stock-prices.yml/dispatches`，JSON body 為 `{"ref":"main"}`。沿用 cron-job.org 的 `tool-system-cloud-scheduler` token，授權儲存庫為 tool-system、investment-system，權限為 Actions 讀寫及 Metadata 讀取。
 
 - 試算表：`17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc`
 - 分頁 ID：`0`（台股）、`1591931043`（「台股」的副本）

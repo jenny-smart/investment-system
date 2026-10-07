@@ -1,9 +1,7 @@
 name: Taiwan stock prices to Google Sheets
 
 on:
-  schedule:
-    # Every day at 15:00 Taipei (UTC+8). GitHub may delay scheduled runs.
-    - cron: "0 7 * * *"
+  # cron-job.org dispatches this workflow every day at 15:00 Asia/Taipei.
   workflow_dispatch:
     inputs:
       dry_run:
