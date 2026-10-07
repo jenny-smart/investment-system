@@ -3331,7 +3331,9 @@ def render_history_tab() -> None:
         return
 
     df = pd.DataFrame(rows)
-    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"]).dt.tz_convert("Asia/Taipei")
+    # Supabase stores timestamptz in UTC.  Parse explicitly as UTC first so
+    # timestamps are shown in Taiwan time even if the API omits the offset.
+    df["snapshot_at"] = pd.to_datetime(df["snapshot_at"], utc=True).dt.tz_convert("Asia/Taipei")
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
 
