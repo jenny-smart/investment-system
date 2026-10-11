@@ -137,8 +137,7 @@ def render_other_assets_tab(enriched: pd.DataFrame) -> None:
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
-    # 說明放在第二張卡（其他資產小計）裡面下方，填第一張雙行卡較高留下的空白，不另佔一列
-    cols[1].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
     cols = st.columns(5)
     for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
