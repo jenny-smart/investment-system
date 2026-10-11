@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v93-investment-dividend-label"
+APP_VERSION = "2026-10-11-v94-tw-sell-cost"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1009,6 +1009,10 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
     return float(price), status
 
 
+# 台股賣出成本：手續費 0.1425% + 證交稅 0.3%；台股市值以扣除後的淨值計算
+TW_STOCK_SELL_COST_RATE = 0.004425
+
+
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
     original_units = normalize_number(r.get("original_units", 0), 0)
     units = normalize_number(r.get("units", 0), 0)
@@ -1019,6 +1023,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     market_units = units if units > 0 or is_closed else original_units
     cost_original_currency = total_cost_input if total_cost_input > 0 else original_units * avg_cost
     value_original_currency = market_units * latest_price if latest_price is not None else None
+    if value_original_currency is not None and normalize_text(r.get("asset_type", "")) == "台股":
+        value_original_currency *= 1 - TW_STOCK_SELL_COST_RATE
     twd_cost = cost_original_currency * fx if fx is not None else None
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
