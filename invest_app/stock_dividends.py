@@ -684,7 +684,7 @@ def render_stock_dividend_upload_section(current_positions: pd.DataFrame) -> Non
 
 
 def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.DataFrame) -> None:
-    st.subheader("📈 台股股利")
+    st.subheader("台股股利")
     st.caption("現金股利會加到台股累計配息；股票股利會新增一筆 0 成本持倉列，不會改原本成本。")
     action_col1, action_col2 = st.columns([1, 1])
     if action_col1.button("掃描台股股利候選", key="scan_stock_dividend_candidates"):

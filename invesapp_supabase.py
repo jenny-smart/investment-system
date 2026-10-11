@@ -220,7 +220,7 @@ with st.container():
         st.session_state.pop("latest_values_written_at", None)
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "📈 台股股利"]
+PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "台股股利"]
 
 # 功能列：只執行選到的那一頁（st.tabs 會每次把全部分頁都跑一遍，載入慢）。
 # 選擇記在網址 ?page=，重新整理後停在同一頁。
@@ -252,7 +252,7 @@ try:
     if page == "配息記錄":
         render_dividend_log_tab(enriched, positions)
 
-    if page == "📈 台股股利":
+    if page == "台股股利":
         render_stock_dividend_tab(enriched, positions)
 except Exception as _page_error:
     st.error(f"「{page}」載入失敗：{_page_error}")
