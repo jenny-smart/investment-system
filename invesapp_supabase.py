@@ -4,8 +4,6 @@ import os
 import io
 import re
 import html as html_lib
-import subprocess
-import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -27,17 +25,10 @@ try:
 except Exception:
     HAS_BS4 = False
 
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials as GoogleCredentials
-    HAS_GSPREAD = True
-except Exception:
-    HAS_GSPREAD = False
-
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v69-other-assets-tab"
+APP_VERSION = "2026-10-11-v70-streamlined-tabs"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -51,29 +42,11 @@ OVERVIEW_SHEET_GID = "1120619093"  # 總帳「總覽」分頁（每月加總）
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
-BANK_FUND_TRACKING_SHEET_ID = "1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw"
-BANK_FUND_WORKSHEETS = {
-    "accounts": "銀行帳戶",
-    "bank_transactions": "銀行明細",
-    "fund_positions": "基金明細",
-}
 
 PLATFORMS = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
 ASSET_TYPES = ["台股", "美股", "基金"]
 CURRENCIES = ["TWD", "USD", "CNY", "JPY", "ZAR"]
-CASH_CURRENCIES = ["TWD", "USD", "JPY", "KRW", "CNY", "HKD", "THB", "EUR", "ZAR"]
 
-FX_PAIRS = {
-    "TWD": None,
-    "USD": "USDTWD=X",
-    "CNY": "CNYTWD=X",
-    "JPY": "JPYTWD=X",
-    "KRW": "KRWTWD=X",
-    "HKD": "HKDTWD=X",
-    "THB": "THBTWD=X",
-    "EUR": "EURTWD=X",
-    "ZAR": "ZARTWD=X",
-}
 
 US_STOCK_EXCHANGES = {
     "PYPL": "NASDAQ",
@@ -593,13 +566,6 @@ def pct(v: Any) -> str:
     return "-" if n is None else f"{n:.2%}"
 
 
-def money_short(v: Any) -> str:
-    n = to_float(v)
-    if n is None: return "-"
-    a = abs(n)
-    if a >= 100_000_000: return f"{n/100_000_000:.2f}億"
-    if a >= 10_000: return f"{n/10_000:,.1f}萬"
-    return f"{n:,.0f}"
 
 
 def normalize_ticker(ticker: str) -> str:
@@ -726,13 +692,6 @@ def fmt_md(dt: datetime) -> str:
     return f"{dt.month}/{dt.day:02d}"
 
 
-def is_tw_market_session(dt: datetime | None = None) -> bool:
-    """台股一般交易時段附近：週一到週五 09:00 後到 13:40。"""
-    dt = dt or tw_now()
-    if dt.weekday() >= 5:
-        return False
-    minutes = dt.hour * 60 + dt.minute
-    return 9 * 60 <= minutes <= 13 * 60 + 40
 
 
 def tw_stock_market_prefix(ticker: str) -> str:
@@ -1292,32 +1251,6 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def format_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "sort_order" in out:
-        out["sort_order"] = out["sort_order"].apply(lambda x: "" if pd.isna(x) else str(int(float(x))))
-    for c in ["即時價格/淨值", "匯率"]:
-        if c in out:
-            out[c] = out[c].apply(lambda x: money(x, 4))
-    for c in ["成本原幣", "市值原幣", "台幣成本", "台幣市值", "價差損益", "累計配息原幣", "累計已領配息", "含息總損益", "損益", "每月配息"]:
-        if c in out:
-            out[c] = out[c].apply(money)
-    for rate_col in ["價差損益率", "含息總損益率", "損益率"]:
-        if rate_col in out:
-            out[rate_col] = out[rate_col].apply(pct)
-    rename_map = {
-        "sort_order": "排序", "platform": "平台", "asset_type": "類型",
-        "name": "名稱", "ticker": "股票代碼", "fund_code": "基金代號",
-        "fund_pattern": "基金網址類型", "currency": "幣別",
-        "original_units": "成本股數", "units": "現在股數", "市值股數": "市值股數",
-        "avg_cost": "平均成本", "total_cost_input": "總投入成本",
-        "monthly_dividend_per_unit": "每單位月配息預估",
-        "purchase_ym": "購買年月",
-        "dividend_received_original_total": "累計配息原幣輸入",
-        "dividend_received_total": "累計已領配息台幣舊欄",
-        "dividend_note": "配息備註", "corporate_action": "股數調整備註", "note": "備註",
-    }
-    return out.rename(columns=rename_map)
 
 
 def right_align_numbers(df: pd.DataFrame) -> Any:
@@ -1340,51 +1273,14 @@ def right_align_numbers(df: pd.DataFrame) -> Any:
     return df.style.set_properties(subset=numeric_cols, **{"text-align": "right"})
 
 
-def parse_sheet_number(value: Any) -> float | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text or text in {"-", "—", "nan", "None", "FALSE", "TRUE"}:
-        return None
-    if text.startswith("#"):
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    text = text.strip("()").replace(",", "").replace("$", "").replace("NT", "").strip()
-    is_percent = text.endswith("%")
-    text = text[:-1].strip() if is_percent else text
-    try:
-        number = float(text)
-    except Exception:
-        return None
-    if negative:
-        number = -number
-    return number / 100 if is_percent else number
 
 
-def normalize_sheet_month_label(label: Any) -> str:
-    text = str(label).strip()
-    match = re.fullmatch(r"(20\d{2})[-/](\d{1,2})(?:[-/]\d{1,2})?", text)
-    if not match:
-        return ""
-    return f"{match.group(1)}-{int(match.group(2)):02d}"
 
 
 def online_sheet_url(gid: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/export?format=csv&gid={gid}"
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_online_sheet_csv(gid: str) -> pd.DataFrame:
-    response = requests.get(online_sheet_url(gid), timeout=30)
-    response.raise_for_status()
-    if "<html" in response.text[:200].lower():
-        raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
-    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
-    df = df.dropna(axis=1, how="all")
-    empty_cols = [c for c in df.columns if str(c).startswith("Unnamed") and df[c].astype(str).str.strip().eq("").all()]
-    if empty_cols:
-        df = df.drop(columns=empty_cols)
-    return df
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1407,744 +1303,46 @@ def load_other_assets() -> dict[str, Any] | None:
         return None
 
 
-@st.cache_resource(show_spinner=False)
-def get_bank_fund_sheet_client():
-    if not HAS_GSPREAD:
-        raise RuntimeError("缺少 gspread / google-auth 套件，請確認 requirements.txt 已安裝。")
-    if "gcp_service_account" not in st.secrets:
-        raise RuntimeError("尚未在 Streamlit Secrets 設定 [gcp_service_account]。")
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
-    ]
-    creds = GoogleCredentials.from_service_account_info(dict(st.secrets["gcp_service_account"]), scopes=scopes)
-    return gspread.authorize(creds)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_bank_fund_worksheet(worksheet_name: str) -> pd.DataFrame:
-    client = get_bank_fund_sheet_client()
-    ws = client.open_by_key(BANK_FUND_TRACKING_SHEET_ID).worksheet(worksheet_name)
-    records = ws.get_all_records()
-    return pd.DataFrame(records)
 
 
-def render_bank_fund_query_tab() -> None:
-    st.subheader("🔍 銀行 / 基金明細查詢")
-    try:
-        accounts_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["accounts"])
-        txn_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["bank_transactions"])
-        fund_df = load_bank_fund_worksheet(BANK_FUND_WORKSHEETS["fund_positions"])
-    except Exception as exc:
-        st.error(f"讀取試算表失敗（{type(exc).__name__}）")
-        st.exception(exc)
-        st.caption("請確認 Streamlit Secrets 的 [gcp_service_account] 已設定，且該服務帳戶已被加為試算表的檢視者。")
-        return
-
-    if st.button("🔄 重新整理明細", key="refresh_bank_fund_query"):
-        load_bank_fund_worksheet.clear()
-        st.rerun()
-
-    st.markdown("### 🏦 銀行明細")
-    if txn_df.empty or "銀行" not in txn_df.columns:
-        st.info("目前「銀行明細」分頁尚無資料。")
-    else:
-        banks = sorted(b for b in txn_df["銀行"].dropna().unique() if str(b).strip())
-        bank_choice = st.selectbox("選擇銀行", banks, key="bank_query_bank_choice")
-        bank_view = txn_df[txn_df["銀行"] == bank_choice].copy()
-
-        col1, col2, col3 = st.columns(3)
-        branch_options = ["全部"] + sorted(b for b in bank_view.get("分行", pd.Series(dtype=str)).dropna().unique() if str(b).strip())
-        branch_choice = col1.selectbox("分行", branch_options, key=f"branch_choice_{bank_choice}")
-        currency_options = ["全部"] + sorted(c for c in bank_view.get("幣別", pd.Series(dtype=str)).dropna().unique() if str(c).strip())
-        currency_choice = col2.selectbox("幣別", currency_options, key=f"currency_choice_{bank_choice}")
-        owner_options = ["全部"] + sorted(o for o in bank_view.get("本人/媽媽", pd.Series(dtype=str)).dropna().unique() if str(o).strip())
-        owner_choice = col3.selectbox("本人/媽媽", owner_options, key=f"owner_choice_{bank_choice}")
-
-        if branch_choice != "全部":
-            bank_view = bank_view[bank_view["分行"] == branch_choice]
-        if currency_choice != "全部":
-            bank_view = bank_view[bank_view["幣別"] == currency_choice]
-        if owner_choice != "全部":
-            bank_view = bank_view[bank_view["本人/媽媽"] == owner_choice]
-
-        keyword = st.text_input("關鍵字搜尋（摘要／明細描述／交易對象）", key=f"keyword_{bank_choice}")
-        if keyword:
-            search_cols = [c for c in ("摘要", "明細描述", "交易對象") if c in bank_view.columns]
-            if search_cols:
-                mask = pd.concat(
-                    [bank_view[c].astype(str).str.contains(keyword, case=False, na=False) for c in search_cols],
-                    axis=1,
-                ).any(axis=1)
-                bank_view = bank_view[mask]
-
-        if "交易時間" in bank_view.columns:
-            bank_view = bank_view.sort_values("交易時間", ascending=False)
-        st.caption(f"共 {len(bank_view)} 筆")
-        st.dataframe(bank_view, use_container_width=True, hide_index=True, height=420)
-
-        if not accounts_df.empty and "銀行" in accounts_df.columns:
-            acc_view = accounts_df[accounts_df["銀行"] == bank_choice]
-            if not acc_view.empty:
-                st.caption("帳戶資料（來自「銀行帳戶」分頁）")
-                st.dataframe(acc_view, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.markdown("### 💰 基金明細")
-    if fund_df.empty or "平台" not in fund_df.columns:
-        st.info("目前「基金明細」分頁尚無資料。")
-    else:
-        platforms = sorted(p for p in fund_df["平台"].dropna().unique() if str(p).strip())
-        platform_choice = st.selectbox("選擇基金平台", platforms, key="fund_query_platform_choice")
-        fund_view = fund_df[fund_df["平台"] == platform_choice].copy()
-        if "資料日期" in fund_view.columns:
-            fund_view = fund_view.sort_values("資料日期", ascending=False)
-        st.caption(f"共 {len(fund_view)} 筆")
-        st.dataframe(fund_view, use_container_width=True, hide_index=True, height=420)
 
 
-def month_columns(df: pd.DataFrame) -> list[str]:
-    return [col for col in df.columns if normalize_sheet_month_label(col)]
 
 
-def extract_monthly_total(df: pd.DataFrame, row_label: str = "合計") -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=["月份", "金額"])
-    label_col = df.columns[0]
-    target = df[df[label_col].astype(str).str.strip() == row_label]
-    if target.empty:
-        target = df.head(1)
-    row = target.iloc[0]
-    records = []
-    for col in month_columns(df):
-        month = normalize_sheet_month_label(col)
-        amount = parse_sheet_number(row.get(col))
-        if amount is None:
-            continue
-        records.append({"月份": month, "金額": amount})
-    return pd.DataFrame(records)
 
 
-def build_monthly_long_entries(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=["列號", "月份", "原始項目", "項目", "金額"])
-    label_col = df.columns[0]
-    records = []
-    occurrence_counts: dict[str, int] = {}
-    for row_idx, (_, row) in enumerate(df.iterrows(), start=2):
-        raw_item = normalize_text(row.get(label_col, ""))
-        if not raw_item or raw_item in {"合計", "總計"}:
-            continue
-        item = canonical_cash_subject(raw_item, occurrence_counts)
-        for col in month_columns(df):
-            amount = parse_sheet_number(row.get(col))
-            if amount is None or amount == 0:
-                continue
-            records.append({
-                "列號": row_idx,
-                "月份": normalize_sheet_month_label(col),
-                "原始項目": raw_item,
-                "項目": item,
-                "金額": amount,
-            })
-    return pd.DataFrame(records)
 
 
-def _cash_subject_record(
-    subjects: list[str],
-    category: str,
-    subcategory: str,
-    role: str,
-    target_table: str,
-    cashflow_type: str,
-    note: str = "",
-) -> list[dict[str, str]]:
-    return [
-        {
-            "科目": subject,
-            "大類": category,
-            "子類": subcategory,
-            "資料角色": role,
-            "建議線上表": target_table,
-            "收支屬性": cashflow_type,
-            "備註": note,
-        }
-        for subject in subjects
-    ]
 
 
-CASH_2026_A_COLUMN_SUBJECTS = [
-    "零用金-餐費", "零用金-食材", "零用金-衣飾", "零用金-頭髮",
-    "零用金-化妝保養＋按摩", "零用金-交通1", "零用金-交通2",
-    "零用金-書", "零用金-用品", "零用金-電話", "零用金-電影",
-    "零用金-命理", "零用金-醫療", "零用金-拜拜", "零用金-其他",
-    "零用金-公司", "零用金-公司內勤", "零用金-公司代墊",
-    "零用金-旅行", "零用金-朋友", "零用金-代墊", "零用金-家用",
-    "零用金", "零用金--總支出", "零用金-支出", "零用金-淨值",
-    "薪資入帳", "公司代墊款入帳",
-    "富邦銀行", "富邦銀行-銀行利息", "元大銀行", "元大bank-銀行利息",
-    "郵局", "台新銀行-建北", "台新bank-銀行利息", "台新銀行-信義",
-    "台新銀行-Richard", "台新銀行-子帳戶", "台新銀行-內湖新轉",
-    "連線銀行", "連線bank-銀行利息", "將來銀行", "將來bank-銀行利息",
-    "渣打銀行", "中國信託", "樂天銀行", "樂天bank-銀行利息",
-    "悠遊付", "一卡通", "銀行總額-台幣",
-    "台銀人壽", "國泰人壽", "南山人壽", "台灣人壽", "中國人壽",
-    "保誠人壽", "保險總額", "台新基金", "Taiwan", "China",
-    "台幣換外幣", "美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣",
-    "歐元", "日幣 suica", "渣打美金", "渣打南非", "台新美金",
-    "台新日幣", "台新南非", "銀行總額-外幣", "銀行總額-台/外幣",
-    "借出+投資", "利息+利得", "借入", "借出/入總額",
-    "台股-舊資金", "台股-新資金", "台股投資總值", "富邦奈米投",
-    "基富通-台", "基富通-日", "渣打-美金", "渣打-南非",
-    "台新-美金", "台新-南非", "基金投資總額", "懷思新增投資",
-    "懷思投資total", "投資總額", "配息-懷思投資", "股利-台股",
-    "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
-    "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
-    "配息-台新-美金", "配息-台新-南非", "回饋金-保險",
-    "prettycash", "totalincome",
-    "信用卡-渣打 14", "信用卡-富邦 19", "信用卡-聯邦",
-    "信用卡-星展 08", "信用卡-台新 18", "信用卡-國泰世華 24",
-]
 
 
-CASH_SUBJECT_RULES: list[dict[str, str]] = (
-    _cash_subject_record(
-        [
-            "零用金-餐費", "零用金-食材", "零用金-衣飾", "零用金-頭髮",
-            "零用金-化妝保養＋按摩", "零用金-交通1", "零用金-交通2",
-            "零用金-書", "零用金-用品", "零用金-電話", "零用金-電影",
-            "零用金-命理", "零用金-醫療", "零用金-拜拜", "零用金-其他",
-            "零用金-旅行", "零用金-朋友", "零用金-家用",
-        ],
-        "支出",
-        "零用金生活支出",
-        "expense",
-        "cash_ledger_entries",
-        "支出",
-    )
-    + _cash_subject_record(
-        ["零用金-公司", "零用金-公司內勤", "零用金-公司代墊", "零用金-代墊"],
-        "支出/代墊",
-        "零用金代墊",
-        "advance_expense",
-        "cash_ledger_entries",
-        "代墊",
-        "後續可用公司代墊款入帳沖銷。",
-    )
-    + _cash_subject_record(
-        ["零用金"],
-        "現金/銀行",
-        "零用金餘額",
-        "account_balance",
-        "cash_accounts",
-        "餘額",
-        "A25 是零用金餘額科目，可作為轉出/轉入端點；A2-A24 才是零用金支出分類。",
-    )
-    + _cash_subject_record(
-        ["零用金--總支出", "零用金-支出", "零用金-淨值", "月支出", "prettycash"],
-        "彙總",
-        "零用金彙總",
-        "summary",
-        "cash_monthly_snapshots",
-        "彙總",
-        "這類通常是公式結果，不應當作單筆交易重複入帳。",
-    )
-    + _cash_subject_record(
-        ["薪資入帳", "公司代墊款入帳"],
-        "收入",
-        "薪資/代墊款入帳",
-        "income",
-        "cash_ledger_entries",
-        "收入",
-    )
-    + _cash_subject_record(
-        [
-            "富邦銀行", "元大銀行", "郵局", "台新銀行-建北", "台新銀行-信義",
-            "台新銀行-Richard", "台新銀行-子帳戶", "台新銀行-內湖新轉",
-            "連線銀行", "將來銀行", "渣打銀行", "中國信託", "樂天銀行",
-            "悠遊付", "一卡通",
-        ],
-        "現金/銀行",
-        "台幣帳戶",
-        "account_balance",
-        "cash_accounts",
-        "餘額",
-        "轉線上時做帳戶餘額或月份快照，不當作收入或支出。",
-    )
-    + _cash_subject_record(
-        [
-            "富邦銀行-銀行利息", "元大bank-銀行利息", "台新bank-銀行利息",
-            "連線bank-銀行利息", "將來bank-銀行利息", "樂天bank-銀行利息",
-        ],
-        "收入",
-        "銀行利息",
-        "interest_income",
-        "cash_ledger_entries",
-        "收入",
-    )
-    + _cash_subject_record(
-        ["台銀人壽", "國泰人壽", "南山人壽", "台灣人壽", "中國人壽", "新光人壽", "保誠人壽"],
-        "保險",
-        "保單/保險資產",
-        "insurance_balance",
-        "insurance_accounts",
-        "餘額",
-    )
-    + _cash_subject_record(
-        ["保費支出"],
-        "支出",
-        "保費支出",
-        "insurance_expense",
-        "cash_ledger_entries",
-        "支出",
-    )
-    + _cash_subject_record(
-        ["保險回饋金", "回饋金-保險"],
-        "收入",
-        "保險回饋",
-        "insurance_rebate",
-        "cash_ledger_entries",
-        "收入",
-    )
-    + _cash_subject_record(
-        ["台幣換外幣"],
-        "轉帳/換匯",
-        "台幣換外幣",
-        "fx_transfer",
-        "cash_transfers",
-        "轉帳",
-    )
-    + _cash_subject_record(
-        ["美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"],
-        "現金/銀行",
-        "外幣現金",
-        "foreign_cash_balance",
-        "cash_accounts",
-        "餘額",
-    )
-    + _cash_subject_record(
-        ["渣打美金", "渣打南非", "台新美金", "台新日幣", "台新南非"],
-        "現金/銀行",
-        "外幣銀行帳戶",
-        "foreign_account_balance",
-        "cash_accounts",
-        "餘額",
-    )
-    + _cash_subject_record(
-        ["借入"],
-        "借款",
-        "借入",
-        "loan_payable",
-        "loan_entries",
-        "借入",
-    )
-    + _cash_subject_record(
-        ["借出+投資"],
-        "借款/投資",
-        "借出與投資",
-        "loan_or_investment_outflow",
-        "loan_entries",
-        "借出/投資",
-    )
-    + _cash_subject_record(
-        ["借出+代墊+借入小計"],
-        "彙總",
-        "借款代墊小計",
-        "summary",
-        "cash_monthly_snapshots",
-        "彙總",
-    )
-    + _cash_subject_record(
-        [
-            "台股-舊資金", "台股-新資金", "台股", "富邦奈米投",
-            "台新基金", "基富通-台", "基富通-人", "基富通-日", "渣打-美金",
-            "渣打-南非", "台新-美金", "台新-南非",
-            "懷思投資", "懷思新增投資", "notyetincome",
-        ],
-        "投資",
-        "投資資金/帳戶",
-        "investment_transfer_or_balance",
-        "investment_cash_links",
-        "投資/轉帳",
-    )
-    + _cash_subject_record(
-        [
-            "銀行總額-台幣", "保險總額", "銀行總額-外幣", "銀行總額-台/外幣",
-            "借出/入總額", "台股投資總值", "基金投資總額", "懷思投資total",
-            "投資總額", "Taiwan", "totalincome", "總淨值", "net confirm",
-            "投資", "外幣",
-        ],
-        "彙總",
-        "總額/公式列",
-        "summary",
-        "cash_monthly_snapshots",
-        "彙總",
-        "Google Sheet 公式或區塊標題，不建立互轉帳戶。",
-    )
-    + _cash_subject_record(
-        [
-            "懷思投資報酬", "基金配息", "j渣打-大華",
-            "配息-懷思投資", "股利-台股",
-            "配息-基富通-台", "配息-基富通-人", "配息-基富通-日",
-            "配息-渣打-大華", "配息-渣打-美金", "配息-渣打-南非",
-            "配息-台新-美金", "配息-台新-南非",
-        ],
-        "收入",
-        "投資收入",
-        "investment_income",
-        "cash_ledger_entries",
-        "收入",
-    )
-    + _cash_subject_record(
-        [
-            "信用卡-渣打 14", "信用卡-富邦 19", "信用卡-聯邦",
-            "信用卡-星展 08", "信用卡-台新 18", "信用卡-國泰世華 24",
-        ],
-        "支出",
-        "信用卡消費",
-        "credit_card_expense",
-        "cash_ledger_entries",
-        "支出",
-        "信用卡消費只記分類，不建立互轉帳戶。",
-    )
-)
 
 
-CASH_SUBJECT_LOOKUP: dict[str, dict[str, str]] = {
-    normalize_text(row["科目"]): row for row in CASH_SUBJECT_RULES
-}
 
 
-def _sheet_row_number(sheet_row: Any) -> int | None:
-    try:
-        if sheet_row is None or pd.isna(sheet_row):
-            return None
-        return int(float(sheet_row))
-    except Exception:
-        return None
 
 
-def _is_sheet_petty_cash_expense_row(sheet_row: Any) -> bool:
-    row_num = _sheet_row_number(sheet_row)
-    return row_num in SHEET_PETTY_CASH_EXPENSE_ROWS if row_num is not None else False
 
 
-def _is_sheet_credit_card_expense_row(sheet_row: Any) -> bool:
-    row_num = _sheet_row_number(sheet_row)
-    return row_num in SHEET_CREDIT_CARD_EXPENSE_ROWS if row_num is not None else False
 
 
-def _is_sheet_summary_subject(subject: Any, sheet_row: Any = None) -> bool:
-    item = normalize_text(subject)
-    row_num = _sheet_row_number(sheet_row)
-    return (row_num in SHEET_SUMMARY_ROWS if row_num is not None else False) or item in SHEET_SUMMARY_SUBJECTS
 
 
-def _infer_cash_account_category_from_subject(subject: Any, fallback: str = "其他") -> str:
-    item = normalize_text(subject)
-    if item == "零用金" or item in {"悠遊付", "一卡通"}:
-        return "現金"
-    if any(token in item for token in ["美金", "美元", "日幣", "日圓", "韓幣", "人民幣", "港幣", "泰幣", "歐元", "南非"]):
-        return "外幣"
-    if item.endswith("人壽") or "保險" in item:
-        return "保險"
-    if any(token in item for token in ["台股", "基金", "投資", "基富通", "渣打-", "台新-", "奈米投", "China"]):
-        return "投資"
-    if "借" in item or "代墊" in item:
-        return "借款/代墊"
-    if "銀行" in item or item in {"郵局", "中國信託", "樂天銀行", "連線銀行", "將來銀行"}:
-        return "銀行"
-    return fallback if fallback in CASH_ACCOUNT_CATEGORIES else "其他"
 
 
-def _sheet_transfer_account_rule(subject: str, raw_subject: str = "") -> dict[str, str]:
-    item = normalize_text(subject)
-    raw_item = normalize_text(raw_subject)
-    category = _infer_cash_account_category_from_subject(item)
-    source_note = f"依目前 A 欄自動納入互轉科目"
-    if raw_item and raw_item != item:
-        source_note += f"（原始科目：{raw_item}）"
-    return {
-        "科目": item,
-        "大類": category,
-        "子類": "線上 A 欄互轉科目",
-        "資料角色": "sheet_transfer_account",
-        "建議線上表": "cash_accounts",
-        "收支屬性": "餘額/互轉",
-        "備註": source_note,
-    }
 
 
-def classify_cash_subject(subject: Any, sheet_row: Any = None, raw_subject: Any = "") -> dict[str, str]:
-    item = normalize_text(subject)
-    raw_item = normalize_text(raw_subject) or item
-    if item in CASH_SUBJECT_LOOKUP:
-        return CASH_SUBJECT_LOOKUP[item]
-    if not item:
-        return {"科目": item, "大類": "未分類", "子類": "空白", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": ""}
-    if _is_sheet_petty_cash_expense_row(sheet_row):
-        return {"科目": item, "大類": "支出", "子類": "零用金生活支出", "資料角色": "expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依 2026細帳 A2-A24 判斷"}
-    if _is_sheet_credit_card_expense_row(sheet_row):
-        return {"科目": item, "大類": "支出", "子類": "信用卡消費", "資料角色": "credit_card_expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依 2026細帳 A132-A137 判斷"}
-    if _is_sheet_summary_subject(raw_item, sheet_row) or _is_sheet_summary_subject(item, sheet_row):
-        return {"科目": item, "大類": "彙總", "子類": "總額/公式列", "資料角色": "summary", "建議線上表": "cash_monthly_snapshots", "收支屬性": "彙總", "備註": "Google Sheet 公式或區塊標題，不建立互轉帳戶"}
-    if "銀行利息" in item or "bank-銀行利息" in item:
-        return {"科目": item, "大類": "收入", "子類": "銀行利息", "資料角色": "interest_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
-    if item.startswith("零用金-") or item.startswith("零用金--"):
-        return {"科目": item, "大類": "支出", "子類": "零用金待確認", "資料角色": "expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "依零用金前綴自動判斷"}
-    if item.startswith("信用卡-"):
-        return {"科目": item, "大類": "支出", "子類": "信用卡消費", "資料角色": "credit_card_expense", "建議線上表": "cash_ledger_entries", "收支屬性": "支出", "備註": "信用卡消費只記分類，不建立互轉帳戶"}
-    if item.endswith("人壽"):
-        return {"科目": item, "大類": "保險", "子類": "保單/保險資產", "資料角色": "insurance_balance", "建議線上表": "insurance_accounts", "收支屬性": "餘額", "備註": "依人壽名稱自動判斷"}
-    if item.startswith("j-") or item.startswith("j"):
-        return {"科目": item, "大類": "收入", "子類": "投資收入", "資料角色": "investment_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依 j 配息前綴自動判斷"}
-    if "配息" in item or "股利" in item or "投資報酬" in item:
-        return {"科目": item, "大類": "收入", "子類": "投資收入", "資料角色": "investment_income", "建議線上表": "cash_ledger_entries", "收支屬性": "收入", "備註": "依名稱自動判斷"}
-    if "銀行" in item or item in {"郵局", "中國信託", "悠遊付", "一卡通"}:
-        return {"科目": item, "大類": "現金/銀行", "子類": "帳戶待確認", "資料角色": "account_balance", "建議線上表": "cash_accounts", "收支屬性": "餘額", "備註": "依帳戶名稱自動判斷"}
-    if _sheet_row_number(sheet_row) is not None:
-        return _sheet_transfer_account_rule(item, raw_item)
-    return {"科目": item, "大類": "未分類", "子類": "待確認", "資料角色": "unknown", "建議線上表": "", "收支屬性": "未分類", "備註": "需人工確認"}
 
 
-def cash_subject_catalog_df() -> pd.DataFrame:
-    rows = list(CASH_SUBJECT_RULES)
-    known = {normalize_text(row.get("科目", "")) for row in rows}
-    for subject in CASH_2026_A_COLUMN_SUBJECTS:
-        item = normalize_text(subject)
-        if item and item not in known:
-            rows.append(classify_cash_subject(item))
-            known.add(item)
-    return pd.DataFrame(rows).drop_duplicates(subset=["科目"], keep="first")
 
 
-def enrich_cash_ledger_entries(long_entries: pd.DataFrame) -> pd.DataFrame:
-    if long_entries.empty:
-        return pd.DataFrame(columns=["列號", "月份", "原始項目", "項目", "金額", "大類", "子類", "資料角色", "建議線上表", "收支屬性", "備註"])
-    rows = []
-    for _, row in long_entries.iterrows():
-        raw_item = normalize_text(row.get("原始項目", row.get("項目", "")))
-        item = normalize_text(row.get("項目", "")) or canonical_cash_subject(raw_item)
-        rule = classify_cash_subject(item, row.get("列號"), raw_item)
-        rows.append({
-            "列號": row.get("列號", ""),
-            "月份": row.get("月份", ""),
-            "原始項目": raw_item,
-            "項目": item,
-            "金額": row.get("金額", 0),
-            "大類": rule.get("大類", ""),
-            "子類": rule.get("子類", ""),
-            "資料角色": rule.get("資料角色", ""),
-            "建議線上表": rule.get("建議線上表", ""),
-            "收支屬性": rule.get("收支屬性", ""),
-            "備註": rule.get("備註", ""),
-        })
-    return pd.DataFrame(rows)
 
 
-def sheet_health_rows(loaded: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    rows = []
-    error_pattern = re.compile(r"#(?:REF!|DIV/0!|N/A|VALUE!|NAME\\?|ERROR!)")
-    for name, df in loaded.items():
-        values = df.astype(str)
-        error_count = int(values.apply(lambda col: col.str.contains(error_pattern, regex=True, na=False)).sum().sum())
-        non_empty = int(values.apply(lambda col: col.str.strip().ne("")).sum().sum())
-        rows.append({
-            "資料表": name,
-            "列數": len(df),
-            "欄數": len(df.columns),
-            "非空白儲存格": non_empty,
-            "公式錯誤格": error_count,
-            "CSV": online_sheet_url(ONLINE_SHEET_SOURCES[name]),
-        })
-    return pd.DataFrame(rows)
 
 
-def render_online_sheets_tab() -> None:
-    st.subheader("📥 Google Sheet 舊表匯入 / 檢查")
-    st.caption("這裡只讀取線上總表、檢查科目與匯入舊資料；正式帳戶餘額與新增交易請到「現金流」。")
-
-    loaded: dict[str, pd.DataFrame] = {}
-    failures: list[dict[str, str]] = []
-    for name, gid in ONLINE_SHEET_SOURCES.items():
-        try:
-            loaded[name] = load_online_sheet_csv(gid)
-        except Exception as exc:
-            failures.append({"資料表": name, "狀態": str(exc)})
-
-    if failures:
-        st.error("部分 Google Sheet 無法讀取。")
-        st.dataframe(pd.DataFrame(failures), use_container_width=True, hide_index=True)
-
-    if not loaded:
-        return
-
-    sheet_tabs = st.tabs(["每月收入", "2026細帳", "現金科目", "資產總覽", "資料健康"])
-
-    with sheet_tabs[0]:
-        income = loaded.get("每月收入", pd.DataFrame())
-        monthly = extract_monthly_total(income, "合計")
-        if monthly.empty:
-            st.info("沒有讀到每月收入合計列。")
-        else:
-            current_year = monthly[monthly["月份"].astype(str).str.startswith("2026-")]
-            nonzero = current_year[current_year["金額"] != 0]
-            latest = nonzero.iloc[-1] if not nonzero.empty else current_year.iloc[-1] if not current_year.empty else monthly.iloc[-1]
-            c1, c2, c3 = st.columns(3)
-            c1.metric("2026 已估/已入帳收入", money(current_year["金額"].sum()))
-            c2.metric("最近月份", latest["月份"])
-            c3.metric("最近月份金額", money(latest["金額"]))
-            st.dataframe(
-                monthly,
-                use_container_width=True,
-                hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-
-    with sheet_tabs[1]:
-        ledger = loaded.get("2026細帳", pd.DataFrame())
-        long_entries = build_monthly_long_entries(ledger)
-        if long_entries.empty:
-            st.info("沒有讀到 2026 細帳月份資料。")
-        else:
-            monthly_sum = long_entries.groupby("月份", as_index=False)["金額"].sum()
-            category_sum = (
-                long_entries.groupby("項目", as_index=False)["金額"]
-                .sum()
-                .assign(abs_sum=lambda d: d["金額"].abs())
-                .sort_values("abs_sum", ascending=False)
-                .drop(columns=["abs_sum"])
-                .head(30)
-            )
-            c1, c2, c3 = st.columns(3)
-            c1.metric("線上細帳筆數", f"{len(long_entries):,}")
-            c2.metric("月份數", f"{long_entries['月份'].nunique():,}")
-            c3.metric("非零項目數", f"{long_entries['項目'].nunique():,}")
-            st.markdown("#### 月份合計")
-            st.dataframe(
-                monthly_sum,
-                use_container_width=True,
-                hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-            st.markdown("#### 金額最大的項目")
-            st.dataframe(
-                category_sum,
-                use_container_width=True,
-                hide_index=True,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-            st.markdown("#### 明細")
-            st.dataframe(
-                long_entries.sort_values(["月份", "項目"]),
-                use_container_width=True,
-                hide_index=True,
-                height=520,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-
-    with sheet_tabs[2]:
-        ledger = loaded.get("2026細帳", pd.DataFrame())
-        long_entries = build_monthly_long_entries(ledger)
-        catalog = cash_subject_catalog_df()
-        st.markdown("#### 科目字典")
-        st.caption("這裡先把你提供的科目轉成線上規則：支出、收入、銀行帳戶、利息、換匯、投資、借款、配息、信用卡與彙總列。")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("已定義科目", f"{len(catalog):,}")
-        c2.metric("大類數", f"{catalog['大類'].nunique():,}")
-        c3.metric("建議線上表", f"{catalog['建議線上表'].nunique():,}")
-
-        if long_entries.empty:
-            st.info("沒有讀到 2026 細帳月份資料，先顯示科目字典。")
-        else:
-            classified = enrich_cash_ledger_entries(long_entries)
-            unknown = (
-                classified[classified["大類"] == "未分類"]
-                .groupby("項目", as_index=False)["金額"]
-                .sum()
-                .assign(abs_sum=lambda d: d["金額"].abs())
-                .sort_values("abs_sum", ascending=False)
-                .drop(columns=["abs_sum"])
-            )
-            summary = (
-                classified.groupby(["大類", "子類", "資料角色", "建議線上表", "收支屬性"], as_index=False)["金額"]
-                .sum()
-                .assign(abs_sum=lambda d: d["金額"].abs())
-                .sort_values(["大類", "abs_sum"], ascending=[True, False])
-                .drop(columns=["abs_sum"])
-            )
-            month_summary = (
-                classified.groupby(["月份", "大類"], as_index=False)["金額"]
-                .sum()
-                .pivot(index="月份", columns="大類", values="金額")
-                .fillna(0)
-                .reset_index()
-            )
-            k1, k2, k3 = st.columns(3)
-            k1.metric("已轉換明細", f"{len(classified):,}")
-            k2.metric("已分類項目", f"{classified[classified['大類'] != '未分類']['項目'].nunique():,}")
-            k3.metric("未分類項目", f"{unknown['項目'].nunique():,}")
-
-            st.markdown("#### 線上轉換摘要")
-            st.dataframe(
-                summary,
-                use_container_width=True,
-                hide_index=True,
-                height=min(42 * len(summary) + 44, 420),
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-            st.markdown("#### 月份 × 大類")
-            st.dataframe(
-                month_summary,
-                use_container_width=True,
-                hide_index=True,
-                height=min(42 * len(month_summary) + 44, 360),
-            )
-            if not unknown.empty:
-                st.warning("仍有未分類科目，這些需要再補規則。")
-                st.dataframe(
-                    unknown,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(42 * len(unknown) + 44, 280),
-                    column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-                )
-            st.markdown("#### 轉換後明細")
-            st.dataframe(
-                classified.sort_values(["月份", "大類", "項目"]),
-                use_container_width=True,
-                hide_index=True,
-                height=520,
-                column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")},
-            )
-
-        st.markdown("#### 科目字典明細")
-        st.dataframe(
-            catalog.sort_values(["大類", "子類", "科目"]),
-            use_container_width=True,
-            hide_index=True,
-            height=520,
-        )
-
-    with sheet_tabs[3]:
-        overview = loaded.get("資產總覽", pd.DataFrame())
-        if overview.empty:
-            st.info("沒有讀到資產總覽資料。")
-        else:
-            st.dataframe(overview.head(80), use_container_width=True, hide_index=True, height=560)
-
-    with sheet_tabs[4]:
-        health = sheet_health_rows(loaded)
-        st.dataframe(
-            health,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "非空白儲存格": st.column_config.NumberColumn("非空白儲存格", format="%.0f"),
-                "公式錯誤格": st.column_config.NumberColumn("公式錯誤格", format="%.0f"),
-                "CSV": st.column_config.LinkColumn("CSV"),
-            },
-        )
 
 
 def seed_presets() -> None:
@@ -2598,36 +1796,10 @@ def _get_gas_monthly_div(fund_code: str) -> float | None:
     return _get_gas_data(fund_code).get("monthly_div")
 
 
-def _get_gas_ex_date(fund_code: str) -> str | None:
-    """除息日 YYYY/MM/DD，用於單位數快照判斷"""
-    return _get_gas_data(fund_code).get("ex_date")
 
 
-def _get_gas_pay_date(fund_code: str) -> str | None:
-    """發放日 YYYY/MM/DD，用於累計配息認列"""
-    return _get_gas_data(fund_code).get("pay_date")
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_stock_date(ticker: str) -> str:
-    """Yahoo Finance 最新報價日期，回傳 M/DD"""
-    ticker = normalize_ticker(ticker)
-    if not ticker or not HAS_YF:
-        return "—"
-    try:
-        t = yf.Ticker(ticker)
-        hist = t.history(period="5d")
-        if not hist.empty:
-            last = hist.index[-1]
-            if hasattr(last, "strftime"):
-                # %-m 去掉前導零（Linux）；Windows 用 %#m
-                try:
-                    return last.strftime("%-m/%d")
-                except ValueError:
-                    return last.strftime("%m/%d").lstrip("0").replace("/0", "/")
-    except Exception:
-        pass
-    return "—"
 
 
 def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
@@ -3347,8 +2519,8 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
 
 
 def render_other_assets_tab() -> None:
-    """其他資產總覽分頁：各類小卡 + 明細（比照平台群組格式）+ 每月加總。"""
-    st.markdown("### 🏦 其他資產總覽")
+    """非投資總覽分頁：各類小卡 + 明細（比照平台群組格式）+ 每月加總。"""
+    st.markdown("### 🏦 非投資總覽")
     other = load_other_assets()
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
@@ -3727,11 +2899,6 @@ def _latest_past_date(values: list[Any]) -> str:
     return max(parsed_dates).strftime("%Y/%m/%d")
 
 
-def _latest_dividend_reference_date(gas: dict[str, Any], history_rows: list[dict[str, Any]]) -> str:
-    ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
-    if ex_date != "—":
-        return ex_date
-    return _latest_past_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
 
 
 def _dividend_record_variants(fund_code: str, platform: str, currency: str) -> list[tuple[str, str, str]]:
@@ -4161,46 +3328,6 @@ def render_estimated_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> 
     )
 
 
-def update_position_dividend_original_total(
-    fund_code: str,
-    platform: str,
-    currency: str,
-    delta_original: float,
-) -> bool:
-    delta_original = normalize_number(delta_original, 0)
-    if not fund_code or delta_original == 0:
-        return False
-    try:
-        rows = supabase_client().table("positions").select(
-            "id,sort_order,fund_code,platform,currency,dividend_received_original_total"
-        ).eq("platform", platform).eq("currency", currency).execute().data or []
-    except Exception:
-        rows = []
-    matched = [
-        row for row in rows
-        if normalize_text(row.get("fund_code", "")).lower() == normalize_text(fund_code).lower()
-    ]
-    if not matched:
-        return False
-    matched = sorted(
-        matched,
-        key=lambda row: (
-            normalize_number(row.get("sort_order", 999999), 999999),
-            normalize_number(row.get("id", 999999), 999999),
-        ),
-    )
-    primary = matched[0]
-    primary_id = int(float(primary["id"]))
-    current_total = normalize_number(primary.get("dividend_received_original_total", 0), 0)
-    new_total = max(0, current_total + delta_original)
-    sb = supabase_client()
-    for row in matched:
-        rid = int(float(row["id"]))
-        sb.table("positions").update({
-            "dividend_received_original_total": new_total if rid == primary_id else 0,
-            "dividend_received_total": 0,
-        }).eq("id", rid).execute()
-    return True
 
 
 def _paid_dividend_original_amount(record: dict[str, Any]) -> float:
@@ -5647,1104 +4774,84 @@ def full_reset_rebuild_section(current_positions: pd.DataFrame) -> None:
 # ★ 現金流 Tab：帳戶、交易、科目字典
 # ════════════════════════════════════════════════════════════════════════════
 
-TXN_TYPES = ["轉帳", "收入", "支出", "利息收入", "利息支出", "信用卡消費", "投資買入", "投資賣出", "借入", "借出", "代墊"]
-CASHFLOW_TRANSFER_TYPES = {"轉帳"}
-CASHFLOW_INCOME_TYPES = {"收入", "利息收入", "投資賣出", "借入"}
-CASHFLOW_EXPENSE_TYPES = {"支出", "利息支出", "信用卡消費", "投資買入", "借出", "代墊"}
-CASH_ACCOUNT_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"]
-NET_ASSET_CATEGORIES = ["現金", "銀行", "外幣", "投資", "保險"]
-LIABILITY_CATEGORIES = ["借款/代墊"]
-TRANSFER_ACCOUNT_CATEGORIES = {"現金", "銀行", "外幣", "投資", "保險", "借款/代墊", "其他"}
-TRANSFER_ACCOUNT_ROLES = {
-    "account_balance", "foreign_cash_balance", "foreign_account_balance",
-    "insurance_balance", "investment_transfer_or_balance",
-    "loan_payable", "loan_or_investment_outflow", "fx_transfer",
-    "sheet_transfer_account",
-}
-SHEET_PETTY_CASH_EXPENSE_ROWS = set(range(2, 25))
-SHEET_CREDIT_CARD_EXPENSE_ROWS = set(range(132, 138))
-SHEET_SUMMARY_ROWS = {26, 27, 28, 63, 72, 93, 94, 96, 99, 103, 111, 113, 114, 129, 131, 138, 140, 141, 142, 146, 147}
-SHEET_SUMMARY_SUBJECTS = {
-    "零用金--總支出", "零用金-支出", "零用金-淨值", "prettycash", "月支出", "總支出",
-    "銀行總額-台幣", "保險總額", "銀行總額-外幣", "銀行總額-台/外幣",
-    "借出/入總額", "利息+利得", "台股投資總值", "基金投資總額",
-    "懷思投資total", "投資總額", "Taiwan", "totalincome", "總淨值",
-    "net confirm", "投資", "外幣",
-}
-
-CASH_SUBJECT_ALIASES = {
-    "food": "零用金-餐費",
-    "clothes": "零用金-衣飾",
-    "shoes": "零用金-衣飾",
-    "hair": "零用金-頭髮",
-    "makingup+按摩": "零用金-化妝保養＋按摩",
-    "books": "零用金-書",
-    "用品": "零用金-用品",
-    "tel": "零用金-電話",
-    "movie": "零用金-電影",
-    "sing": "零用金-命理",
-    "medicine": "零用金-醫療",
-    "拜拜": "零用金-拜拜",
-    "other": "零用金-其他",
-    "company-檸檬早午餐": "零用金-公司",
-    "company-檸檬內勤": "零用金-公司內勤",
-    "company-檸檬代墊": "零用金-公司代墊",
-    "travel": "零用金-旅行",
-    "friends": "零用金-朋友",
-    "home": "零用金-家用",
-    "prettycash": "prettycash",
-    "總支出": "零用金--總支出",
-    "支出": "零用金-支出",
-    "netprettycash": "零用金-淨值",
-    "salary": "薪資入帳",
-    "台新基金": "台新基金",
-    "日幣 suica": "日幣",
-    "stock": "台股-舊資金",
-    "new stock": "台股-新資金",
-    "stock total": "台股",
-    "j-基富通-台": "基金配息",
-    "j-基富通-人": "基金配息",
-    "j-基富通-日": "基金配息",
-    "j-渣打-大華": "j渣打-大華",
-    "j-渣打-美金": "基金配息",
-    "j-渣打-南非": "基金配息",
-    "j-台新-美金": "基金配息",
-    "j-台新-南非": "基金配息",
-    "credit渣打 14": "信用卡-渣打 14",
-    "credit富邦 19": "信用卡-富邦 19",
-    "credit聯邦": "信用卡-聯邦",
-    "credit花旗 08": "信用卡-星展 08",
-    "credit台新 18": "信用卡-台新 18",
-    "credit國泰世華 24": "信用卡-國泰世華 24",
-    "保費": "保費支出",
-}
-
-CASH_SUBJECT_OCCURRENCE_ALIASES = {
-    ("traffic", 1): "零用金-交通1",
-    ("traffic", 2): "零用金-交通2",
-    ("代墊", 1): "零用金-代墊",
-    ("代墊", 2): "公司代墊款入帳",
-}
-
-
-def canonical_cash_subject(subject: Any, occurrence_counts: dict[str, int] | None = None) -> str:
-    item = normalize_text(subject)
-    if not item:
-        return ""
-    if occurrence_counts is not None:
-        occurrence_counts[item] = occurrence_counts.get(item, 0) + 1
-        occurrence_alias = CASH_SUBJECT_OCCURRENCE_ALIASES.get((item, occurrence_counts[item]))
-        if occurrence_alias:
-            return occurrence_alias
-    return CASH_SUBJECT_ALIASES.get(item, item)
-
-
-def _is_transfer_account_rule(rule: dict[str, str]) -> bool:
-    role = normalize_text(rule.get("資料角色", ""))
-    return role in TRANSFER_ACCOUNT_ROLES
-
-
-def _unique_keep_order(values: list[Any]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        text = normalize_text(value)
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        out.append(text)
-    return out
-
-
-def cash_subject_options() -> list[str]:
-    return _unique_keep_order(CASH_2026_A_COLUMN_SUBJECTS)
-
-
-def cash_transfer_subject_options() -> list[str]:
-    subjects: list[str] = []
-    for subject in cash_subject_options():
-        rule = classify_cash_subject(subject)
-        if normalize_text(rule.get("資料角色", "")) == "summary":
-            continue
-        subjects.append(subject)
-    return subjects
-
-
-def _cashflow_kind(txn_type: str) -> str:
-    txn_type = normalize_text(txn_type)
-    if txn_type in CASHFLOW_TRANSFER_TYPES:
-        return "transfer"
-    if txn_type in CASHFLOW_INCOME_TYPES:
-        return "income"
-    if txn_type in CASHFLOW_EXPENSE_TYPES:
-        return "expense"
-    return "expense"
-
-
-def cash_subject_options_for_txn(txn_type: str) -> list[str]:
-    kind = _cashflow_kind(txn_type)
-    all_options = cash_subject_options()
-    if kind == "transfer":
-        return []
-
-    expense_roles = {
-        "expense", "advance_expense", "credit_card_expense",
-        "insurance_expense", "loan_or_investment_outflow",
-    }
-    income_roles = {
-        "income", "interest_income", "investment_income",
-        "insurance_rebate", "loan_payable",
-    }
-    wanted_roles = expense_roles if kind == "expense" else income_roles
-    wanted_cashflow = {"支出", "代墊", "借出/投資"} if kind == "expense" else {"收入", "借入"}
-
-    filtered = []
-    for subject in all_options:
-        rule = classify_cash_subject(subject)
-        role = normalize_text(rule.get("資料角色", ""))
-        cashflow_type = normalize_text(rule.get("收支屬性", ""))
-        if role in wanted_roles or cashflow_type in wanted_cashflow:
-            filtered.append(subject)
-    return filtered or all_options
-
-
-def _default_subject_index(options: list[str], preferred: str = "") -> int:
-    if not options:
-        return 0
-    if preferred and preferred in options:
-        return options.index(preferred)
-    return 0
-
-
-def _cash_subject_currency(subject: str) -> str:
-    subject = normalize_text(subject)
-    if any(token in subject for token in ["美金", "美元"]):
-        return "USD"
-    if "日幣" in subject or "日圓" in subject or subject.endswith("-日") or "台新日幣" in subject:
-        return "JPY"
-    if "人民幣" in subject or subject.endswith("-人"):
-        return "CNY"
-    if "南非" in subject:
-        return "ZAR"
-    if "韓幣" in subject:
-        return "KRW"
-    if "港幣" in subject:
-        return "HKD"
-    if "泰幣" in subject:
-        return "THB"
-    if "歐元" in subject:
-        return "EUR"
-    return "TWD"
-
-
-def _cash_account_category(rule: dict[str, str]) -> str:
-    subject = normalize_text(rule.get("科目", ""))
-    role = normalize_text(rule.get("資料角色", ""))
-    category = normalize_text(rule.get("大類", ""))
-    if subject == "零用金":
-        return "現金"
-    if role == "sheet_transfer_account":
-        return _infer_cash_account_category_from_subject(subject, category)
-    if role == "fx_transfer":
-        return "外幣"
-    if role == "advance_expense":
-        return "支出"
-    if category.startswith("支出"):
-        return "支出"
-    if category == "收入":
-        return "收入"
-    if category == "轉帳/換匯":
-        return "轉帳/換匯"
-    if role in {"account_balance"}:
-        return "銀行" if subject not in {"悠遊付", "一卡通"} else "現金"
-    if role in {"foreign_cash_balance", "foreign_account_balance", "fx_transfer"}:
-        return "外幣"
-    if role == "insurance_balance" or category == "保險":
-        return "保險"
-    if role in {"investment_transfer_or_balance"} or category == "投資":
-        return "投資"
-    if role in {"credit_card_balance"} or category == "負債":
-        return "信用卡"
-    if role in {"loan_payable", "loan_or_investment_outflow"} or "借" in category:
-        return "借款/代墊"
-    return "其他"
-
-
-def _cash_account_bank_name(subject: str, account_category: str) -> tuple[str, str]:
-    subject = normalize_text(subject)
-    if subject == "零用金":
-        return "零用金", "主帳戶"
-    if account_category in {"支出", "收入"}:
-        if "-" in subject:
-            bank, name = subject.split("-", 1)
-            return bank, name or subject
-        return account_category, subject
-    if account_category == "信用卡" and subject.startswith("信用卡-"):
-        return "信用卡", subject.replace("信用卡-", "", 1)
-    if account_category == "外幣" and subject in {"美金", "日幣", "韓幣", "人民幣", "港幣", "泰幣", "歐元"}:
-        return "外幣現金", subject
-    if account_category == "保險":
-        return subject, "保單"
-    if "-" in subject:
-        bank, name = subject.split("-", 1)
-        return bank, name or subject
-    if account_category == "投資":
-        return subject, "投資帳戶"
-    if account_category == "借款/代墊":
-        return subject, "往來帳戶"
-    return subject, "主帳戶"
-
-
-def cash_account_preset_rows() -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for _, rule in cash_subject_catalog_df().iterrows():
-        subject = normalize_text(rule.get("科目", ""))
-        role = normalize_text(rule.get("資料角色", ""))
-        rule_dict = rule.to_dict()
-        if role == "summary" or subject not in cash_transfer_subject_options():
-            continue
-        if subject in seen:
-            continue
-        seen.add(subject)
-        category = _cash_account_category(rule_dict)
-        bank, name = _cash_account_bank_name(subject, category)
-        rows.append({
-            "科目": subject,
-            "category": category,
-            "bank": bank,
-            "name": name,
-            "currency": _cash_subject_currency(subject),
-            "note": f"預設科目：{subject}",
-        })
-    return rows
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def load_accounts() -> pd.DataFrame:
-    cols = ["id", "sort_order", "category", "bank", "name", "currency", "balance", "note", "is_active"]
-    try:
-        try:
-            rows = supabase_client().table("accounts").select("*").order("sort_order").execute().data or []
-        except Exception:
-            rows = supabase_client().table("accounts").select("*").execute().data or []
-        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
-    except Exception as e:
-        st.error(f"load_accounts 錯誤：{e}")
-        return pd.DataFrame(columns=cols)
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def load_transactions(limit: int = 200) -> pd.DataFrame:
-    try:
-        rows = supabase_client().table("transactions").select(
-            "id,txn_date,txn_type,from_account_id,to_account_id,amount,currency,fx_rate,twd_amount,description,category,note,created_at"
-        ).order("txn_date", desc=True).order("id", desc=True).limit(limit).execute().data or []
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    except Exception as e:
-        st.error(f"load_transactions 錯誤：{e}")
-        return pd.DataFrame()
-
-
-def _active_accounts(accts: pd.DataFrame) -> pd.DataFrame:
-    if accts.empty:
-        return accts
-    if "is_active" not in accts.columns:
-        return accts
-    mask = accts["is_active"].apply(lambda x: normalize_bool(x, True))
-    return accts[mask].copy()
-
-
-def _account_category_series(accts: pd.DataFrame) -> pd.Series:
-    if "category" in accts.columns:
-        return accts["category"].fillna("其他").astype(str)
-    return pd.Series(["其他"] * len(accts), index=accts.index)
-
-
-def _transfer_accounts(accts: pd.DataFrame) -> pd.DataFrame:
-    if accts.empty:
-        return accts
-    categories = _account_category_series(accts)
-    return accts[categories.isin(TRANSFER_ACCOUNT_CATEGORIES)].copy()
-
-
-def _account_sheet_subject(row: pd.Series) -> str:
-    note = normalize_text(row.get("note", ""))
-    if note.startswith("預設科目："):
-        candidate = normalize_text(note.split("預設科目：", 1)[-1])
-        if candidate:
-            return candidate
-    if note.startswith("匯入 2026細帳") and "：" in note:
-        candidate = normalize_text(note.rsplit("：", 1)[-1])
-        if candidate:
-            return candidate
-    bank = normalize_text(row.get("bank", ""))
-    name = normalize_text(row.get("name", ""))
-    if not bank and not name:
-        return ""
-    if name in {"主帳戶", "投資帳戶", "保單", "往來帳戶"}:
-        return bank
-    if bank == "外幣現金":
-        return name
-    if bank and name:
-        return f"{bank}-{name}"
-    return bank or name
-
-
-def _acct_label(accts: pd.DataFrame, acct_id: Any) -> str:
-    if acct_id is None or pd.isna(acct_id):
-        return "—"
-    try:
-        row = accts[accts["id"] == int(float(acct_id))]
-    except Exception:
-        return str(acct_id)
-    if row.empty:
-        return str(acct_id)
-    r = row.iloc[0]
-    subject = _account_sheet_subject(r) or f"{r.get('bank', '')} {r.get('name', '')}".strip()
-    return f"{subject}({r.get('currency', '')})"
-
-
-def _account_id_by_subject(accts: pd.DataFrame) -> dict[str, int]:
-    mapping: dict[str, int] = {}
-    if accts.empty:
-        return mapping
-    for _, row in _active_accounts(accts).iterrows():
-        subject = _account_sheet_subject(row)
-        if not subject or subject in mapping:
-            continue
-        try:
-            mapping[subject] = int(float(row.get("id")))
-        except Exception:
-            continue
-    return mapping
-
-
-def _subject_option_label(subject: str, account_id: int | None = None) -> str:
-    left = str(account_id) if account_id is not None else f"new:{subject}"
-    return f"{left}｜{subject}({_cash_subject_currency(subject)})"
-
-
-def _acct_options(accts: pd.DataFrame) -> list[str]:
-    opts: list[str] = []
-    account_ids = _account_id_by_subject(accts)
-    for subject in cash_transfer_subject_options():
-        opts.append(_subject_option_label(subject, account_ids.get(subject)))
-    return opts
-
-
-def _subject_from_option(opt: str) -> str:
-    text = normalize_text(opt)
-    if not text or text == "（無）" or "｜" not in text:
-        return ""
-    label = text.split("｜", 1)[1]
-    return re.sub(r"\([A-Z]{3}\)$", "", label).strip()
-
-
-def _id_from_option(opt: str) -> int | None:
-    if not opt or opt == "（無）":
-        return None
-    try:
-        return int(str(opt).split("｜")[0])
-    except Exception:
-        return None
-
-
-def ensure_cash_account_for_subject(subject: str, accts: pd.DataFrame | None = None) -> int | None:
-    subject = normalize_text(subject)
-    if not subject:
-        return None
-    current = accts if accts is not None else load_accounts()
-    existing = _account_id_by_subject(current)
-    if subject in existing:
-        return existing[subject]
-
-    rule = classify_cash_subject(subject)
-    if normalize_text(rule.get("資料角色", "")) == "summary":
-        return None
-    category = _cash_account_category(rule)
-    bank, name = _cash_account_bank_name(subject, category)
-    next_order = 1
-    if current is not None and not current.empty and "sort_order" in current.columns:
-        next_order = int(normalize_number(current["sort_order"].max(), 0)) + 1
-    payload = {
-        "sort_order": next_order,
-        "category": category,
-        "bank": bank,
-        "name": name,
-        "currency": _cash_subject_currency(subject),
-        "balance": 0,
-        "note": f"預設科目：{subject}",
-        "is_active": True,
-    }
-    result = supabase_client().table("accounts").insert(payload).execute()
-    data = result.data or []
-    if data and data[0].get("id") is not None:
-        return int(float(data[0]["id"]))
-    rows = supabase_client().table("accounts").select("id,note").execute().data or []
-    for row in rows:
-        if _account_sheet_subject(pd.Series(row)) == subject and row.get("id") is not None:
-            return int(float(row["id"]))
-    return None
-
-
-def _account_id_from_option(opt: str, accts: pd.DataFrame) -> int | None:
-    existing_id = _id_from_option(opt)
-    if existing_id is not None:
-        return existing_id
-    return ensure_cash_account_for_subject(_subject_from_option(opt), accts)
-
-
-def _account_currency_balance(accts: pd.DataFrame, acct_id: int, opt: str) -> tuple[str, float]:
-    row = accts[accts["id"] == acct_id] if not accts.empty and "id" in accts.columns else pd.DataFrame()
-    if not row.empty:
-        selected = row.iloc[0]
-        return normalize_text(selected.get("currency", "TWD"), "TWD"), normalize_number(selected.get("balance", 0), 0)
-    subject = _subject_from_option(opt)
-    return _cash_subject_currency(subject), 0.0
-
-
-def _account_name_from_option(opt: str) -> str:
-    opt = normalize_text(opt)
-    if not opt or opt == "（無）":
-        return ""
-    if "｜" in opt:
-        return opt.split("｜", 1)[1]
-    return opt
-
-
-def _account_balance_twd(row: pd.Series) -> float:
-    bal = normalize_number(row.get("balance", 0), 0)
-    cur = normalize_text(row.get("currency", "TWD"), "TWD").upper()
-    fx_val, _ = fetch_fx(cur)
-    return bal * (fx_val or 1)
-
-
-def _amount_in_account_currency(amount: float, txn_currency: str, account_currency: str, fx_rate: float) -> float:
-    txn_currency = normalize_text(txn_currency, "TWD").upper()
-    account_currency = normalize_text(account_currency, "TWD").upper()
-    amount = normalize_number(amount, 0)
-    fx_rate = normalize_number(fx_rate, 1)
-    if txn_currency == account_currency:
-        return amount
-    twd_amount = amount if txn_currency == "TWD" else amount * fx_rate
-    if account_currency == "TWD":
-        return twd_amount
-    account_fx, _ = fetch_fx(account_currency)
-    account_fx = account_fx or 1.0
-    return twd_amount / account_fx
-
-
-def create_missing_cash_account_presets() -> int:
-    presets = cash_account_preset_rows()
-    current = load_accounts()
-    existing: set[tuple[str, str, str, str]] = set()
-    if not current.empty:
-        for _, row in current.iterrows():
-            existing.add((
-                normalize_text(row.get("category", "")),
-                normalize_text(row.get("bank", "")),
-                normalize_text(row.get("name", "")),
-                normalize_text(row.get("currency", "")),
-            ))
-    next_order = 1
-    if not current.empty and "sort_order" in current.columns:
-        next_order = int(normalize_number(current["sort_order"].max(), 0)) + 1
-    sb = supabase_client()
-    inserted = 0
-    for preset in presets:
-        key = (
-            normalize_text(preset["category"]),
-            normalize_text(preset["bank"]),
-            normalize_text(preset["name"]),
-            normalize_text(preset["currency"]),
-        )
-        if key in existing:
-            continue
-        payload = {
-            "sort_order": next_order,
-            "category": preset["category"],
-            "bank": preset["bank"],
-            "name": preset["name"],
-            "currency": preset["currency"],
-            "balance": 0,
-            "note": preset["note"],
-            "is_active": True,
-        }
-        sb.table("accounts").insert(payload).execute()
-        existing.add(key)
-        next_order += 1
-        inserted += 1
-    return inserted
-
-
-def cash_import_month_options(ledger: pd.DataFrame) -> list[str]:
-    return _unique_keep_order([normalize_sheet_month_label(col) for col in month_columns(ledger)])
-
-
-def _cash_import_preview_columns() -> list[str]:
-    return ["匯入", "可互轉", "月份", "原始科目", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "餘額", "台幣換算", "資料角色", "略過原因", "備註"]
-
-
-def _cash_subject_account_fields(subject: str, sheet_row: Any = None, raw_subject: Any = "") -> dict[str, str]:
-    rule = classify_cash_subject(subject, sheet_row, raw_subject)
-    category = _cash_account_category(rule)
-    bank, name = _cash_account_bank_name(subject, category)
-    is_account = _is_transfer_account_rule(rule)
-    is_transfer_endpoint = is_account and category in TRANSFER_ACCOUNT_CATEGORIES
-    return {
-        "科目": subject,
-        "類別": category,
-        "銀行/平台": bank,
-        "帳戶名稱": name,
-        "幣別": _cash_subject_currency(subject),
-        "資料角色": normalize_text(rule.get("資料角色", "")),
-        "匯入帳戶": "是" if is_account else "否",
-        "可互轉": "是" if is_transfer_endpoint else "否",
-        "備註": normalize_text(rule.get("備註", "")),
-    }
-
-
-def build_cash_import_preview(ledger: pd.DataFrame, month_label: str) -> pd.DataFrame:
-    if ledger.empty or not month_label:
-        return pd.DataFrame(columns=_cash_import_preview_columns())
-    label_col = ledger.columns[0]
-    source_col = ""
-    for col in month_columns(ledger):
-        if normalize_sheet_month_label(col) == month_label:
-            source_col = col
-            break
-    if not source_col:
-        return pd.DataFrame(columns=_cash_import_preview_columns())
-
-    rows: list[dict[str, Any]] = []
-    occurrence_counts: dict[str, int] = {}
-    for row_idx, (_, row) in enumerate(ledger.iterrows(), start=2):
-        raw_subject = normalize_text(row.get(label_col, ""))
-        if not raw_subject or raw_subject in {"合計", "總計"}:
-            continue
-        subject = canonical_cash_subject(raw_subject, occurrence_counts)
-        fields = _cash_subject_account_fields(subject, row_idx, raw_subject)
-        amount = parse_sheet_number(row.get(source_col))
-        role = fields["資料角色"]
-        should_import = fields["匯入帳戶"] == "是"
-        if amount is None:
-            if should_import:
-                amount = 0
-            else:
-                continue
-        fx_val, _ = fetch_fx(fields["幣別"])
-        if role == "summary":
-            skip_reason = "彙總/公式列，不匯入為帳戶"
-        elif not should_import:
-            skip_reason = "支出/收入分類，只留作交易分類，不建立帳戶"
-        else:
-            skip_reason = ""
-        rows.append({
-            "匯入": should_import,
-            "可互轉": fields["可互轉"],
-            "月份": month_label,
-            "原始科目": raw_subject,
-            "科目": subject,
-            "類別": fields["類別"],
-            "銀行/平台": fields["銀行/平台"],
-            "帳戶名稱": fields["帳戶名稱"],
-            "幣別": fields["幣別"],
-            "餘額": amount,
-            "台幣換算": amount * (fx_val or 1),
-            "資料角色": role,
-            "略過原因": skip_reason,
-            "備註": fields["備註"],
-        })
-
-    if not rows:
-        return pd.DataFrame(columns=_cash_import_preview_columns())
-
-    df = pd.DataFrame(rows)
-    importable = df[df["匯入"] == True].copy()
-    skipped = df[df["匯入"] == False].copy()
-    if not importable.empty:
-        group_cols = ["匯入", "可互轉", "月份", "科目", "類別", "銀行/平台", "帳戶名稱", "幣別", "資料角色", "略過原因", "備註"]
-        importable = importable.groupby(group_cols, as_index=False, dropna=False).agg({
-            "原始科目": lambda values: " / ".join(_unique_keep_order([normalize_text(v) for v in values])),
-            "餘額": "sum",
-            "台幣換算": "sum",
-        })
-    out = pd.concat([importable, skipped], ignore_index=True)
-    return out[_cash_import_preview_columns()].sort_values(["匯入", "類別", "科目"], ascending=[False, True, True])
-
-
-def apply_cash_import_preview(preview: pd.DataFrame, update_existing: bool = True) -> tuple[int, int, int]:
-    if preview.empty:
-        return 0, 0, 0
-    current = load_accounts()
-    existing: dict[tuple[str, str, str, str], pd.Series] = {}
-    if not current.empty:
-        for _, row in current.iterrows():
-            key = (
-                normalize_text(row.get("category", "")),
-                normalize_text(row.get("bank", "")),
-                normalize_text(row.get("name", "")),
-                normalize_text(row.get("currency", "")),
-            )
-            existing[key] = row
-
-    next_order = 1
-    if not current.empty and "sort_order" in current.columns:
-        next_order = int(normalize_number(current["sort_order"].max(), 0)) + 1
-
-    sb = supabase_client()
-    inserted = 0
-    updated = 0
-    skipped = 0
-    rows = preview[preview["匯入"] == True].copy()
-    for _, row in rows.iterrows():
-        category = normalize_text(row.get("類別", "其他"), "其他")
-        bank = normalize_text(row.get("銀行/平台", ""))
-        name = normalize_text(row.get("帳戶名稱", ""))
-        currency = normalize_text(row.get("幣別", "TWD"), "TWD")
-        if not bank or not name:
-            skipped += 1
-            continue
-        key = (category, bank, name, currency)
-        note = f"匯入 2026細帳 {normalize_text(row.get('月份', ''))}：{normalize_text(row.get('科目', ''))}"
-        payload = {
-            "category": category,
-            "bank": bank,
-            "name": name,
-            "currency": currency,
-            "balance": normalize_number(row.get("餘額", 0), 0),
-            "note": note,
-            "is_active": True,
-        }
-        old_row = existing.get(key)
-        if old_row is not None:
-            if update_existing:
-                rid = old_row.get("id")
-                if pd.isna(rid):
-                    skipped += 1
-                    continue
-                sb.table("accounts").update(payload).eq("id", int(float(rid))).execute()
-                updated += 1
-            else:
-                skipped += 1
-            continue
-        payload["sort_order"] = next_order
-        sb.table("accounts").insert(payload).execute()
-        existing[key] = pd.Series(payload)
-        next_order += 1
-        inserted += 1
-    return inserted, updated, skipped
-
-
-def render_cash_import_section() -> None:
-    st.markdown("#### 📥 匯入目前資料")
-    st.caption("這裡把 Google Sheet 舊表資料匯入正式現金流；線上總表只做讀取、檢查與搬資料，不當作正式交易帳。")
-
-    source_choice = st.radio("資料來源", ["線上 2026細帳", "上傳 CSV / Excel"], horizontal=True, key="cash_import_source")
-    ledger = pd.DataFrame()
-    if source_choice == "線上 2026細帳":
-        if st.button("讀取線上 2026細帳", key="load_online_cash_ledger"):
-            st.session_state["cash_import_load_online"] = True
-        if st.session_state.get("cash_import_load_online", False):
-            try:
-                ledger = load_online_sheet_csv(ONLINE_SHEET_SOURCES["2026細帳"])
-            except Exception as e:
-                st.error(f"讀取 2026細帳失敗：{e}")
-    else:
-        uploaded = st.file_uploader("上傳 2026細帳 CSV / Excel", type=["csv", "xlsx", "xls"], key="cash_import_upload")
-        if uploaded is not None:
-            try:
-                ledger = read_uploaded_table(uploaded)
-            except Exception as e:
-                st.error(f"讀取上傳檔案失敗：{e}")
-
-    if ledger.empty:
-        st.info("請先讀取線上 2026細帳或上傳檔案。")
-        return
-
-    months = cash_import_month_options(ledger)
-    if not months:
-        st.warning("找不到月份欄位，請確認欄名格式像 2026-01 或 2026/01。")
-        return
-    selected_month = st.selectbox("選擇要匯入的目前月份", months, index=len(months) - 1, key="cash_import_month")
-    preview = build_cash_import_preview(ledger, selected_month)
-    if preview.empty:
-        st.info("這個月份沒有可匯入資料。")
-        return
-
-    importable = preview[preview["匯入"] == True]
-    skipped = preview[preview["匯入"] == False]
-    c1, c2, c3 = st.columns(3)
-    c1.metric("可匯入科目", f"{len(importable):,}")
-    c2.metric("分類/彙總不匯入", f"{len(skipped):,}")
-    c3.metric("匯入台幣換算", money(importable["台幣換算"].fillna(0).sum() if not importable.empty else 0))
-
-    edited_preview = st.data_editor(
-        preview,
-        use_container_width=True,
-        hide_index=True,
-        height=min(42 * len(preview) + 44, 620),
-        disabled=[col for col in preview.columns if col != "匯入"],
-        column_config={
-            "匯入": st.column_config.CheckboxColumn("匯入"),
-            "餘額": st.column_config.NumberColumn("餘額", format="%.4f"),
-            "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
-        },
-        key="cash_import_preview_editor",
-    )
-
-    update_existing = st.checkbox("若科目已存在，更新目前餘額", value=True, key="cash_import_update_existing")
-    confirm = st.checkbox("確認匯入/更新 accounts 科目餘額", key="cash_import_confirm")
-    if st.button("匯入目前資料", disabled=not confirm, key="apply_cash_import"):
-        try:
-            inserted, updated, skipped_count = apply_cash_import_preview(edited_preview, update_existing=update_existing)
-            st.success(f"匯入完成：新增 {inserted} 筆，更新 {updated} 筆，略過 {skipped_count} 筆。")
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"匯入失敗：{e}")
-
-
-def render_cashflow_tab() -> None:
-    st.subheader("💵 現金流管理")
-
-    accts = load_accounts()
-    txns = load_transactions()
-    active = _active_accounts(accts)
-
-    if not active.empty:
-        active_categories = _account_category_series(active)
-        category_totals = {}
-        for category in CASH_ACCOUNT_CATEGORIES:
-            rows = active[active_categories == category]
-            category_totals[category] = sum(_account_balance_twd(r) for _, r in rows.iterrows())
-        asset_total = sum(category_totals.get(c, 0) for c in NET_ASSET_CATEGORIES)
-        liability_total = sum(category_totals.get(c, 0) for c in LIABILITY_CATEGORIES)
-        k1, k2, k3, k4, k5 = st.columns(5)
-        k1.metric("淨資產（台幣）", money(asset_total - liability_total))
-        k2.metric("現金/外幣", money(category_totals.get("現金", 0) + category_totals.get("外幣", 0)))
-        k3.metric("銀行存款", money(category_totals.get("銀行", 0)))
-        k4.metric("投資/保險", money(category_totals.get("投資", 0) + category_totals.get("保險", 0)))
-        k5.metric("借款/代墊", money(liability_total), delta=f"-{money(liability_total)}" if liability_total else None)
-
-    tab0, tab1, tab2, tab3, tab4, tab5 = st.tabs(["📥 匯入目前資料", "📋 帳戶總覽", "➕ 新增交易", "📜 交易記錄", "⚙️ 帳戶管理", "📚 科目字典"])
-
-    with tab0:
-        render_cash_import_section()
-
-    with tab1:
-        if accts.empty:
-            st.info("尚無帳戶，請先到「帳戶管理」新增，或一鍵建立預設科目帳戶。")
-        else:
-            account_categories = _account_category_series(accts)
-            categories = _unique_keep_order(CASH_ACCOUNT_CATEGORIES + account_categories.dropna().astype(str).tolist())
-            category_rows = []
-            for cat in categories:
-                grp = accts[account_categories == cat]
-                if grp.empty:
-                    continue
-                category_rows.append({
-                    "類別": cat,
-                    "科目數": len(grp),
-                    "台幣換算": round(sum(_account_balance_twd(r) for _, r in grp.iterrows()), 0),
-                })
-            if category_rows:
-                st.markdown("#### 各類別餘額")
-                st.dataframe(
-                    pd.DataFrame(category_rows),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "科目數": st.column_config.NumberColumn("科目數", format="%.0f"),
-                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
-                    },
-                )
-            for cat in categories:
-                grp = accts[account_categories == cat]
-                if grp.empty:
-                    continue
-                st.markdown(f"#### {cat}")
-                rows_disp = []
-                for _, r in grp.iterrows():
-                    bal = normalize_number(r.get("balance", 0), 0)
-                    cur = normalize_text(r.get("currency", "TWD")).upper()
-                    twd_val = _account_balance_twd(r)
-                    rows_disp.append({
-                        "銀行/平台": r.get("bank", ""),
-                        "帳戶名稱": r.get("name", ""),
-                        "幣別": cur,
-                        "餘額": round(bal, 4),
-                        "台幣換算": round(twd_val, 0),
-                        "備註": r.get("note", ""),
-                    })
-                df_disp = pd.DataFrame(rows_disp)
-                st.caption(f"小計：{money(df_disp['台幣換算'].sum())} 台幣")
-                st.dataframe(
-                    df_disp,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(42 * len(df_disp) + 44, 340),
-                    column_config={
-                        "餘額": st.column_config.NumberColumn("餘額", format="%.4f"),
-                        "台幣換算": st.column_config.NumberColumn("台幣換算", format="%.0f"),
-                    },
-                )
-
-    with tab2:
-        st.markdown("#### ➕ 新增一筆交易")
-        if accts.empty:
-            st.warning("請先到「帳戶管理」建立帳戶。")
-        else:
-            account_opts = _acct_options(accts)
-            if not account_opts:
-                st.warning("目前沒有可作付款、入帳或轉帳的帳戶；請先到「帳戶管理」建立銀行、外幣、投資、保險或借款/代墊帳戶。")
-            required_account_opts = account_opts if account_opts else ["（無）"]
-            acct_opts_optional = ["（無）"] + account_opts
-            txn_type = st.selectbox("類型", TXN_TYPES, key="new_txn_type")
-            flow_kind = _cashflow_kind(txn_type)
-            subject_opts = cash_subject_options_for_txn(txn_type)
-            if flow_kind == "transfer":
-                st.caption("轉帳只選轉出與轉入科目；支出、收入才需要選分類科目。")
-            elif flow_kind == "income":
-                st.caption("收入類：選收入科目與入帳科目，系統會增加入帳科目餘額。")
-            else:
-                st.caption("支出類：選付款科目與支出科目，系統會扣除付款科目餘額；付款科目留空時只記錄分類。")
-
-            with st.form("new_txn_form"):
-                c1, c2, c3 = st.columns(3)
-                txn_date = c1.date_input("日期", value=pd.Timestamp.today())
-                if flow_kind == "transfer":
-                    txn_subject = txn_type
-                    role = "transfer"
-                    from_opt = c2.selectbox("轉出科目", required_account_opts, key="transfer_from_acct")
-                    to_opt = c3.selectbox("轉入科目", required_account_opts, key="transfer_to_acct")
-                    st.caption("科目分類：轉帳 / 帳戶互轉")
-                elif flow_kind == "income":
-                    default_subject_idx = _default_subject_index(subject_opts, "薪資入帳")
-                    txn_subject = c2.selectbox("收入科目", subject_opts, index=default_subject_idx, key="income_subject")
-                    to_opt = c3.selectbox("入帳科目", required_account_opts, key="income_to_acct")
-                    from_opt = "（無）"
-                    rule = classify_cash_subject(txn_subject)
-                    role = normalize_text(rule.get("資料角色", ""))
-                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
-                else:
-                    default_subject_idx = _default_subject_index(subject_opts, "零用金-餐費")
-                    from_opt = c2.selectbox("付款科目", acct_opts_optional, key="expense_from_acct")
-                    txn_subject = c3.selectbox("支出科目", subject_opts, index=default_subject_idx, key="expense_subject")
-                    to_opt = "（無）"
-                    rule = classify_cash_subject(txn_subject)
-                    role = normalize_text(rule.get("資料角色", ""))
-                    st.caption(f"科目分類：{rule.get('大類', '')} / {rule.get('子類', '')}｜{rule.get('收支屬性', '')}")
-
-                c6, c7, c8 = st.columns(3)
-                amount = c6.number_input("金額（原幣）", value=0.0, format="%.2f", min_value=0.0)
-                currency = c7.selectbox("幣別", CASH_CURRENCIES, index=0)
-                default_fx, _ = fetch_fx(currency)
-                fx_rate_input = c8.number_input("匯率（原幣→台幣）", value=float(default_fx or 1.0), format="%.4f", min_value=0.0)
-
-                twd_est = amount * fx_rate_input
-                st.caption(f"估算台幣金額：**{money(twd_est)}**")
-                default_desc = txn_subject
-                if flow_kind == "transfer":
-                    default_desc = f"{_account_name_from_option(from_opt)} → {_account_name_from_option(to_opt)}"
-                desc = st.text_input("說明", value=default_desc)
-                note = st.text_input("備註")
-
-                if st.form_submit_button("💾 新增交易"):
-                    from_id = _id_from_option(from_opt)
-                    to_id = _id_from_option(to_opt)
-                    if amount <= 0:
-                        st.error("金額必須大於 0")
-                    elif flow_kind == "transfer" and (from_id is None or to_id is None):
-                        st.error("轉帳必須選轉出科目和轉入科目")
-                    elif flow_kind == "income" and to_id is None:
-                        st.error("收入必須選入帳科目")
-                    elif from_id is not None and to_id is not None and from_id == to_id:
-                        st.error("轉出和轉入不能是同一個科目")
-                    else:
-                        try:
-                            sb = supabase_client()
-                            sb.table("transactions").insert({
-                                "txn_date": str(txn_date),
-                                "txn_type": txn_type,
-                                "from_account_id": from_id,
-                                "to_account_id": to_id,
-                                "amount": amount,
-                                "currency": currency,
-                                "fx_rate": fx_rate_input,
-                                "twd_amount": round(twd_est, 0),
-                                "description": desc or txn_subject,
-                                "category": txn_subject,
-                                "note": note,
-                            }).execute()
-
-                            if from_id:
-                                from_row = accts[accts["id"] == from_id].iloc[0]
-                                from_amount = _amount_in_account_currency(
-                                    amount, currency, normalize_text(from_row.get("currency", "TWD")), fx_rate_input
-                                )
-                                new_bal = normalize_number(from_row.get("balance", 0), 0) - from_amount
-                                sb.table("accounts").update({"balance": new_bal}).eq("id", from_id).execute()
-                            if to_id:
-                                to_row = accts[accts["id"] == to_id].iloc[0]
-                                to_amount = _amount_in_account_currency(
-                                    amount, currency, normalize_text(to_row.get("currency", "TWD")), fx_rate_input
-                                )
-                                new_bal = normalize_number(to_row.get("balance", 0), 0) + to_amount
-                                sb.table("accounts").update({"balance": new_bal}).eq("id", to_id).execute()
-
-                            st.success("✅ 已新增！")
-                            st.cache_data.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"新增失敗：{e}")
-
-    with tab3:
-        st.markdown("#### 📜 最近 200 筆交易")
-        if txns.empty:
-            st.info("還沒有交易記錄。")
-        else:
-            txns_disp = txns.copy()
-            txns_disp["來源"] = txns_disp["from_account_id"].apply(lambda x: _acct_label(accts, x))
-            txns_disp["目標"] = txns_disp["to_account_id"].apply(lambda x: _acct_label(accts, x))
-            txns_disp["txn_date"] = pd.to_datetime(txns_disp["txn_date"]).dt.strftime("%Y/%m/%d")
-            show = txns_disp[[
-                "txn_date", "txn_type", "來源", "目標",
-                "amount", "currency", "twd_amount", "description", "category", "note",
-            ]].copy()
-            show.columns = ["日期", "類型", "來源", "目標", "金額", "幣別", "台幣金額", "說明", "分類", "備註"]
-
-            f1, f2 = st.columns(2)
-            types = ["全部"] + sorted(show["類型"].dropna().unique().tolist())
-            sel_type = f1.selectbox("篩選類型", types, key="txn_filter_type")
-            subjects = ["全部"] + sorted(show["分類"].dropna().unique().tolist())
-            sel_subject = f2.selectbox("篩選分類", subjects, key="txn_filter_subject")
-            if sel_type != "全部":
-                show = show[show["類型"] == sel_type]
-            if sel_subject != "全部":
-                show = show[show["分類"] == sel_subject]
-
-            st.dataframe(
-                show,
-                use_container_width=True,
-                hide_index=True,
-                height=min(42 * len(show) + 44, 600),
-                column_config={
-                    "金額": st.column_config.NumberColumn("金額", format="%.2f"),
-                    "台幣金額": st.column_config.NumberColumn("台幣金額", format="%.0f"),
-                },
-            )
-
-            col_s1, col_s2, col_s3 = st.columns(3)
-            income = show[show["類型"].isin(["收入", "利息收入", "投資賣出"])]["台幣金額"].fillna(0).sum()
-            expense = show[show["類型"].isin(["支出", "信用卡消費", "利息支出", "投資買入"])]["台幣金額"].fillna(0).sum()
-            transfer = show[show["類型"].isin(["轉帳", "借入", "借出", "代墊"])]["台幣金額"].fillna(0).sum()
-            col_s1.metric("收入合計（台幣）", money(income))
-            col_s2.metric("支出合計（台幣）", money(expense))
-            col_s3.metric("轉帳/借貸合計（台幣）", money(transfer))
-
-    with tab4:
-        st.markdown("#### ⚙️ 帳戶餘額更新")
-        if accts.empty:
-            st.info("還沒有帳戶。")
-        else:
-            with st.form("update_balance_form"):
-                updated_vals: dict[int, float] = {}
-                account_categories = _account_category_series(accts)
-                for cat in _unique_keep_order(CASH_ACCOUNT_CATEGORIES + account_categories.dropna().astype(str).tolist()):
-                    grp = accts[account_categories == cat]
-                    if grp.empty:
-                        continue
-                    st.markdown(f"**{cat}**")
-                    cols = st.columns(min(len(grp), 4))
-                    for i, (_, r) in enumerate(grp.iterrows()):
-                        with cols[i % 4]:
-                            label = f"{r.get('bank', '')} {r.get('name', '')}\n({r.get('currency', '')})"
-                            updated_vals[int(r["id"])] = st.number_input(
-                                label,
-                                value=normalize_number(r.get("balance", 0), 0),
-                                format="%.2f",
-                                key=f"bal_{r['id']}",
-                            )
-                if st.form_submit_button("💾 更新所有餘額"):
-                    sb = supabase_client()
-                    for aid, bal in updated_vals.items():
-                        sb.table("accounts").update({"balance": bal}).eq("id", aid).execute()
-                    st.success("✅ 餘額已更新！")
-                    st.cache_data.clear()
-                    st.rerun()
-
-        st.markdown("---")
-        st.markdown("#### ➕ 新增帳戶 / 科目")
-        preset_rows = cash_account_preset_rows()
-        preset_labels = ["手動新增"] + [row["科目"] for row in preset_rows]
-        with st.form("add_account_form"):
-            preset_choice = st.selectbox("快速科目", preset_labels)
-            if preset_choice == "手動新增":
-                a1, a2, a3 = st.columns(3)
-                a_cat = a1.selectbox("類別", CASH_ACCOUNT_CATEGORIES)
-                a_bank = a2.text_input("銀行/平台名稱")
-                a_name = a3.text_input("帳戶名稱")
-                a4, a5, a6 = st.columns(3)
-                a_cur = a4.selectbox("幣別", CASH_CURRENCIES)
-                a_bal = a5.number_input("初始餘額", value=0.0, format="%.2f")
-                a_note = a6.text_input("備註")
-            else:
-                preset = next(row for row in preset_rows if row["科目"] == preset_choice)
-                a_cat = preset["category"]
-                a_bank = preset["bank"]
-                a_name = preset["name"]
-                a_cur = preset["currency"]
-                a_bal = st.number_input("初始餘額", value=0.0, format="%.2f")
-                a_note = st.text_input("備註", value=preset["note"])
-                st.caption(f"將建立：{a_cat}｜{a_bank} {a_name}｜{a_cur}")
-
-            if st.form_submit_button("新增帳戶"):
-                if not a_bank or not a_name:
-                    st.error("銀行/平台和帳戶名稱必填")
-                else:
-                    try:
-                        next_order = 1
-                        if not accts.empty and "sort_order" in accts.columns:
-                            next_order = int(normalize_number(accts["sort_order"].max(), 0)) + 1
-                        supabase_client().table("accounts").insert({
-                            "sort_order": next_order,
-                            "category": a_cat,
-                            "bank": a_bank,
-                            "name": a_name,
-                            "currency": a_cur,
-                            "balance": a_bal,
-                            "note": a_note,
-                            "is_active": True,
-                        }).execute()
-                        st.success("✅ 已新增帳戶！")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"新增失敗：{e}")
-
-        with st.expander("一鍵建立缺少的預設帳戶"):
-            st.caption("會建立帳戶餘額科目；來源/目標互轉會列現金、銀行、外幣、保險、投資、借款/代墊。零用金支出、收入與信用卡消費只作分類；已存在者會略過。")
-            st.dataframe(pd.DataFrame(preset_rows), use_container_width=True, hide_index=True, height=360)
-            confirm_seed = st.checkbox("確認建立缺少的預設科目帳戶", key="confirm_seed_cash_accounts")
-            if st.button("建立預設科目帳戶", disabled=not confirm_seed, key="seed_cash_accounts"):
-                try:
-                    count = create_missing_cash_account_presets()
-                    st.success(f"已新增 {count} 個預設帳戶。")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"建立失敗：{e}")
-
-    with tab5:
-        catalog = cash_subject_catalog_df().sort_values(["大類", "子類", "科目"])
-        st.markdown("#### 科目字典")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("科目數", f"{len(catalog):,}")
-        c2.metric("大類數", f"{catalog['大類'].nunique():,}")
-        c3.metric("預設帳戶數", f"{len(cash_account_preset_rows()):,}")
-        st.dataframe(catalog, use_container_width=True, hide_index=True, height=620)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -6753,130 +4860,6 @@ def render_cashflow_tab() -> None:
 
 st.markdown('<div class="app-page-title">📈 Jenny 投資即時市值系統</div>', unsafe_allow_html=True)
 st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
-
-with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
-    st.code("""
-alter table portfolio_snapshots add column if not exists bank_total numeric;
-alter table portfolio_snapshots add column if not exists insurance_total numeric;
-alter table portfolio_snapshots add column if not exists huaisi_total numeric;
-alter table portfolio_snapshots add column if not exists uncle_total numeric;
-alter table portfolio_snapshots add column if not exists fx_cash_total numeric;
-alter table portfolio_snapshots add column if not exists deposits_total numeric;
-alter table portfolio_snapshots add column if not exists other_assets_total numeric;
-alter table portfolio_snapshots add column if not exists grand_total numeric;
-alter table latest_portfolio_values add column if not exists bank_total numeric;
-alter table latest_portfolio_values add column if not exists insurance_total numeric;
-alter table latest_portfolio_values add column if not exists huaisi_total numeric;
-alter table latest_portfolio_values add column if not exists uncle_total numeric;
-alter table latest_portfolio_values add column if not exists fx_cash_total numeric;
-alter table latest_portfolio_values add column if not exists deposits_total numeric;
-alter table latest_portfolio_values add column if not exists other_assets_total numeric;
-alter table latest_portfolio_values add column if not exists grand_total numeric;
-alter table positions add column if not exists purchase_ym text default '';
-alter table positions add column if not exists dividend_received_original_total numeric default 0;
-alter table positions add column if not exists dividend_received_original_base numeric default 0;
-alter table positions add column if not exists dividend_received_total numeric default 0;
-alter table positions add column if not exists dividend_note text default '';
-alter table positions add column if not exists dividend_pay_date text default '';
-alter table positions add column if not exists is_reinvest boolean default false;
-
-alter table fund_dividends add column if not exists fund_name text default '';
-alter table fund_dividends add column if not exists actual_div_amount numeric default 0;
-alter table dividend_log add column if not exists fund_name text default '';
-alter table dividend_log add column if not exists actual_div_amount numeric default 0;
-
-create table if not exists stock_dividend_log (
-    id bigserial primary key,
-    platform text default '台股',
-    ticker text default '',
-    name text default '',
-    currency text default 'TWD',
-    ex_date text default '',
-    cash_pay_date text default '',
-    stock_pay_date text default '',
-    shares_at_ex numeric default 0,
-    cash_dividend_per_share numeric default 0,
-    estimated_cash_total numeric default 0,
-    actual_cash_total numeric default 0,
-    stock_dividend_per_share numeric default 0,
-    estimated_stock_shares numeric default 0,
-    actual_stock_shares numeric default 0,
-    is_cash_received boolean default false,
-    is_stock_received boolean default false,
-    source text default '',
-    note text default '',
-    created_at timestamptz default now()
-);
-alter table stock_dividend_log add column if not exists platform text default '台股';
-alter table stock_dividend_log add column if not exists ticker text default '';
-alter table stock_dividend_log add column if not exists name text default '';
-alter table stock_dividend_log add column if not exists currency text default 'TWD';
-alter table stock_dividend_log add column if not exists ex_date text default '';
-alter table stock_dividend_log add column if not exists cash_pay_date text default '';
-alter table stock_dividend_log add column if not exists stock_pay_date text default '';
-alter table stock_dividend_log add column if not exists shares_at_ex numeric default 0;
-alter table stock_dividend_log add column if not exists cash_dividend_per_share numeric default 0;
-alter table stock_dividend_log add column if not exists estimated_cash_total numeric default 0;
-alter table stock_dividend_log add column if not exists actual_cash_total numeric default 0;
-alter table stock_dividend_log add column if not exists stock_dividend_per_share numeric default 0;
-alter table stock_dividend_log add column if not exists estimated_stock_shares numeric default 0;
-alter table stock_dividend_log add column if not exists actual_stock_shares numeric default 0;
-alter table stock_dividend_log add column if not exists is_cash_received boolean default false;
-alter table stock_dividend_log add column if not exists is_stock_received boolean default false;
-alter table stock_dividend_log add column if not exists source text default '';
-alter table stock_dividend_log add column if not exists note text default '';
-alter table stock_dividend_log add column if not exists created_at timestamptz default now();
-
-create table if not exists accounts (
-    id bigserial primary key,
-    sort_order numeric default 0,
-    category text default '銀行',
-    bank text default '',
-    name text default '',
-    currency text default 'TWD',
-    balance numeric default 0,
-    note text default '',
-    is_active boolean default true,
-    created_at timestamptz default now()
-);
-alter table accounts add column if not exists sort_order numeric default 0;
-alter table accounts add column if not exists category text default '銀行';
-alter table accounts add column if not exists bank text default '';
-alter table accounts add column if not exists name text default '';
-alter table accounts add column if not exists currency text default 'TWD';
-alter table accounts add column if not exists balance numeric default 0;
-alter table accounts add column if not exists note text default '';
-alter table accounts add column if not exists is_active boolean default true;
-alter table accounts add column if not exists created_at timestamptz default now();
-
-create table if not exists transactions (
-    id bigserial primary key,
-    txn_date date default current_date,
-    txn_type text default '',
-    from_account_id bigint,
-    to_account_id bigint,
-    amount numeric default 0,
-    currency text default 'TWD',
-    fx_rate numeric default 1,
-    twd_amount numeric default 0,
-    description text default '',
-    category text default '',
-    note text default '',
-    created_at timestamptz default now()
-);
-alter table transactions add column if not exists txn_date date default current_date;
-alter table transactions add column if not exists txn_type text default '';
-alter table transactions add column if not exists from_account_id bigint;
-alter table transactions add column if not exists to_account_id bigint;
-alter table transactions add column if not exists amount numeric default 0;
-alter table transactions add column if not exists currency text default 'TWD';
-alter table transactions add column if not exists fx_rate numeric default 1;
-alter table transactions add column if not exists twd_amount numeric default 0;
-alter table transactions add column if not exists description text default '';
-alter table transactions add column if not exists category text default '';
-alter table transactions add column if not exists note text default '';
-alter table transactions add column if not exists created_at timestamptz default now();
-""", language="sql")
 
 try:
     positions = load_positions()
@@ -6951,7 +4934,10 @@ with st.container():
     render_total_asset_row(float(total_value), load_other_assets())
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["投資總覽", "🏦 其他資產總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "🔎 股票研究", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
+TAB_NAMES = ["投資總覽", "非投資總覽", "📊 歷史市值", *PLATFORMS, "🔎 股票研究", "資料安全", "工具",
+             "💰 配息記錄", "📈 台股股利"]
+# 用名稱取分頁，增刪分頁不必重新編號。
+tabs = dict(zip(TAB_NAMES, st.tabs(TAB_NAMES)))
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6960,7 +4946,7 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
              "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
-with tabs[0]:
+with tabs["投資總覽"]:
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
@@ -6977,11 +4963,11 @@ with tabs[0]:
             },
         )
 
-with tabs[1]:
+with tabs["非投資總覽"]:
     render_other_assets_tab()
 
 # ── 股票研究：放在正式功能區，不使用左側 multipage 導航 ─────────────────
-with tabs[7]:
+with tabs["🔎 股票研究"]:
     st.markdown("### 🔎 股票研究")
     st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
@@ -7471,8 +5457,8 @@ with tabs[7]:
             st.info("尚未有雷達資料，請先按「更新熱門候選」。")
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
-for idx, platform in enumerate(PLATFORMS, start=2):
-    with tabs[idx]:
+for platform in PLATFORMS:
+    with tabs[platform]:
         st.subheader(platform)
         # ── 第一排：全局KPI ──
         g1, g2, g3, g4, g5 = st.columns(5)
@@ -7529,8 +5515,83 @@ for idx, platform in enumerate(PLATFORMS, start=2):
             )
         editable_platform_table(platform, positions, f"editor_{platform}")
 
-with tabs[7]:
+with tabs["資料安全"]:
     st.subheader("資料安全")
+    with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
+        st.code("""
+alter table portfolio_snapshots add column if not exists bank_total numeric;
+alter table portfolio_snapshots add column if not exists insurance_total numeric;
+alter table portfolio_snapshots add column if not exists huaisi_total numeric;
+alter table portfolio_snapshots add column if not exists uncle_total numeric;
+alter table portfolio_snapshots add column if not exists fx_cash_total numeric;
+alter table portfolio_snapshots add column if not exists deposits_total numeric;
+alter table portfolio_snapshots add column if not exists other_assets_total numeric;
+alter table portfolio_snapshots add column if not exists grand_total numeric;
+alter table latest_portfolio_values add column if not exists bank_total numeric;
+alter table latest_portfolio_values add column if not exists insurance_total numeric;
+alter table latest_portfolio_values add column if not exists huaisi_total numeric;
+alter table latest_portfolio_values add column if not exists uncle_total numeric;
+alter table latest_portfolio_values add column if not exists fx_cash_total numeric;
+alter table latest_portfolio_values add column if not exists deposits_total numeric;
+alter table latest_portfolio_values add column if not exists other_assets_total numeric;
+alter table latest_portfolio_values add column if not exists grand_total numeric;
+alter table positions add column if not exists purchase_ym text default '';
+alter table positions add column if not exists dividend_received_original_total numeric default 0;
+alter table positions add column if not exists dividend_received_original_base numeric default 0;
+alter table positions add column if not exists dividend_received_total numeric default 0;
+alter table positions add column if not exists dividend_note text default '';
+alter table positions add column if not exists dividend_pay_date text default '';
+alter table positions add column if not exists is_reinvest boolean default false;
+
+alter table fund_dividends add column if not exists fund_name text default '';
+alter table fund_dividends add column if not exists actual_div_amount numeric default 0;
+alter table dividend_log add column if not exists fund_name text default '';
+alter table dividend_log add column if not exists actual_div_amount numeric default 0;
+
+create table if not exists stock_dividend_log (
+    id bigserial primary key,
+    platform text default '台股',
+    ticker text default '',
+    name text default '',
+    currency text default 'TWD',
+    ex_date text default '',
+    cash_pay_date text default '',
+    stock_pay_date text default '',
+    shares_at_ex numeric default 0,
+    cash_dividend_per_share numeric default 0,
+    estimated_cash_total numeric default 0,
+    actual_cash_total numeric default 0,
+    stock_dividend_per_share numeric default 0,
+    estimated_stock_shares numeric default 0,
+    actual_stock_shares numeric default 0,
+    is_cash_received boolean default false,
+    is_stock_received boolean default false,
+    source text default '',
+    note text default '',
+    created_at timestamptz default now()
+);
+alter table stock_dividend_log add column if not exists platform text default '台股';
+alter table stock_dividend_log add column if not exists ticker text default '';
+alter table stock_dividend_log add column if not exists name text default '';
+alter table stock_dividend_log add column if not exists currency text default 'TWD';
+alter table stock_dividend_log add column if not exists ex_date text default '';
+alter table stock_dividend_log add column if not exists cash_pay_date text default '';
+alter table stock_dividend_log add column if not exists stock_pay_date text default '';
+alter table stock_dividend_log add column if not exists shares_at_ex numeric default 0;
+alter table stock_dividend_log add column if not exists cash_dividend_per_share numeric default 0;
+alter table stock_dividend_log add column if not exists estimated_cash_total numeric default 0;
+alter table stock_dividend_log add column if not exists actual_cash_total numeric default 0;
+alter table stock_dividend_log add column if not exists stock_dividend_per_share numeric default 0;
+alter table stock_dividend_log add column if not exists estimated_stock_shares numeric default 0;
+alter table stock_dividend_log add column if not exists actual_stock_shares numeric default 0;
+alter table stock_dividend_log add column if not exists is_cash_received boolean default false;
+alter table stock_dividend_log add column if not exists is_stock_received boolean default false;
+alter table stock_dividend_log add column if not exists source text default '';
+alter table stock_dividend_log add column if not exists note text default '';
+alter table stock_dividend_log add column if not exists created_at timestamptz default now();
+
+
+""", language="sql")
     st.error("安全版 v7：不會自動建立預設資料，也不會自動清空資料。")
     st.markdown("#### 目前 Supabase 資料匯出")
     if positions.empty:
@@ -7549,7 +5610,7 @@ with tabs[7]:
         else:
             seed_presets(); st.success("已手動建立預設清單。"); st.rerun()
 
-with tabs[9]:
+with tabs["工具"]:
     st.subheader("工具")
     tool_choice = st.selectbox(
         "選擇工具",
@@ -7567,71 +5628,11 @@ with tabs[9]:
     elif tool_choice == "抓價測試":
         price_test_section()
 
-with tabs[10]:
+with tabs["📊 歷史市值"]:
     render_history_tab()
 
-with tabs[11]:
+with tabs["💰 配息記錄"]:
     render_dividend_log_tab(enriched)
 
-with tabs[12]:
+with tabs["📈 台股股利"]:
     render_stock_dividend_tab(enriched)
-
-with tabs[13]:
-    render_online_sheets_tab()
-
-with tabs[14]:
-    render_cashflow_tab()
-
-with tabs[15]:
-    st.subheader("🏦 銀行明細（本機測試）")
-    st.caption("帳密只存 macOS Keychain；圖片驗證碼需本人輸入。請勿在 Streamlit Cloud 設定帳密。")
-    try:
-        from bank_sync.adapters import BANKS
-        from bank_sync.catalog import BANK_ACCOUNTS, get_account
-        from bank_sync.credentials import has_secret, save_secret
-
-        labels = {
-            item.key: f"{item.bank}｜{item.owner}｜{','.join(item.currencies)}"
-            for item in BANK_ACCOUNTS
-        }
-        selected_key = st.selectbox("選擇帳戶", list(labels), format_func=labels.get, key="bank_sync_account")
-        selected = get_account(selected_key)
-        st.write(f"分行：{'、'.join(selected.branches) or '—'}")
-        fields = BANKS[selected.bank].credential_fields
-        ready = all(has_secret(selected.login_key, field) for field in fields)
-        if ready:
-            st.success("Keychain 帳密已設定")
-        else:
-            st.warning("尚未完成 Keychain 帳密設定")
-
-        field_labels = {"id_number": "身分證字號", "user_code": "使用者代號", "password": "密碼"}
-        with st.form("bank_sync_secret_form", clear_on_submit=True):
-            values = {field: st.text_input(field_labels[field], type="password") for field in fields}
-            if st.form_submit_button("安全存入 Keychain"):
-                if not all(values.values()):
-                    st.error("請完整填寫帳密")
-                else:
-                    try:
-                        for field, value in values.items():
-                            save_secret(selected.login_key, field, value)
-                        st.success("已存入 Keychain，不會寫入專案或 Supabase。")
-                    except Exception as exc:
-                        st.error(f"Keychain 寫入失敗：{exc}")
-
-        command = f"{sys.executable} -m bank_sync open {selected.key}"
-        st.code(command, language="bash")
-        if st.button("開啟銀行登入測試", disabled=not ready, key="bank_sync_launch"):
-            try:
-                subprocess.Popen(
-                    [sys.executable, "-m", "bank_sync", "open", selected.key, "--no-prompt"],
-                    cwd=str(Path(__file__).resolve().parent),
-                    start_new_session=True,
-                )
-                st.success("已啟動銀行專用瀏覽器；請切換視窗輸入驗證碼。")
-            except Exception as exc:
-                st.error(f"無法啟動：{exc}")
-    except Exception as exc:
-        st.error(f"銀行工具載入失敗：{exc}")
-
-with tabs[16]:
-    render_bank_fund_query_tab()

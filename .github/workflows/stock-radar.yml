@@ -7,7 +7,6 @@ on:
     paths:
       - ".github/workflows/stock-radar.yml"
       - "stock_radar/**"
-      - "pages/5_台股每日雷達.py"
   schedule:
     - cron: "30 6 * * 1-5"
 
