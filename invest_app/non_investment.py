@@ -126,7 +126,10 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
     # 說明放在第二張卡（其他資產小計）裡面下方，填第一張雙行卡較高留下的空白，不另佔一列
-    cols[1].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    # 不斷行，文字直接往右延伸到隔壁卡片下方
+    note = html_lib.escape(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    cols[1].markdown(f'<div style="white-space:nowrap;overflow:visible;font-size:.8rem;color:#64748b">{note}</div>',
+                     unsafe_allow_html=True)
     return None
 
 
