@@ -1,4 +1,4 @@
-"""投資總覽：各平台群組卡片與明細表、匯率總覽。"""
+"""投資總覽：各平台群組卡片與明細表、即時匯率。"""
 from __future__ import annotations
 
 
@@ -398,18 +398,8 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
         render_platform_group(platform, p_rows)
 
 
-def render_fx_overview_cards() -> None:
-    st.markdown("### 💱 匯率總覽")
-    fx_cols = st.columns(len(CURRENCIES))
-    for i, cur in enumerate(CURRENCIES):
-        rate, status = fetch_fx(cur)
-        with fx_cols[i]:
-            st.metric(cur, money(rate, 4), delta="ok" if status == "ok" else status)
-
-
 def render_investment_overview_page(enriched, positions) -> None:
     render_channel_overview_cards(enriched, positions)
-    render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
     if not enriched.empty:
         chart_summary = enriched.groupby("platform", dropna=False).agg(台幣市值=("台幣市值", "sum")).reset_index()
