@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v75-dividend-diff"
+APP_VERSION = "2026-10-11-v76-dividend-diff-original"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1374,12 +1374,13 @@ def _format_dividend_date(value: Any) -> str:
     return parsed.strftime("%Y/%m/%d")
 
 
-def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), max_height: int | None = None) -> str:
+def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), max_height: int | None = None,
+               decimals: int = 0) -> str:
     """精簡 HTML 表格：欄寬依內容、數字靠右、沒有資料的格子空白（st.dataframe 一律顯示 None）。"""
     def cell(col: str, value: Any) -> str:
         if col in number_cols:
             n = to_float(value)
-            text = "" if n is None else f"{n:,.0f}"
+            text = "" if n is None else f"{n:,.{decimals}f}"
             return f'<td style="text-align:right;font-family:monospace">{text}</td>'
         text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else html_lib.escape(str(value))
         return f"<td>{text}</td>"
