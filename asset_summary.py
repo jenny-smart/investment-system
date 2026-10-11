@@ -30,8 +30,6 @@ CATEGORIES = (
     ("uncle待還", "叔叔"),
     ("外幣total", "日幣 suica"),
 )
-# Money held for other people, in original currency.
-DEFAULT_DEPOSITS = {"TWD": 1_500_000, "JPY": 300_000, "USD": 1400 + 960 + 960, "CNY": 5_000}
 # Currency -> row label in 總覽 (rates use the 買進 column, like the sheet does).
 RATE_LABELS = {"USD": "美金", "ZAR": "南非", "CNY": "人民", "JPY": "日幣"}
 
@@ -261,18 +259,23 @@ def read_rates(rate_values):
     return rates
 
 
-def summarise(values, formulas, rate_values, deposits, rate_overrides=None, month=None, today=None):
+def summarise(values, formulas, rate_values, deposits=None, rate_overrides=None, month=None, today=None):
+    """Without `deposits`, deduct what that month's sheet already deducts (its row 69)."""
     sub_col = find_month_column(values, month, today)
-    rates = {"TWD": 1.0, **read_rates(rate_values), **(rate_overrides or {})}
-    missing = [c for c in deposits if c not in rates]
-    if missing:
-        raise RuntimeError(f"缺少匯率：{', '.join(missing)}（用 --rate {missing[0]}=數字 指定）")
     categories = {name: find_category(values, formulas, sub_col, label) for name, label in CATEGORIES}
     total = find_total(values, formulas, sub_col)
     gross = total["net"] + sum(item["value"] for item in total["subtracted"])
     category_sum = sum(c["total"] for c in categories.values())
-    deposit_lines = [{"currency": cur, "amount": amt, "rate": rates[cur], "twd": amt * rates[cur]}
-                     for cur, amt in deposits.items()]
+    if deposits:
+        rates = {"TWD": 1.0, **read_rates(rate_values), **(rate_overrides or {})}
+        missing = [c for c in deposits if c not in rates]
+        if missing:
+            raise RuntimeError(f"缺少匯率：{', '.join(missing)}（用 --rate {missing[0]}=數字 指定）")
+        deposit_lines = [{"currency": cur, "amount": amt, "rate": rates[cur], "twd": amt * rates[cur]}
+                         for cur, amt in deposits.items()]
+    else:
+        deposit_lines = [{"currency": f"試算表 {item['cell']}", "amount": item["value"], "rate": 1,
+                          "twd": item["value"]} for item in total["subtracted"]]
     deposit_twd = round(sum(line["twd"] for line in deposit_lines))
     return {
         "month": str(cell(values, date_row(values), sub_col)),
@@ -352,7 +355,7 @@ def main(argv=None):
     parser.add_argument("--sheet", default=os.environ.get("ASSET_SHEET", DEFAULT_SHEET), help="分頁名稱")
     parser.add_argument("--month", type=parse_month, help="YYYY/M，預設為今天以前最新的月份欄")
     parser.add_argument("--deposit", action="append", metavar="CUR=AMOUNT",
-                        help="寄放金額，可重複；有指定就取代預設 TWD=1500000 JPY=300000 USD=3320 CNY=5000")
+                        help="寄放金額，可重複；不指定就用該月第 69 列（試算表本身扣的待還）")
     parser.add_argument("--rate", action="append", metavar="CUR=RATE", help="覆寫匯率，例如 USD=32")
     parser.add_argument("--credentials-file", type=Path)
     parser.add_argument("--json", action="store_true", help="輸出 JSON")
@@ -367,7 +370,7 @@ def main(argv=None):
     except Exception:
         rate_values = []
     summary = summarise(values, formulas, rate_values,
-                        pairs(args.deposit, float) or dict(DEFAULT_DEPOSITS),
+                        pairs(args.deposit, float),
                         pairs(args.rate, float), args.month)
     print(json.dumps(summary, ensure_ascii=False, indent=2) if args.json else render(summary))
     return 0
