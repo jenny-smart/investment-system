@@ -6,6 +6,9 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
+    html_table,
+    OVERVIEW_SHEET_GID,
+    load_sheet_grid,
     CURRENCIES,
     PLATFORMS,
     _format_dividend_date,
@@ -1167,6 +1170,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 def render_dividend_log_tab(enriched_df: pd.DataFrame) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
+    render_sheet_dividend_diff(enriched_df)
 
     source = enriched_df
     estimate_df = build_estimated_dividend_table(source)
@@ -1267,3 +1271,18 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame) -> None:
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
+
+
+def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
+    """總帳「總覽」L 欄累積配息 vs 資料庫累計配息：只列有差異的基金。"""
+    from invest_app.sheet_compare import compare_fund_dividends, sheet_fund_dividends
+    try:
+        diff = compare_fund_dividends(sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID)), enriched_df)
+    except Exception as exc:
+        st.caption(f"總帳累積配息比對暫時無法執行：{exc}")
+        return
+    if diff.empty:
+        st.success("總帳「總覽」L 欄累積配息與資料庫一致。")
+        return
+    st.markdown(f"#### ⚠️ 與總帳累積配息不一致（{len(diff)} 檔，差額 = 資料庫 − 總帳）")
+    st.markdown(html_table(diff, ["總帳累積配息", "資料庫累計配息", "差額"]), unsafe_allow_html=True)
