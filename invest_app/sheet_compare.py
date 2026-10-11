@@ -25,6 +25,8 @@ def fund_key(name: Any) -> str:
 
 
 def _number(value: Any) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
     text = str(value or "").replace(",", "").strip()
     try:
         return float(text)
