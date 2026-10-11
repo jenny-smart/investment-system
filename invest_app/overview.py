@@ -9,20 +9,15 @@ from invest_app.core import (
     TW_STOCK_SELL_COST_RATE,
     CURRENCIES,
     _get_gas_date,
-    _get_gas_monthly_div,
     fetch_fx,
     fmt_md,
     money,
-    normalize_number,
     normalize_text,
     pct,
     signed_money,
     supabase_client,
     to_float,
     tw_now,
-)
-from invest_app.dividends import (
-    auto_dividend_update,
 )
 
 
@@ -343,81 +338,6 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
     if enriched.empty:
         st.info("目前沒有資料。")
         return
-
-    action_col1, action_col2 = st.columns([1, 1])
-    if action_col1.button("💰 執行配息快照 / 認列", key="run_auto_dividend_update"):
-        try:
-            n = auto_dividend_update(positions)
-            if n > 0:
-                st.success(f"配息更新完成：{n} 筆")
-                st.cache_data.clear()
-            else:
-                st.info("目前沒有需要認列或快照的配息。")
-        except Exception as exc:
-            st.warning(f"配息更新失敗：{exc}")
-
-    # ── 預估每月配息：基金用 GAS monthly_div × 單位數 × 匯率 ──
-    # 即時計算，不寫回 Supabase，只用於顯示
-    if not enriched.empty:
-        est_monthly_div = 0.0
-        fx_cache_local: dict[str, float] = {}
-        for _, fr in enriched.iterrows():
-            if normalize_text(fr.get("asset_type","")) != "基金":
-                continue
-            fc    = normalize_text(fr.get("fund_code",""))
-            units = normalize_number(fr.get("市值股數", fr.get("units", 0)), 0)
-            cur   = normalize_text(fr.get("currency","TWD")).upper()
-            if not fc or units <= 0:
-                continue
-            # 取 GAS 每單位配息（有快取）
-            mdiv_per_unit = normalize_number(fr.get("每單位月配息估算", 0), 0) or _get_gas_monthly_div(fc)
-            if not mdiv_per_unit:
-                continue
-            # 取匯率
-            if cur not in fx_cache_local:
-                fx_val, _ = fetch_fx(cur)
-                fx_cache_local[cur] = fx_val or 1.0
-            fx_val = fx_cache_local[cur]
-            est_monthly_div += units * mdiv_per_unit * fx_val
-        # 本月已認列配息若需要精算，按上方配息按鈕後到配息記錄頁查看；
-        # 總覽避免額外 Supabase 查詢，減少初次載入卡住。
-        this_month_paid = 0.0
-
-        col_a, col_b = st.columns(2)
-        if est_monthly_div > 0:
-            col_a.info(f"💰 預估下月配息：**{money(est_monthly_div)}** 台幣（各基金最近一次每單位配息 × 目前單位數）")
-        if this_month_paid > 0:
-            col_b.success(f"✅ 本月已認列配息：**{money(this_month_paid)}** 台幣")
-
-    # ── 需要時才把 GAS monthly_div 回填給尚未設定配息的基金持倉 ──
-    # 避免一進總覽就大量打 GAS / Supabase，造成畫面卡住。
-    if action_col2.button("同步基金每單位月配息", key="sync_fund_monthly_dividend"):
-        fund_rows = enriched[
-            (enriched["asset_type"] == "基金") &
-            (enriched["fund_code"].fillna("") != "") &
-            (enriched["monthly_dividend_per_unit"].fillna(0) == 0)
-        ]
-        if not fund_rows.empty:
-            sb       = supabase_client()
-            updated  = 0
-            done_codes: set[str] = set()
-            for _, fr in fund_rows.iterrows():
-                fc = normalize_text(fr.get("fund_code", ""))
-                if not fc or fc in done_codes:
-                    continue
-                mdiv = _get_gas_monthly_div(fc)
-                if mdiv and mdiv > 0:
-                    # 更新 Supabase 裡所有相同 fund_code 的列
-                    sb.table("positions").update(
-                        {"monthly_dividend_per_unit": mdiv}
-                    ).eq("fund_code", fc).execute()
-                    done_codes.add(fc)
-                    updated += 1
-            if updated:
-                st.success(f"已更新 {updated} 檔基金每單位月配息。")
-                st.cache_data.clear()
-            else:
-                st.info("沒有需要回填的基金每月配息。")
 
     # ── 頂部 5 個 KPI ──
     summary = enriched.groupby("platform", dropna=False).agg(
