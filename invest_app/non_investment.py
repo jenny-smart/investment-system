@@ -113,7 +113,7 @@ TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
 
 def render_total_asset_row(total_investment: float, other: dict[str, Any] | None, sell_cost: float = 0.0) -> Any:
     """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。
-    總帳月份說明放在這排下方，不佔卡片欄位。"""
+    總帳月份說明放在這排下方、對齊第二張卡，不佔卡片欄位。"""
     if not other:
         return None
     cols = st.columns(5)
@@ -125,7 +125,9 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     cols[2].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
-    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    # 說明對齊這排第二張卡（其他資產小計）下方
+    _, note_col = st.columns([1, 4])
+    note_col.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
     return None
 
 
@@ -136,7 +138,9 @@ def render_other_assets_tab(enriched: pd.DataFrame) -> None:
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
-    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    # 說明對齊這排第二張卡（其他資產小計）下方
+    _, note_col = st.columns([1, 4])
+    note_col.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
     cols = st.columns(5)
     for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
