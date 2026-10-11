@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
+    TW_STOCK_SELL_COST_RATE,
     CURRENCIES,
     _get_gas_date,
     _get_gas_monthly_div,
@@ -62,7 +63,7 @@ def _merge_positions(p_rows: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     p_rows = p_rows.copy()
     p_rows["_merge_key"] = key_series
 
-    sum_cols   = ["台幣成本", "台幣市值", "含息總損益", "累計配息原幣", "累計已領配息", "每月配息",
+    sum_cols   = ["台幣成本", "台幣市值", "賣出稅費", "扣稅後市值", "含息總損益", "累計配息原幣", "累計已領配息", "每月配息",
                   "units", "original_units", "total_cost_input", "dividend_received_total"]
     first_cols = ["name", "currency", "ticker", "fund_code", "fund_pattern",
                   "即時價格/淨值", "基金淨值日期", "匯率", "platform", "asset_type", "id"]
@@ -169,6 +170,8 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
             "現值":     round(price_val, 2)      if price_val is not None else None,
             "台幣成本": round(cost_val, 0)        if cost_val else None,
             "台幣市值": round(mval, 0)            if mval     else None,
+            "賣出稅費": round(to_float(pr.get("賣出稅費")) or 0, 0) if to_float(pr.get("賣出稅費")) else None,
+            "扣稅後市值": round(to_float(pr.get("扣稅後市值")) or 0, 0) if to_float(pr.get("賣出稅費")) else None,
             "市值損益": round(nav_pnl, 0)         if nav_pnl  is not None else None,
             "累積配息原幣": round(div_original, 2) if div_original else None,
             "累積配息": round(div_val, 0)         if div_val  else None,
@@ -181,12 +184,16 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 
     if rows_disp:
         df_disp = pd.DataFrame(rows_disp)
+        if df_disp["賣出稅費"].isna().all():  # 只有台股有賣出稅費，其他平台不顯示這兩欄
+            df_disp = df_disp.drop(columns=["賣出稅費", "扣稅後市值"])
         col_cfg = {
             "名稱":       st.column_config.TextColumn("名稱",       width="large"),
             "日期":       st.column_config.TextColumn("日期",       width="small"),
             "現值":       st.column_config.NumberColumn("現值",     width="small",  format="%.2f"),
             "台幣成本":   st.column_config.NumberColumn("台幣成本", width="medium", format="%.0f"),
             "台幣市值":   st.column_config.NumberColumn("台幣市值", width="medium", format="%.0f"),
+            "賣出稅費":   st.column_config.NumberColumn("賣出稅費", width="small", format="%.0f"),
+            "扣稅後市值": st.column_config.NumberColumn("扣稅後市值", width="medium", format="%.0f"),
             "市值損益":   st.column_config.NumberColumn("市值損益", width="medium", format="%.0f"),
             "累積配息原幣": st.column_config.NumberColumn("累積配息原幣", width="medium", format="%.2f"),
             "累積配息":   st.column_config.NumberColumn("累積配息", width="medium", format="%.0f"),
@@ -225,6 +232,17 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     nav_color_plt = "#6ee7b7" if nav_pnl_plt >= 0 else "#fca5a5"
     tot_color_plt = "#6ee7b7" if total_pnl_plt >= 0 else "#fca5a5"
     tot_rate_plt  = total_pnl_plt / total_cost if total_cost else None
+    # 台股：賣出稅費 = 總市值 × 0.4425%（手續費 0.1425% + 證交稅 0.3%）
+    sell_cost_plt = total_val * TW_STOCK_SELL_COST_RATE if platform == "台股" else 0
+    sell_cost_html = (f'''
+  <span style="min-width:120px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">賣出稅費（0.4425%）</div>
+    <div style="font-size:14px;font-weight:700;color:#dc2626">{money(sell_cost_plt)}</div>
+  </span>
+  <span style="min-width:120px;font-family:monospace">
+    <div style="font-size:10px;color:#6b7280;font-family:sans-serif">扣稅後市值</div>
+    <div style="font-size:14px;font-weight:700">{money(total_val - sell_cost_plt)}</div>
+  </span>''' if sell_cost_plt else "")
 
     st.markdown(f"""
 <div style="background:#fff;color:#1a2e22;padding:14px 20px;border-radius:12px;
@@ -240,7 +258,7 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
   <span style="min-width:120px;font-family:monospace">
     <div style="font-size:10px;color:#6b7280;font-family:sans-serif">市值</div>
     <div style="font-size:14px;font-weight:700">{money(total_val)}</div>
-  </span>
+  </span>{sell_cost_html}
   <span style="min-width:130px;font-family:monospace">
     <div style="font-size:10px;color:#6b7280;font-family:sans-serif">市值損益</div>
     <div style="font-size:14px;font-weight:700;color:{'#059669' if nav_pnl_plt>=0 else '#dc2626'}">{signed_money(nav_pnl_plt)}</div>

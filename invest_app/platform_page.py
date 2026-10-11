@@ -16,7 +16,7 @@ from invest_app.positions_admin import (
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
-             "即時價格/淨值", "基金淨值日期", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值",
+             "即時價格/淨值", "基金淨值日期", "匯率", "成本原幣", "市值原幣", "台幣成本", "台幣市值", "賣出稅費", "扣稅後市值",
              "價差損益", "價差損益率", "累計配息原幣", "累計已領配息", "含息總損益", "含息總損益率", "每月配息",
              "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
