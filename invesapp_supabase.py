@@ -207,7 +207,7 @@ with st.container():
     c2.metric("投資總成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("投資市值損益", signed_money(total_pnl_all))
-    c4.metric("總投資配息", money(total_div_received))
+    c4.metric("投資總配息", money(total_div_received))
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
     c7.metric("美股配息", money(_received_dividends("美股")))
