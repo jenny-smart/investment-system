@@ -1,0 +1,42 @@
+name: Richart FX to 總帳 R column
+
+on:
+  schedule:
+    # 台北時間週一至週五 09:30、12:30、15:30（UTC 01:30、04:30、07:30）
+    - cron: "30 1,4,7 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only fetch rates and preview writes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: richart-fx
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
+      - name: Fetch Richart rates and update R cells
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_richart_fx.py --dry-run
+          else
+            python sync_richart_fx.py
+          fi

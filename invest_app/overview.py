@@ -11,6 +11,7 @@ from invest_app.core import (
     CURRENCIES,
     _get_gas_date,
     fetch_fx,
+    fetch_richart_fx,
     fmt_md,
     money,
     normalize_text,
@@ -385,8 +386,10 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
         rate, status = fetch_fx(cur)
         warn = "" if status == "ok" else f' <span style="color:#dc2626">⚠ {html.escape(str(status))}</span>'
         fx_parts.append(f"<b>{cur}</b> {money(rate, 4)}{warn}")
+    _richart, richart_status = fetch_richart_fx()
+    source = "Richart 賣外幣" if _richart else f'<span style="color:#dc2626">{html.escape(richart_status)}，改用 Yahoo</span>'
     st.markdown('<div style="font-size:.85rem;color:#475569;margin:4px 0 8px">💱 即時匯率　'
-                + "　·　".join(fx_parts) + "</div>", unsafe_allow_html=True)
+                + "　·　".join(fx_parts) + f"　（{source}）</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
