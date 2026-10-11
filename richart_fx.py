@@ -37,11 +37,41 @@ def parse_richart_table(raw: str, side: str = "sell") -> dict[str, float]:
     return rates
 
 
+def parse_rate_array(raw: str, field: str = "richartBuyRates") -> dict[str, float]:
+    """頁面隱藏欄位 <input id="exchangeRateArray" value="[{'code':'USD','richartBuyRates':...}]">。
+
+    demandDeposit.js 把 richartBuyRates（銀行買入）放在「賣外幣」表的 Richart 欄，所以賣外幣取這個欄位。
+    """
+    import json
+    tag = re.search(r'(?is)<input[^>]*\bid=["\']exchangeRateArray["\'][^>]*>', raw)
+    if not tag:
+        return {}
+    value = re.search(r'(?is)\bvalue=(?:"([^"]*)"|\'([^\']*)\')', tag.group(0))
+    if not value:
+        return {}
+    text = html.unescape(value.group(1) if value.group(1) is not None else value.group(2)).replace("'", '"')
+    try:
+        items = json.loads(text)
+    except ValueError:
+        return {}
+    rates: dict[str, float] = {}
+    for item in items if isinstance(items, list) else []:
+        code = str(item.get("code", "")).upper()
+        try:
+            rate = float(item.get(field))
+        except (TypeError, ValueError):
+            continue
+        if code in RICHART_CURRENCIES and rate > 0:
+            rates[code] = rate
+    return rates
+
+
 def parse_richart_rates(raw: str, window: int = 240) -> dict[str, float]:
-    """回傳 {幣別: 賣外幣匯率}；先讀匯率表的 -sell 列，沒有才用文字搜尋。找不到的幣別不放進結果。"""
-    table = parse_richart_table(raw)
-    if table:
-        return table
+    """回傳 {幣別: 賣外幣匯率}；依序用隱藏欄位 exchangeRateArray、匯率表 -sell 列、文字搜尋。找不到的幣別不放進結果。"""
+    for parser in (parse_rate_array, parse_richart_table):
+        found = parser(raw)
+        if found:
+            return found
     text = page_text(raw)
     rates: dict[str, float] = {}
     for code, (names, (low, high)) in RICHART_CURRENCIES.items():
