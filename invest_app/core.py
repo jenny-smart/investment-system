@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v113-fx-from-ledger-r"
+APP_VERSION = "2026-10-11-v114-fx-ledger-first"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -993,29 +993,24 @@ def fetch_richart_fx() -> tuple[dict[str, float], str]:
         return {}, f"總覽 R 欄讀取失敗:{str(e)[:60]}"
 
 
+FX_ALIAS = {
+    "台幣": "TWD", "新台幣": "TWD", "臺幣": "TWD",
+    "美金": "USD", "美元": "USD", "人民幣": "CNY",
+    "日幣": "JPY", "日圓": "JPY", "南非幣": "ZAR",
+    "韓幣": "KRW", "韓元": "KRW", "港幣": "HKD",
+    "泰幣": "THB", "歐元": "EUR",
+}
+FX_YAHOO_PAIRS = {
+    "USD": "USDTWD=X", "CNY": "CNYTWD=X", "JPY": "JPYTWD=X",
+    "KRW": "KRWTWD=X", "HKD": "HKDTWD=X", "THB": "THBTWD=X",
+    "EUR": "EURTWD=X", "ZAR": "ZARTWD=X",
+}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_fx(currency: str) -> tuple[float | None, str]:
-    currency = normalize_text(currency, "TWD").upper()
-    alias = {
-        "台幣": "TWD", "新台幣": "TWD", "臺幣": "TWD",
-        "美金": "USD", "美元": "USD", "人民幣": "CNY",
-        "日幣": "JPY", "日圓": "JPY", "南非幣": "ZAR",
-        "韓幣": "KRW", "韓元": "KRW", "港幣": "HKD",
-        "泰幣": "THB", "歐元": "EUR",
-    }
-    currency = alias.get(currency, currency)
-    if currency == "TWD":
-        return 1.0, "ok"
-    direct_pairs = {
-        "USD": "USDTWD=X", "CNY": "CNYTWD=X", "JPY": "JPYTWD=X",
-        "KRW": "KRWTWD=X", "HKD": "HKDTWD=X", "THB": "THBTWD=X",
-        "EUR": "EURTWD=X", "ZAR": "ZARTWD=X",
-    }
-    # 優先用 Richart 賣外幣匯率；抓不到才用 Yahoo / 備援
-    richart, _richart_status = fetch_richart_fx()
-    if richart.get(currency):
-        return float(richart[currency]), "ok"
-    pair = direct_pairs.get(currency)
+def fetch_market_fx(currency: str) -> tuple[float | None, str]:
+    """Yahoo 匯率（失敗再用備援）；只在總帳 R 欄沒有該幣別時使用。"""
+    pair = FX_YAHOO_PAIRS.get(currency)
     if not pair:
         return None, f"未知幣別:{currency}"
     price, status = fetch_yahoo_price(pair)
@@ -1025,6 +1020,19 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
             return fallback, fallback_status
         return None, f"匯率抓取失敗:{currency}; {status}; {fallback_status}"
     return float(price), status
+
+
+def fetch_fx(currency: str) -> tuple[float | None, str]:
+    """匯率：優先用總帳 R 欄的 Richart 賣外幣匯率，沒有才用 Yahoo / 備援。
+    本身不快取（兩個來源各自快取），避免 R 欄更新後還拿到舊的 Yahoo 結果。"""
+    currency = normalize_text(currency, "TWD").upper()
+    currency = FX_ALIAS.get(currency, currency)
+    if currency == "TWD":
+        return 1.0, "ok"
+    richart, _richart_status = fetch_richart_fx()
+    if richart.get(currency):
+        return float(richart[currency]), "ok"
+    return fetch_market_fx(currency)
 
 
 # 台股賣出成本：手續費 0.1425% + 證交稅 0.3%；市值維持原值，損益扣除這筆稅費
