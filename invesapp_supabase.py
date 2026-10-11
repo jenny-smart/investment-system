@@ -37,7 +37,7 @@ except Exception:
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v68-total-asset-row"
+APP_VERSION = "2026-10-11-v69-other-assets-tab"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3215,12 +3215,15 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             )
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
-    # ── 其他資產小卡（總帳 Jennyall）──
-    other = load_other_assets()
-    render_other_asset_cards(other)
+    # ── 匯率列 ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### 💱 即時匯率")
+    fx_cols = st.columns(len(CURRENCIES))
+    for i, cur in enumerate(CURRENCIES):
+        rate, status = fetch_fx(cur)
+        fx_cols[i].metric(cur, money(rate, 4),
+                          delta="✓" if status == "ok" else f"⚠ {status}")
 
-    # ── 匯率列（精簡一行）──
-    render_fx_strip("💱 即時匯率")
     st.markdown("---")
 
     # ── 各平台群組 ──
@@ -3229,36 +3232,18 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         if p_rows.empty:
             continue
         render_platform_group(platform, p_rows)
-
-    # ── 其他資產明細、每月加總：比照平台群組格式，放在台新基金下方 ──
-    render_other_asset_groups(other)
-    render_monthly_income_summary()
-
+        
 # ════════════════════════════════════════════════════════════════════════════
 # 以下原版完全不變
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_fx_overview_cards() -> None:
-    render_fx_strip("💱 匯率總覽")
-
-
-def render_fx_strip(title: str) -> None:
-    """匯率精簡成一行小標籤，取代佔位置的大卡片。"""
-    chips = []
-    for cur in CURRENCIES:
-        if cur == "TWD":
-            continue
+    st.markdown("### 💱 匯率總覽")
+    fx_cols = st.columns(len(CURRENCIES))
+    for i, cur in enumerate(CURRENCIES):
         rate, status = fetch_fx(cur)
-        warn = "" if status == "ok" else f' <span style="color:#dc2626" title="{html_lib.escape(str(status))}">⚠</span>'
-        chips.append(
-            f'<span style="background:#fff;border:1px solid #e5e7eb;border-radius:999px;padding:3px 10px;'
-            f'font-family:monospace;font-size:12px"><b>{cur}</b> {money(rate, 4)}{warn}</span>'
-        )
-    st.markdown(
-        f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0">'
-        f'<span style="font-size:13px;font-weight:700;color:#374151">{title}</span>{"".join(chips)}</div>',
-        unsafe_allow_html=True,
-    )
+        with fx_cols[i]:
+            st.metric(cur, money(rate, 4), delta="ok" if status == "ok" else status)
 
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 其他資產（總帳 Jennyall）與每月加總（總帳「總覽」）
@@ -3361,15 +3346,19 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
 
 
-def render_other_asset_cards(other: dict[str, Any] | None) -> None:
-    """投資平台卡片下方：不在最上方總資產列的其他資產（保險 / 懷思投資 / uncle待還）。"""
+def render_other_assets_tab() -> None:
+    """其他資產總覽分頁：各類小卡 + 明細（比照平台群組格式）+ 每月加總。"""
+    st.markdown("### 🏦 其他資產總覽")
+    other = load_other_assets()
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
+    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
     cols = st.columns(5)
-    rest = [(name, data) for name, data in other["categories"].items() if name not in TOP_ROW_CATEGORIES]
-    for col, (name, data) in zip(cols, rest):
+    for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
+    render_other_asset_groups(other)
+    render_monthly_income_summary()
 
 
 def render_other_asset_groups(other: dict[str, Any] | None) -> None:
@@ -6962,7 +6951,7 @@ with st.container():
     render_total_asset_row(float(total_value), load_other_assets())
     st.markdown("</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "🔎 股票研究", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
+tabs = st.tabs(["投資總覽", "🏦 其他資產總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "🔎 股票研究", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -6988,8 +6977,11 @@ with tabs[0]:
             },
         )
 
+with tabs[1]:
+    render_other_assets_tab()
+
 # ── 股票研究：放在正式功能區，不使用左側 multipage 導航 ─────────────────
-with tabs[6]:
+with tabs[7]:
     st.markdown("### 🔎 股票研究")
     st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
@@ -7479,7 +7471,7 @@ with tabs[6]:
             st.info("尚未有雷達資料，請先按「更新熱門候選」。")
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
-for idx, platform in enumerate(PLATFORMS, start=1):
+for idx, platform in enumerate(PLATFORMS, start=2):
     with tabs[idx]:
         st.subheader(platform)
         # ── 第一排：全局KPI ──
@@ -7537,7 +7529,7 @@ for idx, platform in enumerate(PLATFORMS, start=1):
             )
         editable_platform_table(platform, positions, f"editor_{platform}")
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("資料安全")
     st.error("安全版 v7：不會自動建立預設資料，也不會自動清空資料。")
     st.markdown("#### 目前 Supabase 資料匯出")
@@ -7557,7 +7549,7 @@ with tabs[6]:
         else:
             seed_presets(); st.success("已手動建立預設清單。"); st.rerun()
 
-with tabs[8]:
+with tabs[9]:
     st.subheader("工具")
     tool_choice = st.selectbox(
         "選擇工具",
@@ -7575,22 +7567,22 @@ with tabs[8]:
     elif tool_choice == "抓價測試":
         price_test_section()
 
-with tabs[9]:
+with tabs[10]:
     render_history_tab()
 
-with tabs[10]:
+with tabs[11]:
     render_dividend_log_tab(enriched)
 
-with tabs[11]:
+with tabs[12]:
     render_stock_dividend_tab(enriched)
 
-with tabs[12]:
+with tabs[13]:
     render_online_sheets_tab()
 
-with tabs[13]:
+with tabs[14]:
     render_cashflow_tab()
 
-with tabs[14]:
+with tabs[15]:
     st.subheader("🏦 銀行明細（本機測試）")
     st.caption("帳密只存 macOS Keychain；圖片驗證碼需本人輸入。請勿在 Streamlit Cloud 設定帳密。")
     try:
@@ -7641,5 +7633,5 @@ with tabs[14]:
     except Exception as exc:
         st.error(f"銀行工具載入失敗：{exc}")
 
-with tabs[15]:
+with tabs[16]:
     render_bank_fund_query_tab()
