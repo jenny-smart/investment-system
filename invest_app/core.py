@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v73-parallel-quotes"
+APP_VERSION = "2026-10-11-v74-history-columns"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1260,8 +1260,8 @@ def load_sheet_grid(gid: str) -> list[list[str]]:
     response.raise_for_status()
     if "<html" in response.text[:200].lower():
         raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
-    df = pd.read_csv(io.StringIO(response.text), header=None, dtype=str, keep_default_na=False)
-    return df.values.tolist()
+    import csv
+    return [row for row in csv.reader(io.StringIO(response.text))]
 
 
 def load_other_assets() -> dict[str, Any] | None:
@@ -1372,3 +1372,29 @@ def _format_dividend_date(value: Any) -> str:
     if parsed is None:
         return normalize_text(value, "—") or "—"
     return parsed.strftime("%Y/%m/%d")
+
+
+def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), max_height: int | None = None) -> str:
+    """精簡 HTML 表格：欄寬依內容、數字靠右、沒有資料的格子空白（st.dataframe 一律顯示 None）。"""
+    def cell(col: str, value: Any) -> str:
+        if col in number_cols:
+            n = to_float(value)
+            text = "" if n is None else f"{n:,.0f}"
+            return f'<td style="text-align:right;font-family:monospace">{text}</td>'
+        text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else html_lib.escape(str(value))
+        return f"<td>{text}</td>"
+
+    head = "".join(f'<th style="text-align:{"right" if c in number_cols else "left"}">{html_lib.escape(str(c))}</th>'
+                   for c in df.columns)
+    body = "".join("<tr>" + "".join(cell(c, row[c]) for c in df.columns) + "</tr>"
+                   for _, row in df.iterrows())
+    height = f"max-height:{max_height}px;" if max_height else ""
+    return f"""
+<div style="overflow:auto;{height}border:1px solid #e5e7eb;border-radius:8px;background:#fff;margin:2px 0 10px 0">
+<table class="jt-table" style="border-collapse:collapse;font-size:13px;white-space:nowrap">
+<thead><tr style="position:sticky;top:0;background:#f8fafc">{head}</tr></thead>
+<tbody>{body}</tbody></table></div>
+<style>
+.jt-table th, .jt-table td {{ padding:5px 12px; border-bottom:1px solid #f1f5f9; }}
+.jt-table th {{ color:#6b7280; font-weight:600; }}
+</style>"""

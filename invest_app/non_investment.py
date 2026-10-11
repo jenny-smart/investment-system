@@ -8,7 +8,9 @@ import pandas as pd
 import streamlit as st
 
 from asset_summary import monthly_income_block
+from invest_app.dividends import build_estimated_dividend_table
 from invest_app.core import (
+    html_table,
     OVERVIEW_SHEET_GID,
     load_other_assets,
     load_sheet_grid,
@@ -121,7 +123,7 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
 
 
-def render_other_assets_tab() -> None:
+def render_other_assets_tab(enriched: pd.DataFrame) -> None:
     """非投資總覽分頁：各類小卡 + 明細（比照平台群組格式）+ 每月加總。"""
     st.markdown("### 🏦 非投資總覽")
     other = load_other_assets()
@@ -133,7 +135,7 @@ def render_other_assets_tab() -> None:
     for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
     render_other_asset_groups(other)
-    render_monthly_income_summary()
+    render_monthly_income_summary(enriched)
 
 
 def render_other_asset_groups(other: dict[str, Any] | None) -> None:
@@ -154,16 +156,54 @@ def render_other_asset_groups(other: dict[str, Any] | None) -> None:
         if data["items"]:
             items = pd.DataFrame(data["items"], columns=["名稱", "金額"])
             items["名稱"] = items["名稱"].replace("", "（無名稱）")
-            st.dataframe(items, use_container_width=True, hide_index=True,
-                         height=min(36 * len(items) + 40, 400),
-                         column_config={
-                             "名稱": st.column_config.TextColumn("名稱", width="large"),
-                             "金額": st.column_config.NumberColumn("金額", format="%.0f"),
-                         })
+            st.markdown(f'<div style="margin-left:20px">{html_table(items, ["金額"])}</div>', unsafe_allow_html=True)
 
 
-def render_monthly_income_summary() -> None:
-    """總帳「總覽」分頁的每月加總，比照平台群組格式。"""
+# 每月加總各列對應的基金配息預估（平台、幣別、名稱篩選）；沒有對應的列（利息、股利…）預估留空。
+MONTHLY_ESTIMATE_RULES: dict[str, tuple[str, str, str]] = {
+    "配息-基富通-台": ("基富通", "TWD", ""),
+    "配息-基富通-人": ("基富通", "CNY", ""),
+    "配息-基富通-日": ("基富通", "JPY", ""),
+    "配息-渣打-大華": ("渣打基金", "USD", "大華"),
+    "配息-渣打-美金": ("渣打基金", "USD", "!大華"),
+    "配息-渣打-南非": ("渣打基金", "ZAR", ""),
+    "配息-台新-南非": ("台新基金", "ZAR", ""),
+    "配息-台新-美金": ("台新基金", "USD", ""),
+}
+# 小計列 = 下列項目的預估加總（與總帳「總覽」B 欄公式相同結構）
+MONTHLY_SUBTOTALS: dict[str, list[str]] = {
+    "台幣-加總": ["股利-台股", "配息-懷思投資", "回饋金-保險", "利息-銀行"],
+    "台幣-境外": ["配息-基富通-台"],
+    "外幣-加總": ["配息-基富通-人", "配息-基富通-日", "配息-渣打-大華", "配息-渣打-美金",
+                "配息-渣打-南非", "配息-台新-南非", "配息-台新-美金"],
+    "每月加總": ["台幣-加總", "台幣-境外", "外幣-加總"],
+}
+
+
+def monthly_dividend_estimates(estimate_df: pd.DataFrame, labels: list[str]) -> dict[str, float | None]:
+    """依平台／幣別把預估配息表（台幣）對到每月加總各列。"""
+    out: dict[str, float | None] = {}
+    for label in labels:
+        rule = MONTHLY_ESTIMATE_RULES.get(label)
+        if not rule or estimate_df.empty:
+            out[label] = None
+            continue
+        platform, currency, name_filter = rule
+        rows = estimate_df[(estimate_df["平台"] == platform) & (estimate_df["幣別"] == currency)]
+        if name_filter.startswith("!"):
+            rows = rows[~rows["基金名稱"].astype(str).str.contains(name_filter[1:])]
+        elif name_filter:
+            rows = rows[rows["基金名稱"].astype(str).str.contains(name_filter)]
+        out[label] = float(pd.to_numeric(rows["預估配息台幣"], errors="coerce").fillna(0).sum()) if not rows.empty else None
+    for _ in range(2):  # 每月加總依賴其他小計，算兩輪
+        for label, parts in MONTHLY_SUBTOTALS.items():
+            values = [out.get(p) for p in parts if out.get(p) is not None]
+            out[label] = sum(values) if values else None
+    return out
+
+
+def render_monthly_income_summary(enriched: pd.DataFrame) -> None:
+    """總帳「總覽」分頁的每月加總；預估 = 依平台、幣別加總的基金配息預估（台幣）。"""
     try:
         rows = monthly_income_block(load_sheet_grid(OVERVIEW_SHEET_GID))
     except Exception as exc:
@@ -171,21 +211,19 @@ def render_monthly_income_summary() -> None:
         return
     if not rows:
         return
+    try:
+        estimates = monthly_dividend_estimates(build_estimated_dividend_table(enriched), [r["項目"] for r in rows])
+    except Exception as exc:
+        st.caption(f"配息預估暫時算不出來：{exc}")
+        estimates = {}
     head, details = rows[0], rows[1:]
     st.markdown(_group_header_html("🧮 每月加總", [
         ("本月金額", money(head["金額"]), "#1a2e22"),
+        ("預估", money(estimates.get(head["項目"])), "#7c3aed"),
     ]), unsafe_allow_html=True)
-    df = pd.DataFrame(details).rename(columns={"項目": "名稱"})
-    df["預估"] = pd.to_numeric(df["預估"], errors="coerce")  # 空白顯示空白，不顯示 None
-    st.dataframe(
-        df, use_container_width=True, hide_index=True,
-        height=min(36 * len(df) + 40, 640),
-        column_config={
-            "名稱": st.column_config.TextColumn("名稱", width="large"),
-            "金額": st.column_config.NumberColumn("金額", format="%.0f"),
-            "預估": st.column_config.NumberColumn("預估", format="%.0f"),
-        },
-    )
+    df = pd.DataFrame([{"名稱": r["項目"], "金額": r["金額"], "台/外": r["台/外"], "預估": estimates.get(r["項目"])}
+                       for r in details])
+    st.markdown(html_table(df, ["金額", "預估"]), unsafe_allow_html=True)
 
 
 def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:

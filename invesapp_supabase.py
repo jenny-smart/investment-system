@@ -234,7 +234,7 @@ try:
         render_investment_overview_page(enriched, positions)
 
     if page == "非投資總覽":
-        render_other_assets_tab()
+        render_other_assets_tab(enriched)
 
     if page == "🔎 股票研究":
         render_research_page(enriched)
