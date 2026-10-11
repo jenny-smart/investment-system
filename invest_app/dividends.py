@@ -1215,6 +1215,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
             st.warning(f"自動配息快照失敗：{exc}")
     render_sheet_dividend_diff(enriched_df)
     render_duplicate_dividend_cleanup()
+    render_monthly_dividend_check(positions)
 
     source = enriched_df
     estimate_df = build_estimated_dividend_table(source)
@@ -1360,3 +1361,92 @@ def render_duplicate_dividend_cleanup() -> None:
             st.cache_data.clear()
             st.success(f"已刪除 {len(removable)} 筆重複記錄並重算累計配息。")
             st.rerun()
+
+
+def monthly_dividend_check(positions: pd.DataFrame, month: str) -> pd.DataFrame:
+    """每檔持有基金在 month（YYYY/MM）是否已有配息記錄，以及 GAS 最近一次除息資料。"""
+    positions = ensure_columns(pd.DataFrame(positions))
+    # (代碼或名稱, 平台, 幣別, 月份) → 是否已入帳；代碼、名稱任一對上即算有記錄
+    seen: dict[tuple[str, str, str, str], bool] = {}
+    for record in _combined_dividend_records():
+        rec_month = _record_date_key(record)
+        paid = normalize_bool(record.get("is_paid", False), False)
+        for ident in (normalize_text(record.get("fund_code", "")).lower(),
+                      _dividend_name_key(record.get("fund_name", ""))):
+            if ident:
+                k = (ident, normalize_text(record.get("platform", "")),
+                     normalize_text(record.get("currency", "")).upper(), rec_month)
+                seen[k] = seen.get(k, False) or paid
+    groups: dict[tuple[str, str, str], list[pd.Series]] = {}
+    for _, r in positions.iterrows():
+        if normalize_text(r.get("asset_type", "")) != "基金" or not normalize_text(r.get("fund_code", "")):
+            continue
+        key = (normalize_text(r.get("fund_code", "")), normalize_text(r.get("platform", "")),
+               normalize_text(r.get("currency", "TWD")))
+        groups.setdefault(key, []).append(r)
+    rows = []
+    for (fc, plt, cur), grp in groups.items():
+        units = sum(_position_dividend_units(r) for r in grp)
+        if units <= 0:
+            continue
+        name = _fund_name_from_rows(grp)
+        gas = _get_gas_data(fc)
+        gas_month = _record_date_key({"ex_date": gas.get("ex_date"), "pay_date": gas.get("pay_date")})
+        found = [seen[k] for k in ((fc.lower(), plt, cur.upper(), month),
+                                   (_dividend_name_key(name), plt, cur.upper(), month)) if k in seen]
+        if any(found):
+            status = "已入帳"
+        elif found:
+            status = "已有記錄（未入帳）"
+        elif gas_month == month:
+            status = "GAS 有本月資料，尚未建立記錄"
+        else:
+            status = "GAS 尚無本月資料"
+        rows.append({
+            "平台": plt, "基金名稱": name, "幣別": cur, "單位數": units,
+            "GAS除息日": _format_dividend_date(gas.get("ex_date") or ""),
+            "GAS發放日": _format_dividend_date(gas.get("pay_date") or ""),
+            "GAS每單位配息": gas.get("monthly_div"),
+            "狀態": status,
+            "_fund_code": fc,
+        })
+    return pd.DataFrame(rows)
+
+
+def render_monthly_dividend_check(positions: pd.DataFrame) -> None:
+    """本月配息檢查：缺記錄的基金可手動新增（未入帳，再由人工確認入帳）。"""
+    month = tw_now().strftime("%Y/%m")
+    df = monthly_dividend_check(positions, month)
+    if df.empty:
+        return
+    missing = df[~df["狀態"].str.startswith("已")]
+    title = f"#### 📋 {month} 配息檢查" + (f"（{len(missing)} 檔尚無本月記錄）" if len(missing) else "（全部已有記錄）")
+    with st.expander(title.replace("#### ", ""), expanded=bool(len(missing))):
+        st.markdown(html_table(df.drop(columns=["_fund_code"]), ["單位數"]), unsafe_allow_html=True)
+        if missing.empty:
+            return
+        st.caption("GAS 尚無本月資料時，可依對帳單手動新增；新增的記錄為未入帳，確認後再到下方表單勾選入帳。")
+        options = {f"{r['平台']}｜{r['基金名稱']}｜{r['幣別']}": r for _, r in missing.iterrows()}
+        with st.form("manual_monthly_dividend"):
+            label = st.selectbox("基金", list(options))
+            c1, c2, c3, c4 = st.columns(4)
+            ex_date = c1.text_input("除息日（YYYY/MM/DD）", value=f"{month}/01")
+            pay_date = c2.text_input("發放日（YYYY/MM/DD）", value="")
+            per_unit = c3.number_input("每單位配息（原幣）", min_value=0.0, value=0.0, step=0.0001, format="%.4f")
+            units = c4.number_input("配息單位數", min_value=0.0, value=float(options[label]["單位數"]), step=0.01)
+            if st.form_submit_button("➕ 新增本月配息記錄（未入帳）"):
+                row = options[label]
+                if per_unit <= 0 or not _parse_dividend_date(ex_date) or not _parse_dividend_date(pay_date):
+                    st.error("請填寫正確的除息日、發放日與每單位配息。")
+                else:
+                    fx, _ = fetch_fx(row["幣別"])
+                    supabase_client().table("fund_dividends").insert({
+                        "fund_code": row["_fund_code"], "fund_name": row["基金名稱"],
+                        "platform": row["平台"], "currency": row["幣別"],
+                        "ex_date": _format_dividend_date(ex_date), "pay_date": _format_dividend_date(pay_date),
+                        "div_amount": float(per_unit), "actual_div_amount": 0,
+                        "units_at_ex": float(units), "fx_rate": float(fx or 1), "twd_total": 0, "is_paid": False,
+                    }).execute()
+                    st.cache_data.clear()
+                    st.success("已新增，請在下方配息記錄表確認入帳。")
+                    st.rerun()

@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v79-one-dividend-per-month"
+APP_VERSION = "2026-10-11-v80-monthly-dividend-check"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1291,7 +1291,6 @@ def normalize_match_name(value: Any) -> str:
 
 # GAS 快取（同 session 只抓一次）
 # 結構：{fund_code: {"date":"5/19","monthly_div":0.044,"ex_date":"2026/05/05","pay_date":"2026/05/13"}}
-_gas_cache: dict[str, dict] = {}
 
 
 GAS_FUND_NAV_URL_V3 = GAS_FUND_NAV_URL
@@ -1303,21 +1302,18 @@ def _parse_date_str(raw: str) -> str:
     return f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
 def _get_gas_data(fund_code: str) -> dict:
     """
     從 GAS v3 取得基金完整資料：
     {"date":"5/19","monthly_div":0.044,"ex_date":"2026/05/05","pay_date":"2026/05/13"}
-    同 session 快取，避免重複 HTTP。
+    快取 6 小時（原本是永久記憶體快取，新公布的除息資料要等重開機才看得到）。
     """
-    global _gas_cache
     fund_code = normalize_text(fund_code)
-    if fund_code in _gas_cache:
-        return _gas_cache[fund_code]
 
     gas_url = GAS_FUND_NAV_URL_V3
     empty = {"date": "—", "monthly_div": None, "ex_date": None, "pay_date": None}
     if not gas_url or not fund_code:
-        _gas_cache[fund_code] = empty
         return empty
 
     candidates = gas_fund_code_candidates(fund_code)
@@ -1340,9 +1336,6 @@ def _get_gas_data(fund_code: str) -> dict:
         except Exception:
             continue
 
-    for candidate in candidates:
-        _gas_cache[candidate] = result
-    _gas_cache[fund_code] = result
     return result
 
 
