@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v114-fx-ledger-first"
+APP_VERSION = "2026-10-11-v115-ledger-refresh"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1278,10 +1278,16 @@ def online_sheet_url(gid: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/export?format=csv&gid={gid}"
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+# 各分頁實際下載的時間（只在快取過期重新下載時更新），顯示給使用者確認資料新舊
+SHEET_FETCHED_AT: dict[str, str] = {}
+
+
+@st.cache_data(ttl=120, show_spinner=False)
 def load_sheet_grid(gid: str) -> list[list[str]]:
-    """整張分頁原樣讀成二維陣列（保留欄列位置，供依日期 / 名稱定位）。"""
-    response = requests.get(online_sheet_url(gid), timeout=30)
+    """整張分頁原樣讀成二維陣列（保留欄列位置，供依日期 / 名稱定位）。快取 2 分鐘，總帳每天會改。"""
+    # 加時間參數避免拿到 Google 端的舊匯出
+    response = requests.get(online_sheet_url(gid) + f"&t={int(datetime.now().timestamp())}", timeout=30)
+    SHEET_FETCHED_AT[gid] = tw_now().strftime("%H:%M:%S")
     response.raise_for_status()
     if "<html" in response.text[:200].lower():
         raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")

@@ -14,6 +14,8 @@ from invest_app.core import (
     two_line_metric,
     html_table,
     OVERVIEW_SHEET_GID,
+    ONLINE_SHEET_SOURCES,
+    SHEET_FETCHED_AT,
     load_other_assets,
     load_sheet_grid,
     money,
@@ -141,7 +143,13 @@ def render_other_assets_tab(enriched: pd.DataFrame) -> None:
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
-    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    note_col, button_col = st.columns([4, 1])
+    fetched = SHEET_FETCHED_AT.get(ONLINE_SHEET_SOURCES["資產總覽"], "")
+    note_col.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。"
+                     f"{f'讀取時間 {fetched}，' if fetched else ''}每 2 分鐘自動重讀。")
+    if button_col.button("🔄 重新讀取總帳", key="reload_ledger"):
+        load_sheet_grid.clear()
+        st.rerun()
     cols = st.columns(5)
     for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
