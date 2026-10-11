@@ -18,7 +18,7 @@ from invest_app.core import (
 
 
 def render_research_page(enriched) -> None:
-    st.markdown("### 🔎 股票研究")
+    st.markdown("### 股票研究")
     st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
     own_tab, watch_tab, hot_tab = st.tabs(["📌 目前台股持股分析", "👀 觀察股票池", "🔥 熱門中短線候選"])

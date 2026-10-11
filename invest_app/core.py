@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v90-light-sheet-read"
+APP_VERSION = "2026-10-11-v91-tab-cleanup"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -900,11 +900,6 @@ def fetch_moneydj_fund_quote(code: str, pattern: str) -> dict[str, Any]:
         return {"nav": None, "date": "—", "raw_date": "", "status": f"MoneyDJ 錯誤:{str(e)[:40]}"}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_moneydj_nav(code: str, pattern: str) -> tuple[float | None, str]:
-    quote = fetch_moneydj_fund_quote(code, pattern)
-    nav = quote.get("nav")
-    return (float(nav), normalize_text(quote.get("status", "MoneyDJ直連✓"))) if nav is not None else (None, normalize_text(quote.get("status", "MoneyDJ 找不到淨值")))
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -959,11 +954,6 @@ def fetch_fund_quote(code: str, pattern: str) -> dict[str, Any]:
     return {"nav": None, "date": "—", "raw_date": "", "status": f"所有來源失敗:{code} {detail[:120]}"}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_fund_nav(code: str, pattern: str) -> tuple[float | None, str]:
-    quote = fetch_fund_quote(code, pattern)
-    nav = quote.get("nav")
-    return (float(nav), normalize_text(quote.get("status", "ok"))) if nav is not None else (None, normalize_text(quote.get("status", "所有來源失敗")))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
