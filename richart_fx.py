@@ -55,3 +55,43 @@ def fetch_richart_rates(timeout: float = 15) -> dict[str, float]:
     if not rates:
         raise RuntimeError(f"Richart 頁面找不到匯率（{len(response.text)} 字元）：{page_text(response.text)[:300]}")
     return rates
+
+
+def debug_endpoints(raw: str, base: str = "https://richart.tw") -> None:
+    """找不到匯率時，列出頁面與其 JS 引用的資料網址，方便找出匯率 API。"""
+    import requests
+    pattern = re.compile(r"""(?:url\s*[:=]\s*|\.(?:get|post|getJSON|ajax)\(\s*|fetch\(\s*|axios\.\w+\(\s*)['"`]([^'"`]+)['"`]""", re.I)
+    print("== page endpoints ==")
+    for hit in sorted(set(pattern.findall(raw))):
+        print("  ", hit)
+    print("== rate keywords in page ==")
+    shown = 0
+    for m in re.finditer(r"(?i)(rate|exchange|currency|匯率|buy|sell)", raw):
+        snippet = raw[max(0, m.start() - 80):m.end() + 120].replace("\n", " ")
+        if any(k in snippet for k in ("ajax", "url", "api", "fetch")) and shown < 40:
+            print("  ...", snippet[:220])
+            shown += 1
+    scripts = re.findall(r"""<script[^>]+src=['"]([^'"]+)['"]""", raw)
+    print("== scripts ==", scripts)
+    for src in scripts:
+        if src.startswith("http") and "richart" not in src:
+            continue
+        url = src if src.startswith("http") else base + ("" if src.startswith("/") else "/TSDIB_RichartWeb/") + src
+        try:
+            js = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).text
+        except Exception as exc:
+            print("  ", url, "ERR", exc)
+            continue
+        hits = sorted(set(pattern.findall(js)))
+        rate_hits = [h for h in hits if re.search(r"(?i)rate|fx|currency|exchange|RC\d|foreign", h)]
+        if rate_hits:
+            print("  ", url, rate_hits[:40])
+
+
+if __name__ == "__main__":
+    import requests
+    page = requests.get(RICHART_FX_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).text
+    try:
+        print(parse_richart_rates(page) or "no rates parsed")
+    finally:
+        debug_endpoints(page)
