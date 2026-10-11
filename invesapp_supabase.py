@@ -202,8 +202,8 @@ with st.container():
     if tw_missing:
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
-    c1.metric("投資總市值", money(total_value), delta=pnl_delta)
-    c1.caption(f"扣稅後 {money(total_value - total_sell_cost)}")  # 台股賣出稅費 0.4425%
+    # 投資總市值 / 扣稅後總市值（台股賣出稅費 0.4425%）
+    c1.metric("投資總市值", f"{money(total_value)} / {money(total_value - total_sell_cost)}", delta=pnl_delta)
     # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
     c2.metric("投資總成本", money(total_cost),
