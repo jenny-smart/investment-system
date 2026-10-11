@@ -1268,13 +1268,14 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
     c2.metric("已確認實際配息折台幣", money(paid_twd))
     c3.metric("配息記錄筆數", f"{len(actual_df):,}")
 
+    st.markdown("#### 預估配息表")
+    st.caption("目前單位數 × 最近一次每單位配息 = 預估配息原幣，再乘匯率得到台幣。")
+    render_estimated_dividend_table(estimate_df)
+
     st.markdown("#### 配息記錄表")
     st.caption("未勾確認入帳的是待確認的配息（含本月候選）；勾選並套用後才計入累計配息。")
     render_actual_dividend_table(actual_df)
 
-    with st.expander("預估配息表"):
-        st.caption("目前單位數 × 最近一次每單位配息 = 預估配息原幣，再乘匯率得到台幣。")
-        render_estimated_dividend_table(estimate_df)
 
     # 對帳與維護工具平常收起來，需要時再打開
     if not st.toggle("🔧 顯示對帳與維護工具（總帳比對、本月檢查、重複記錄、手動新增）", key="dividend_tools"):
@@ -1495,43 +1496,58 @@ def render_monthly_dividend_check(positions: pd.DataFrame) -> None:
 AUTO_CATCH_UP_DATES = {"2026-10-11"}
 
 
-def _auto_catch_up_records() -> list[dict[str, Any]]:
+def _tw_day(value: Any) -> str:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    return "" if pd.isna(ts) else ts.tz_convert("Asia/Taipei").strftime("%Y-%m-%d")
+
+
+def _auto_catch_up_changes() -> list[dict[str, Any]]:
+    """v77 在 10/11 造成的變動：每筆附 _action（delete／unconfirm）與 _table。"""
     out = []
     for r in _fetch_dividend_rows("fund_dividends"):
-        created = pd.to_datetime(r.get("created_at"), utc=True, errors="coerce")
-        if pd.isna(created) or normalize_text(r.get("note", "")):
-            continue
-        if created.tz_convert("Asia/Taipei").strftime("%Y-%m-%d") in AUTO_CATCH_UP_DATES:
-            out.append(r)
+        if normalize_text(r.get("note", "")):
+            continue  # 有備註的是人工建立的
+        if _tw_day(r.get("created_at")) in AUTO_CATCH_UP_DATES:
+            out.append({**r, "_table": "fund_dividends", "_action": "delete"})
+        elif normalize_bool(r.get("is_paid", False), False) and _tw_day(r.get("updated_at")) in AUTO_CATCH_UP_DATES:
+            out.append({**r, "_table": "fund_dividends", "_action": "unconfirm"})
+    for r in _fetch_dividend_rows("dividend_log"):
+        if any(f"同步 {day}" in normalize_text(r.get("note", "")) for day in AUTO_CATCH_UP_DATES):
+            out.append({**r, "_table": "dividend_log", "_action": "delete"})
     return out
 
 
 def render_auto_catch_up_cleanup() -> None:
-    """列出 10/11 自動補登寫入的記錄，確認後刪除，讓原本的候選列（待人工確認）回來。"""
-    records = _auto_catch_up_records()
-    if not records:
+    """還原 10/11 自動執行造成的變動：新增的刪除、被自動勾入帳的改回未入帳。"""
+    changes = _auto_catch_up_changes()
+    if not changes:
         return
-    st.markdown(f"#### ⚠️ 10/11 自動補登寫入的配息記錄（{len(records)} 筆）")
-    st.caption("這些是 v77 自動補登寫入的，會擋住原本的 10 月候選列，部分還被自動勾了入帳。"
-               "刪除後，10 月會恢復成候選列，由你確認入帳。")
+    st.markdown(f"#### ⚠️ 10/11 程式自動寫入／自動入帳的配息記錄（{len(changes)} 筆）")
+    st.caption("這些不是你操作的：10/11 新增的會刪除，被自動勾成已入帳的會改回未入帳（記錄保留）。"
+               "處理後，10 月會變成待確認，由你核對後勾確認入帳。")
     preview = pd.DataFrame([{
-        "平台": r.get("platform", ""), "基金名稱": r.get("fund_name", ""), "幣別": r.get("currency", ""),
+        "處理方式": "刪除" if r["_action"] == "delete" else "改回未入帳",
+        "來源": r["_table"], "平台": r.get("platform", ""), "基金名稱": r.get("fund_name", ""), "幣別": r.get("currency", ""),
         "除息日": _format_dividend_date(r.get("ex_date", "")), "發放日": _format_dividend_date(r.get("pay_date", "")),
-        "單位數": r.get("units_at_ex"), "每單位配息": r.get("div_amount"),
+        "單位數": r.get("units_at_ex"), "每單位配息": r.get("actual_div_amount") or r.get("div_amount"),
         "已入帳": "是" if normalize_bool(r.get("is_paid", False), False) else "否",
-    } for r in records])
+    } for r in changes])
     st.markdown(html_table(preview, ["單位數", "每單位配息"]), unsafe_allow_html=True)
     with st.form("delete_auto_catch_up"):
-        confirmed = st.checkbox("我確認刪除以上自動補登的記錄")
-        if st.form_submit_button("🗑️ 刪除自動補登記錄") and confirmed:
+        confirmed = st.checkbox("我確認以上記錄都不是我操作的，執行還原")
+        if st.form_submit_button("↩️ 還原 10/11 自動變動") and confirmed:
             sb = supabase_client()
             groups = set()
-            for r in records:
-                sb.table("fund_dividends").delete().eq("id", int(float(r["id"]))).execute()
+            for r in changes:
+                rid = int(float(r["id"]))
+                if r["_action"] == "delete":
+                    sb.table(r["_table"]).delete().eq("id", rid).execute()
+                else:
+                    sb.table(r["_table"]).update({"is_paid": False}).eq("id", rid).execute()
                 groups.add((normalize_text(r.get("fund_code", "")), normalize_text(r.get("platform", "")),
                             normalize_text(r.get("currency", ""))))
             for fund_code, platform, currency in groups:
                 recompute_position_dividend_original_total(fund_code, platform, currency)
             st.cache_data.clear()
-            st.success(f"已刪除 {len(records)} 筆並重算累計配息。")
+            st.success(f"已還原 {len(changes)} 筆並重算累計配息。")
             st.rerun()
