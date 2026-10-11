@@ -37,7 +37,7 @@ except Exception:
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v66-other-assets-layout"
+APP_VERSION = "2026-10-11-v67-history-other-assets"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3277,7 +3277,10 @@ OTHER_SNAPSHOT_KEYS = [*OTHER_ASSET_FIELDS.values(), "deposits_total", "other_as
 
 
 def other_asset_snapshot_fields(total_investment: float) -> dict[str, float]:
-    other = load_other_assets()
+    return other_asset_fields(load_other_assets(), total_investment)
+
+
+def other_asset_fields(other: dict[str, Any] | None, total_investment: float) -> dict[str, float]:
     if not other:
         return {}
     fields = {OTHER_ASSET_FIELDS[name]: round(data["total"], 0) for name, data in other["categories"].items()}
@@ -3454,6 +3457,32 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
     }
 
 
+def _fill_other_assets_from_sheet(df: pd.DataFrame) -> int:
+    """沒有存其他資產的快照，用總帳 Jennyall 該月份欄補上；回傳補上的筆數。"""
+    missing = df["grand_total"].isna()
+    if not missing.any():
+        return 0
+    try:
+        grid = load_sheet_grid(ONLINE_SHEET_SOURCES["資產總覽"])
+    except Exception:
+        return 0
+    by_month: dict[tuple[int, int], dict[str, Any] | None] = {}
+    filled = 0
+    for idx in df.index[missing]:
+        at = df.at[idx, "snapshot_at"]
+        key = (at.year, at.month)
+        if key not in by_month:
+            try:
+                by_month[key] = sheet_other_assets(grid, month=datetime(at.year, at.month, 1).date())
+            except Exception:
+                by_month[key] = None
+        fields = other_asset_fields(by_month[key], float(df.at[idx, "total_twd"] or 0))
+        for col, value in fields.items():
+            df.at[idx, col] = value
+        filled += bool(fields)
+    return filled
+
+
 def render_history_tab() -> None:
     """📊 歷史市值"""
     st.subheader("📊 歷史市值走勢")
@@ -3493,14 +3522,18 @@ def render_history_tab() -> None:
     df["snapshot_at"] = pd.to_datetime(df["snapshot_at"], utc=True).dt.tz_convert("Asia/Taipei")
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+    columns_missing = any(key not in df for key in OTHER_SNAPSHOT_KEYS)
     for key in OTHER_SNAPSHOT_KEYS:
         if key not in df:
             df[key] = None
-    # 新增欄位前的舊快照沒有其他資產，保持空白。
     df[OTHER_SNAPSHOT_KEYS] = df[OTHER_SNAPSHOT_KEYS].apply(pd.to_numeric, errors="coerce")
+    filled = _fill_other_assets_from_sheet(df)
 
-    if st.session_state.get("snapshot_columns_missing"):
-        st.warning("Supabase 尚未新增其他資產欄位，這次只記錄了投資市值。請到頁面上方「資料庫欄位提醒」執行 SQL。")
+    if columns_missing or st.session_state.get("snapshot_columns_missing"):
+        st.warning("Supabase 的 portfolio_snapshots 還沒有其他資產欄位，新快照不會存這幾欄。"
+                   "請到 Supabase → SQL Editor 執行頁面上方「資料庫欄位提醒」裡 portfolio_snapshots / latest_portfolio_values 那幾行 SQL。")
+    if filled:
+        st.caption(f"有 {filled} 筆快照沒有存其他資產，已用總帳該快照月份的數字補上（總資產 = 當時總市值 + 其他資產小計）。")
 
     # ── 明細表（愈新愈上）──
     other_labels = {"bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資",
