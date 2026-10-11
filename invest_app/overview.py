@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 
+import html
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
@@ -376,12 +377,16 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
 
     # ── 匯率列 ──
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("#### 💱 即時匯率")
-    fx_cols = st.columns(len(CURRENCIES))
-    for i, cur in enumerate(CURRENCIES):
+    # 即時匯率：一行小字，不用大卡片（TWD 固定 1 不顯示）
+    fx_parts = []
+    for cur in CURRENCIES:
+        if cur == "TWD":
+            continue
         rate, status = fetch_fx(cur)
-        fx_cols[i].metric(cur, money(rate, 4),
-                          delta="✓" if status == "ok" else f"⚠ {status}")
+        warn = "" if status == "ok" else f' <span style="color:#dc2626">⚠ {html.escape(str(status))}</span>'
+        fx_parts.append(f"<b>{cur}</b> {money(rate, 4)}{warn}")
+    st.markdown('<div style="font-size:.85rem;color:#475569;margin:4px 0 8px">💱 即時匯率　'
+                + "　·　".join(fx_parts) + "</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
