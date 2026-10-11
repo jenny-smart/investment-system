@@ -65,10 +65,14 @@ def _fund_name_from_rows(rows: list[pd.Series]) -> str:
     return " / ".join(names[:2])
 
 
+DIVIDEND_CATCH_UP_DAYS = 45
+
+
 def auto_dividend_update(positions: pd.DataFrame) -> int:
     """
-    每次頁面載入自動執行：
-    1. 【快照】今天在 [ex_date-1天, ex_date+2天] 且 fund_dividends 還沒有這筆
+    配息記錄頁每天自動執行一次（也可按「執行配息快照 / 認列」）：
+    1. 【快照】今天在除息日前 2 天到除息後 45 天之間，且 fund_dividends 還沒有這筆
+       （除息日過後才補登的，用目前單位數，扣掉除息日後才買的批次）
        → 加總同基金所有 units → 寫入 fund_dividends
     2. 【認列】pay_date <= 今天 且 is_paid=False
        → twd_total = units_at_ex × actual_div_amount × fx_rate
@@ -127,9 +131,9 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
         exist_key = (fc, plt, cur, ex_date)
         exist_row = existing.get(exist_key)
 
-        # ── Step 1：快照（除息日前後3天內，且還沒有記錄）──
+        # ── Step 1：快照（除息日前 1 天到除息後 45 天內，且還沒有記錄；過期沒按到的會補登）──
         diff = _date_diff_days(ex_date)
-        if diff is not None and -1 <= diff <= 2 and not exist_row:
+        if diff is not None and -DIVIDEND_CATCH_UP_DAYS <= diff <= 2 and not exist_row:
             # 加總這個基金所有持倉的單位數
             total_units = sum(
                 _position_dividend_units(r)
@@ -1167,9 +1171,21 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
             st.info("沒有勾選狀態需要更新。")
 
 
-def render_dividend_log_tab(enriched_df: pd.DataFrame) -> None:
+def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
+    # 每天第一次打開本頁自動快照／認列配息，避免除息日那幾天沒按按鈕就漏記
+    today_key = tw_now().strftime("%Y-%m-%d")
+    if st.session_state.get("auto_dividend_checked") != today_key:
+        st.session_state["auto_dividend_checked"] = today_key
+        try:
+            added = auto_dividend_update(positions)
+            if added:
+                st.cache_data.clear()
+                st.success(f"已自動補登／認列 {added} 筆配息。")
+                st.rerun()
+        except Exception as exc:
+            st.warning(f"自動配息快照失敗：{exc}")
     render_sheet_dividend_diff(enriched_df)
 
     source = enriched_df

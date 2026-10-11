@@ -252,7 +252,7 @@ try:
         render_history_tab(enriched)
 
     if page == "💰 配息記錄":
-        render_dividend_log_tab(enriched)
+        render_dividend_log_tab(enriched, positions)
 
     if page == "📈 台股股利":
         render_stock_dividend_tab(enriched, positions)
