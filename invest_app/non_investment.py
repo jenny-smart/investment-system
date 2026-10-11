@@ -240,12 +240,14 @@ def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:
     }
     total_cost_sum = 0.0
     total_div_sum  = 0.0
+    sell_cost_sum  = 0.0
 
     for _, r in enriched.iterrows():
         plt = normalize_text(r.get("platform", ""))
         val = to_float(r.get("台幣市值"))
         cost= to_float(r.get("台幣成本"))
         div = to_float(r.get("累計已領配息"))
+        sell_cost_sum += to_float(r.get("賣出稅費")) or 0
         if plt in platform_val and val:
             platform_val[plt] += val
         if cost: total_cost_sum += cost
@@ -261,7 +263,7 @@ def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:
         "scb":                 round(platform_val["渣打基金"], 0),
         "taishin":             round(platform_val["台新基金"], 0),
         "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
+        "total_pnl":           round(total - total_cost_sum - sell_cost_sum, 0),
         "cumulative_dividend": round(total_div_sum, 0),
         "trigger":             trigger,
         "note":                f"手動快照 {tw_now().strftime('%Y-%m-%d %H:%M')}",

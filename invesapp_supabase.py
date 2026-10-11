@@ -168,7 +168,8 @@ total_cost  = enriched["台幣成本"].dropna().sum() if not enriched.empty and 
 total_pnl   = enriched["損益"].dropna().sum()     if not enriched.empty and "損益"     in enriched else 0
 total_div   = enriched["每月配息"].dropna().sum()  if not enriched.empty and "每月配息" in enriched else 0
 total_rate  = total_pnl / total_cost if total_cost else None
-total_pnl_all = total_value - total_cost
+total_sell_cost = enriched["賣出稅費"].dropna().sum() if not enriched.empty and "賣出稅費" in enriched else 0
+total_pnl_all = total_value - total_cost - total_sell_cost  # 損益 = 市值 − 成本 − 台股賣出稅費
 total_div_received = enriched["累計已領配息"].dropna().sum() if not enriched.empty and "累計已領配息" in enriched else 0
 
 
