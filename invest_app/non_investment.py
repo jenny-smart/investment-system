@@ -110,10 +110,11 @@ def _sub_header_html(label: str, fields: list[tuple[str, str, str]]) -> str:
 TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
 
 
-def render_total_asset_row(total_investment: float, other: dict[str, Any] | None) -> None:
-    """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。"""
+def render_total_asset_row(total_investment: float, other: dict[str, Any] | None) -> Any:
+    """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。
+    回傳最右邊空著的欄位，給「更新即時價」按鈕用。"""
     if not other:
-        return
+        return None
     cols = st.columns(7)
     cols[0].metric("💎 總資產", money(total_investment + other["other_total"]))
     cols[1].metric("其他資產小計", money(other["other_total"]))
@@ -121,6 +122,7 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
     cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    return cols[6]
 
 
 def render_other_assets_tab(enriched: pd.DataFrame) -> None:
