@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v70-streamlined-tabs"
+APP_VERSION = "2026-10-11-v71-fast-pages"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -2630,35 +2630,9 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
     }
 
 
-def _fill_other_assets_from_sheet(df: pd.DataFrame) -> int:
-    """沒有存其他資產的快照，用總帳 Jennyall 該月份欄補上；回傳補上的筆數。"""
-    missing = df["grand_total"].isna()
-    if not missing.any():
-        return 0
-    try:
-        grid = load_sheet_grid(ONLINE_SHEET_SOURCES["資產總覽"])
-    except Exception:
-        return 0
-    by_month: dict[tuple[int, int], dict[str, Any] | None] = {}
-    filled = 0
-    for idx in df.index[missing]:
-        at = df.at[idx, "snapshot_at"]
-        key = (at.year, at.month)
-        if key not in by_month:
-            try:
-                by_month[key] = sheet_other_assets(grid, month=datetime(at.year, at.month, 1).date())
-            except Exception:
-                by_month[key] = None
-        fields = other_asset_fields(by_month[key], float(df.at[idx, "total_twd"] or 0))
-        for col, value in fields.items():
-            df.at[idx, col] = value
-        filled += bool(fields)
-    return filled
-
-
 def render_history_tab() -> None:
-    """📊 歷史市值"""
-    st.subheader("📊 歷史市值走勢")
+    """📊 歷史記錄"""
+    st.subheader("📊 歷史記錄")
 
     # ── 手動記錄按鈕 ──
     col_btn, col_info = st.columns([1, 4])
@@ -2700,13 +2674,11 @@ def render_history_tab() -> None:
         if key not in df:
             df[key] = None
     df[OTHER_SNAPSHOT_KEYS] = df[OTHER_SNAPSHOT_KEYS].apply(pd.to_numeric, errors="coerce")
-    filled = _fill_other_assets_from_sheet(df)
 
     if columns_missing or st.session_state.get("snapshot_columns_missing"):
         st.warning("Supabase 的 portfolio_snapshots 還沒有其他資產欄位，新快照不會存這幾欄。"
                    "請到 Supabase → SQL Editor 執行頁面上方「資料庫欄位提醒」裡 portfolio_snapshots / latest_portfolio_values 那幾行 SQL。")
-    if filled:
-        st.caption(f"有 {filled} 筆快照沒有存其他資產，已用總帳該快照月份的數字補上（總資產 = 當時總市值 + 其他資產小計）。")
+    st.caption("非投資資產（銀行、保險…總資產）自 2026/10/11 起記錄，之前的快照這幾欄空白。")
 
     # ── 明細表（愈新愈上）──
     other_labels = {"bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資",
@@ -2739,12 +2711,16 @@ def render_history_tab() -> None:
         "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
         "備註":     st.column_config.TextColumn("備註",       width="medium"),
     }
+    number_cols = [c for c, cfg in col_cfg.items() if c not in {"時間", "觸發方式", "備註"}]
+    # 數字欄用 Styler 格式化：沒有資料的格子顯示空白，不顯示 None。
+    col_cfg = {c: (st.column_config.Column(c, width="medium") if c in number_cols else cfg)
+               for c, cfg in col_cfg.items()}
     st.dataframe(
-        df_show, use_container_width=True, hide_index=True,
+        df_show.style.format("{:,.0f}", subset=number_cols, na_rep=""),
+        use_container_width=True, hide_index=True,
         height=min(42 * len(df_show) + 44, 600),
         column_config=col_cfg
     )
-
 
 ESTIMATED_DIVIDEND_COLUMNS = [
     "平台",
@@ -4871,7 +4847,11 @@ enriched = enrich(positions)
 _live_snap: dict[str, Any] = {}
 try:
     _live_snap = _take_snapshot_now("auto")
-    if _live_snap:
+    # 每個連線第一次載入（含排程喚醒）、按「更新即時價」或超過 10 分鐘才寫入，
+    # 不在每次點按鈕／換頁時都寫 Supabase。
+    _last_write = st.session_state.get("latest_values_written_at")
+    if _live_snap and (_last_write is None or tw_now() - _last_write > timedelta(minutes=10)):
+        st.session_state["latest_values_written_at"] = tw_now()
         write_with_optional_columns("latest_portfolio_values", {
             "id":                  1,
             "total_twd":           _live_snap["total_twd"],
@@ -4930,14 +4910,21 @@ with st.container():
     c5.metric("預估每月配息", money(total_div))
     c6.metric("今年台股現金股利", money(stock_cash_dividend_this_year))
     if c7.button("🔄 更新即時價"):
-        st.cache_data.clear(); st.rerun()
+        st.cache_data.clear()
+        st.session_state.pop("latest_values_written_at", None)
+        st.rerun()
     render_total_asset_row(float(total_value), load_other_assets())
     st.markdown("</div>", unsafe_allow_html=True)
 
-TAB_NAMES = ["投資總覽", "非投資總覽", "📊 歷史市值", *PLATFORMS, "🔎 股票研究", "資料安全", "工具",
-             "💰 配息記錄", "📈 台股股利"]
-# 用名稱取分頁，增刪分頁不必重新編號。
-tabs = dict(zip(TAB_NAMES, st.tabs(TAB_NAMES)))
+PAGE_NAMES = ["投資總覽", "非投資總覽", "📊 歷史記錄", *PLATFORMS, "🔎 股票研究", "資料安全", "工具",
+              "💰 配息記錄", "📈 台股股利"]
+# 功能列：只執行選到的那一頁（st.tabs 會每次把全部分頁都跑一遍，載入慢）。
+# 選擇記在網址 ?page=，重新整理後停在同一頁。
+_requested = st.query_params.get("page", PAGE_NAMES[0])
+if st.session_state.get("page") not in PAGE_NAMES:
+    st.session_state["page"] = _requested if _requested in PAGE_NAMES else PAGE_NAMES[0]
+page = st.segmented_control("功能", PAGE_NAMES, key="page", label_visibility="collapsed") or PAGE_NAMES[0]
+st.query_params["page"] = page
 
 show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_code", "currency",
              "total_cost_input", "original_units", "units", "市值股數", "avg_cost", "purchase_ym",
@@ -4946,7 +4933,7 @@ show_cols = ["sort_order", "platform", "asset_type", "name", "ticker", "fund_cod
              "每單位月配息估算", "月配息來源", "dividend_note", "corporate_action", "狀態"]
 
 # ── ★ 改寫後的總覽 tab ──────────────────────────────────────────────────────
-with tabs["投資總覽"]:
+if page == "投資總覽":
     render_channel_overview_cards(enriched)
     render_fx_overview_cards()
     st.markdown("### 📈 資產配置圖")
@@ -4963,11 +4950,11 @@ with tabs["投資總覽"]:
             },
         )
 
-with tabs["非投資總覽"]:
+if page == "非投資總覽":
     render_other_assets_tab()
 
 # ── 股票研究：放在正式功能區，不使用左側 multipage 導航 ─────────────────
-with tabs["🔎 股票研究"]:
+if page == "🔎 股票研究":
     st.markdown("### 🔎 股票研究")
     st.caption("「提前發現」已直接套用在目前持股與熱門候選，不另外分頁；每檔一起看基本面、籌碼、相對強度與技術面。")
 
@@ -5457,65 +5444,65 @@ with tabs["🔎 股票研究"]:
             st.info("尚未有雷達資料，請先按「更新熱門候選」。")
 
 # ── 其餘 tab 原版完全不變 ────────────────────────────────────────────────────
-for platform in PLATFORMS:
-    with tabs[platform]:
-        st.subheader(platform)
-        # ── 第一排：全局KPI ──
-        g1, g2, g3, g4, g5 = st.columns(5)
-        g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
-        g2.metric("總台幣成本", money(total_cost))
-        g3.metric("預估每月配息", money(total_div))
-        g4.metric("投資筆數", f"{len(positions):,}")
-        if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
-            st.cache_data.clear(); st.rerun()
-        view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
-        if view.empty:
-            st.info(f"尚無 {platform} 資料")
-        else:
-            # ── 第二排：平台KPI ──
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
-            m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
-            m3.metric("損益",     signed_money(view["損益"].dropna().sum()))
-            m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
-            st.markdown("#### 即時計算結果")
-            # 數值欄位直接用原始數值 + NumberColumn，靠右對齊、可排序
-            num_cols = {
-                "total_cost_input": st.column_config.NumberColumn("總投入成本", format="%.0f"),
-                "original_units":   st.column_config.NumberColumn("成本股數",   format="%.4f"),
-                "units":            st.column_config.NumberColumn("現在股數",   format="%.4f"),
-                "市值股數":         st.column_config.NumberColumn("市值股數",   format="%.4f"),
-                "avg_cost":         st.column_config.NumberColumn("平均成本",   format="%.4f"),
-                "即時價格/淨值":    st.column_config.NumberColumn("即時價格/淨值", format="%.4f"),
-                "匯率":             st.column_config.NumberColumn("匯率",       format="%.4f"),
-                "成本原幣":         st.column_config.NumberColumn("成本原幣",   format="%.0f"),
-                "市值原幣":         st.column_config.NumberColumn("市值原幣",   format="%.0f"),
-                "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%.0f"),
-                "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%.0f"),
-                "價差損益":         st.column_config.NumberColumn("市值損益",   format="%.0f"),
-                "累計配息原幣":     st.column_config.NumberColumn("累積配息原幣", format="%.2f"),
-                "累計已領配息":     st.column_config.NumberColumn("累積配息台幣", format="%.0f"),
-                "含息總損益":       st.column_config.NumberColumn("總損益",     format="%.0f"),
-                "每月配息":         st.column_config.NumberColumn("月配息",     format="%.0f"),
-                "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%.4f"),
-                "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
-                "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
-            }
-            view_disp = view[show_cols].copy()
-            # 把百分比欄位從小數轉成百分比數值
-            for col in ["價差損益率", "含息總損益率"]:
-                if col in view_disp.columns:
-                    view_disp[col] = view_disp[col].apply(lambda x: x * 100 if x is not None and str(x) not in ["-", "—", "nan"] else None)
-            st.dataframe(
-                view_disp,
-                use_container_width=True,
-                hide_index=True,
-                height=400,
-                column_config=num_cols,
-            )
-        editable_platform_table(platform, positions, f"editor_{platform}")
+if page in PLATFORMS:
+    platform = page
+    st.subheader(platform)
+    # ── 第一排：全局KPI ──
+    g1, g2, g3, g4, g5 = st.columns(5)
+    g1.metric("總台幣市值", money(total_value), delta=f"{total_pnl:+,.0f} / {pct(total_rate)}")
+    g2.metric("總台幣成本", money(total_cost))
+    g3.metric("預估每月配息", money(total_div))
+    g4.metric("投資筆數", f"{len(positions):,}")
+    if g5.button("🔄 更新即時價", key=f"refresh_{platform}"):
+        st.cache_data.clear(); st.rerun()
+    view = enriched[enriched["platform"] == platform].copy() if not enriched.empty else pd.DataFrame()
+    if view.empty:
+        st.info(f"尚無 {platform} 資料")
+    else:
+        # ── 第二排：平台KPI ──
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("台幣市值", money(view["台幣市值"].dropna().sum()))
+        m2.metric("台幣成本", money(view["台幣成本"].dropna().sum()))
+        m3.metric("損益",     signed_money(view["損益"].dropna().sum()))
+        m4.metric("每月配息", money(view["每月配息"].dropna().sum()))
+        st.markdown("#### 即時計算結果")
+        # 數值欄位直接用原始數值 + NumberColumn，靠右對齊、可排序
+        num_cols = {
+            "total_cost_input": st.column_config.NumberColumn("總投入成本", format="%.0f"),
+            "original_units":   st.column_config.NumberColumn("成本股數",   format="%.4f"),
+            "units":            st.column_config.NumberColumn("現在股數",   format="%.4f"),
+            "市值股數":         st.column_config.NumberColumn("市值股數",   format="%.4f"),
+            "avg_cost":         st.column_config.NumberColumn("平均成本",   format="%.4f"),
+            "即時價格/淨值":    st.column_config.NumberColumn("即時價格/淨值", format="%.4f"),
+            "匯率":             st.column_config.NumberColumn("匯率",       format="%.4f"),
+            "成本原幣":         st.column_config.NumberColumn("成本原幣",   format="%.0f"),
+            "市值原幣":         st.column_config.NumberColumn("市值原幣",   format="%.0f"),
+            "台幣成本":         st.column_config.NumberColumn("台幣成本",   format="%.0f"),
+            "台幣市值":         st.column_config.NumberColumn("台幣市值",   format="%.0f"),
+            "價差損益":         st.column_config.NumberColumn("市值損益",   format="%.0f"),
+            "累計配息原幣":     st.column_config.NumberColumn("累積配息原幣", format="%.2f"),
+            "累計已領配息":     st.column_config.NumberColumn("累積配息台幣", format="%.0f"),
+            "含息總損益":       st.column_config.NumberColumn("總損益",     format="%.0f"),
+            "每月配息":         st.column_config.NumberColumn("月配息",     format="%.0f"),
+            "每單位月配息估算": st.column_config.NumberColumn("每單位月配息", format="%.4f"),
+            "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
+            "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
+        }
+        view_disp = view[show_cols].copy()
+        # 把百分比欄位從小數轉成百分比數值
+        for col in ["價差損益率", "含息總損益率"]:
+            if col in view_disp.columns:
+                view_disp[col] = view_disp[col].apply(lambda x: x * 100 if x is not None and str(x) not in ["-", "—", "nan"] else None)
+        st.dataframe(
+            view_disp,
+            use_container_width=True,
+            hide_index=True,
+            height=400,
+            column_config=num_cols,
+        )
+    editable_platform_table(platform, positions, f"editor_{platform}")
 
-with tabs["資料安全"]:
+if page == "資料安全":
     st.subheader("資料安全")
     with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
         st.code("""
@@ -5610,7 +5597,7 @@ alter table stock_dividend_log add column if not exists created_at timestamptz d
         else:
             seed_presets(); st.success("已手動建立預設清單。"); st.rerun()
 
-with tabs["工具"]:
+if page == "工具":
     st.subheader("工具")
     tool_choice = st.selectbox(
         "選擇工具",
@@ -5628,11 +5615,11 @@ with tabs["工具"]:
     elif tool_choice == "抓價測試":
         price_test_section()
 
-with tabs["📊 歷史市值"]:
+if page == "📊 歷史記錄":
     render_history_tab()
 
-with tabs["💰 配息記錄"]:
+if page == "💰 配息記錄":
     render_dividend_log_tab(enriched)
 
-with tabs["📈 台股股利"]:
+if page == "📈 台股股利":
     render_stock_dividend_tab(enriched)
