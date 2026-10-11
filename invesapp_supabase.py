@@ -37,7 +37,7 @@ except Exception:
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v65-other-assets"
+APP_VERSION = "2026-10-11-v66-other-assets-layout"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3215,16 +3215,12 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
             )
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
-    # ── 匯率列 ──
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("#### 💱 即時匯率")
-    fx_cols = st.columns(len(CURRENCIES))
-    for i, cur in enumerate(CURRENCIES):
-        rate, status = fetch_fx(cur)
-        fx_cols[i].metric(cur, money(rate, 4),
-                          delta="✓" if status == "ok" else f"⚠ {status}")
+    # ── 其他資產小卡（總帳 Jennyall）──
+    other = load_other_assets()
+    render_other_asset_cards(float(enriched["台幣市值"].dropna().sum()), other)
 
-    render_other_assets_section(float(enriched["台幣市值"].dropna().sum()))
+    # ── 匯率列（精簡一行）──
+    render_fx_strip("💱 即時匯率")
     st.markdown("---")
 
     # ── 各平台群組 ──
@@ -3233,18 +3229,36 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         if p_rows.empty:
             continue
         render_platform_group(platform, p_rows)
-        
+
+    # ── 其他資產明細、每月加總：比照平台群組格式，放在台新基金下方 ──
+    render_other_asset_groups(other)
+    render_monthly_income_summary()
+
 # ════════════════════════════════════════════════════════════════════════════
 # 以下原版完全不變
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_fx_overview_cards() -> None:
-    st.markdown("### 💱 匯率總覽")
-    fx_cols = st.columns(len(CURRENCIES))
-    for i, cur in enumerate(CURRENCIES):
+    render_fx_strip("💱 匯率總覽")
+
+
+def render_fx_strip(title: str) -> None:
+    """匯率精簡成一行小標籤，取代佔位置的大卡片。"""
+    chips = []
+    for cur in CURRENCIES:
+        if cur == "TWD":
+            continue
         rate, status = fetch_fx(cur)
-        with fx_cols[i]:
-            st.metric(cur, money(rate, 4), delta="ok" if status == "ok" else status)
+        warn = "" if status == "ok" else f' <span style="color:#dc2626" title="{html_lib.escape(str(status))}">⚠</span>'
+        chips.append(
+            f'<span style="background:#fff;border:1px solid #e5e7eb;border-radius:999px;padding:3px 10px;'
+            f'font-family:monospace;font-size:12px"><b>{cur}</b> {money(rate, 4)}{warn}</span>'
+        )
+    st.markdown(
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0">'
+        f'<span style="font-size:13px;font-weight:700;color:#374151">{title}</span>{"".join(chips)}</div>',
+        unsafe_allow_html=True,
+    )
 
 # ════════════════════════════════════════════════════════════════════════════
 # ★ 其他資產（總帳 Jennyall）與每月加總（總帳「總覽」）
@@ -3290,49 +3304,105 @@ def write_with_optional_columns(table: str, data: dict[str, Any], upsert_on: str
         return False
 
 
-def render_other_assets_section(total_investment: float) -> None:
-    """總覽：銀行 / 保險 / 懷思投資 / uncle待還 / 外幣，扣除待還，再與投資市值合計。"""
-    st.markdown("---")
-    st.markdown("### 🏦 其他資產（總帳 Jennyall）")
-    other = load_other_assets()
+def _group_header_html(title: str, fields: list[tuple[str, str, str]]) -> str:
+    """與 render_platform_group 相同樣式的大標題列。fields: (標籤, 值, 顏色)"""
+    cells = "".join(
+        f'<span style="min-width:120px;font-family:monospace">'
+        f'<div style="font-size:10px;color:#6b7280;font-family:sans-serif">{label}</div>'
+        f'<div style="font-size:14px;font-weight:700;color:{color}">{value}</div></span>'
+        for label, value, color in fields
+    )
+    return f"""
+<div style="background:#fff;color:#1a2e22;padding:14px 20px;border-radius:12px;
+            display:flex;flex-wrap:wrap;align-items:center;gap:18px;
+            margin:24px 0 4px 0;font-size:13px;font-weight:700;
+            border:1.5px solid #d1e8dc;border-left:5px solid #10b981;
+            box-shadow:0 2px 10px rgba(16,185,129,.08);">
+  <span style="font-size:16px;font-family:sans-serif;min-width:90px;font-weight:800;color:#10b981">{title}</span>
+  {cells}
+</div>"""
+
+
+def _sub_header_html(label: str, fields: list[tuple[str, str, str]]) -> str:
+    """與 render_sub_group 相同樣式的子標題列。"""
+    cells = "".join(
+        f'<span style="min-width:100px;font-family:monospace">'
+        f'<span style="color:#9ca3af;font-size:10px">{name} </span>'
+        f'<span style="color:{color}">{value}</span></span>'
+        for name, value, color in fields
+    )
+    return f"""
+<div style="background:#f0fdf4;color:#1a2e22;padding:8px 16px;border-radius:8px;
+            display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+            margin:6px 0 1px 20px;font-size:12px;font-weight:600;
+            border:1px solid #bbf7d0;border-left:3px solid #10b981;">
+  <span style="font-size:12px;font-family:sans-serif;min-width:90px;font-weight:800;color:#065f46">{label}</span>
+  {cells}
+</div>"""
+
+
+def render_other_asset_cards(total_investment: float, other: dict[str, Any] | None) -> None:
+    """投資平台卡片下方：銀行 / 保險 / 懷思投資 / uncle待還 / 外幣，扣除待還與總資產。"""
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
-    st.caption(f"月份 {other['month']}（Jennyall {other['column']} 欄）；每月欄位遞延時自動抓今天以前最新的月份。")
-
-    cols = st.columns(len(other["categories"]))
+    cols = st.columns(5)
     for col, (name, data) in zip(cols, other["categories"].items()):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
-    cols = st.columns(len(other["categories"]))
+    cols = st.columns(5)
     cols[0].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
     cols[1].metric("其他資產小計", money(other["other_total"]))
     cols[2].metric("投資總市值", money(total_investment))
     cols[3].metric("💎 總資產", money(total_investment + other["other_total"]))
+    cols[4].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
 
+
+def render_other_asset_groups(other: dict[str, Any] | None) -> None:
+    """台新基金下方：其他資產大標題 + 每項子標題與明細表。"""
+    if not other:
+        return
+    st.markdown(_group_header_html("🏦 其他資產", [
+        ("五項合計", money(other["category_sum"]), "#1a2e22"),
+        ("扣除待還", money(-other["deposits"]), "#dc2626"),
+        ("其他資產小計", money(other["other_total"]), "#059669"),
+        ("月份", html_lib.escape(other["month"]), "#6b7280"),
+    ]), unsafe_allow_html=True)
     for name, data in other["categories"].items():
-        with st.expander(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}　{money(data['total'])}"):
-            if data["items"]:
-                items = pd.DataFrame(data["items"], columns=["項目", "金額"])
-                items["項目"] = items["項目"].replace("", "（無名稱）")
-                st.dataframe(items, use_container_width=True, hide_index=True,
-                             column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")})
-            else:
-                st.caption("沒有找到明細列。")
-
-    render_monthly_income_summary()
+        st.markdown(_sub_header_html(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", [
+            ("金額", money(data["total"]), "#1a2e22"),
+            ("筆數", str(len(data["items"])), "#6b7280"),
+        ]), unsafe_allow_html=True)
+        if data["items"]:
+            items = pd.DataFrame(data["items"], columns=["名稱", "金額"])
+            items["名稱"] = items["名稱"].replace("", "（無名稱）")
+            st.dataframe(items, use_container_width=True, hide_index=True,
+                         height=min(36 * len(items) + 40, 400),
+                         column_config={
+                             "名稱": st.column_config.TextColumn("名稱", width="large"),
+                             "金額": st.column_config.NumberColumn("金額", format="%.0f"),
+                         })
 
 
 def render_monthly_income_summary() -> None:
-    st.markdown("### 🧮 每月加總（總帳「總覽」）")
+    """總帳「總覽」分頁的每月加總，比照平台群組格式。"""
     try:
         rows = monthly_income_block(load_sheet_grid(OVERVIEW_SHEET_GID))
     except Exception as exc:
         st.warning(f"讀不到每月加總：{exc}")
         return
+    if not rows:
+        return
+    head, details = rows[0], rows[1:]
+    st.markdown(_group_header_html("🧮 每月加總", [
+        ("本月金額", money(head["金額"]), "#1a2e22"),
+    ]), unsafe_allow_html=True)
+    df = pd.DataFrame(details).rename(columns={"項目": "名稱"})
+    df["預估"] = pd.to_numeric(df["預估"], errors="coerce")  # 空白顯示空白，不顯示 None
     st.dataframe(
-        pd.DataFrame(rows), use_container_width=True, hide_index=True,
-        height=min(36 * len(rows) + 40, 640),
+        df, use_container_width=True, hide_index=True,
+        height=min(36 * len(df) + 40, 640),
         column_config={
+            "名稱": st.column_config.TextColumn("名稱", width="large"),
             "金額": st.column_config.NumberColumn("金額", format="%.0f"),
             "預估": st.column_config.NumberColumn("預估", format="%.0f"),
         },
