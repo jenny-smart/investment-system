@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v72-modular"
+APP_VERSION = "2026-10-11-v73-parallel-quotes"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1107,10 +1107,54 @@ def fund_dividend_original_totals(df: pd.DataFrame) -> dict[tuple[str, str, str,
     }
 
 
+def _prefetch_quotes(df: pd.DataFrame) -> None:
+    """平行預先抓報價、基金淨值、匯率、GAS 配息，填好快取。
+
+    enrich 逐筆依序抓時，冷啟動（重開機、快取過期）要好幾十秒，超過
+    Streamlit Cloud 的 60 秒健康檢查就會一直轉圈；平行抓完後 enrich 都直接讀快取。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+    jobs: set[tuple] = set()
+    for _, r in df.iterrows():
+        name = normalize_text(r.get("name", ""))
+        asset_type = normalize_text(r.get("asset_type", ""))
+        jobs.add((fetch_fx, effective_position_currency(r)))
+        if asset_type in {"台股", "美股"}:
+            ticker = normalize_text(r.get("ticker", ""))
+            if asset_type == "台股" and not ticker and name in TW_PRESETS:
+                ticker = TW_PRESETS.get(name, "")
+            elif not ticker and name:
+                ticker = name.upper()
+            if not (asset_type == "台股" and is_delisted_tw_stock(ticker, name)):
+                jobs.add((fetch_stock_price, ticker, asset_type))
+        else:
+            fund_code, fund_pattern = effective_fund_fields(r)
+            jobs.add((fetch_fund_quote, fund_code, fund_pattern))
+            fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(
+                name, normalize_text(r.get("fund_code", "")), normalize_text(r.get("fund_pattern", "")))[0]
+            if fc and normalize_number(r.get("monthly_dividend_per_unit", 0), 0) <= 0:
+                jobs.add((_fetch_gas_div_for_enrich, fc))
+    ctx = get_script_run_ctx()
+
+    def run(job):
+        if ctx is not None:
+            add_script_run_ctx(ctx=ctx)
+        try:
+            job[0](*job[1:])
+        except Exception:
+            pass  # 失敗留給 enrich 照原本流程處理
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(run, jobs))
+
+
 def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
         return df
+    _prefetch_quotes(df)
     rows = []
     dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     dividend_original_totals = fund_dividend_original_totals(df)
