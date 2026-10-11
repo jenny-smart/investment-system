@@ -239,6 +239,7 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "累計配息原幣",
     "總帳累積配息原幣",
     "累計配息台幣",
+    "總帳累積配息台幣",
 ]
 
 
@@ -818,11 +819,15 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     # 對照欄：總帳「總覽」N 欄的累積配息原幣
     try:
         from invest_app.sheet_compare import sheet_fund_dividends, sheet_value_for
-        sheet_rows = sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID))
+        grid = load_sheet_raw_grid(OVERVIEW_SHEET_GID)
+        sheet_rows = sheet_fund_dividends(grid)                                   # N 欄
+        sheet_twd_rows = sheet_fund_dividends(grid, value_header="累積配息台幣")   # L 欄
     except Exception:
-        sheet_rows = []
+        sheet_rows, sheet_twd_rows = [], []
     df["總帳累積配息原幣"] = df.apply(
         lambda r: sheet_value_for(sheet_rows, r["平台"], r["幣別"], r["基金名稱"]) if sheet_rows else None, axis=1)
+    df["總帳累積配息台幣"] = df.apply(
+        lambda r: sheet_value_for(sheet_twd_rows, r["平台"], r["幣別"], r["基金名稱"]) if sheet_twd_rows else None, axis=1)
     df["累計配息台幣"] = df["累計配息台幣"].apply(lambda v: round(normalize_number(v, 0), 0))
     df = df.sort_values("_sort_date", ascending=False).reset_index(drop=True)
     return df[columns]
@@ -1120,6 +1125,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         "確認入帳": st.column_config.CheckboxColumn("確認入帳"),
         "累計配息原幣": st.column_config.NumberColumn("累計配息原幣", format="localized"),
         "總帳累積配息原幣": st.column_config.NumberColumn("總帳累積配息原幣", format="localized"),
+        "總帳累積配息台幣": st.column_config.NumberColumn("總帳累積配息台幣", format="localized"),
         "累計配息台幣": st.column_config.NumberColumn("累計配息台幣", format="localized"),
     }
     st.dataframe(
