@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v89-dividend-kpis"
+APP_VERSION = "2026-10-11-v90-light-sheet-read"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1265,21 +1265,37 @@ def load_sheet_grid(gid: str) -> list[list[str]]:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_sheet_raw_grid(gid: str, sheet_title: str = "總覽") -> list[list[Any]]:
-    """整張分頁讀成二維陣列，數字用儲存格實際值（含格式隱藏的小數）。
+def load_sheet_raw_grid(gid: str, cell_range: str = "F1:N80") -> list[list[Any]]:
+    """分頁某範圍讀成二維陣列，數字用儲存格實際值（含格式隱藏的小數）。
 
-    CSV 匯出只有顯示文字，格式設成整數的儲存格會丟掉小數；改下載 xlsx 讀實際值。讀不到時退回 CSV。
+    CSV 匯出只有顯示文字，格式設成整數的儲存格會丟掉小數；改用 gviz 查詢加 `options no_format`
+    只抓這一段（不下載整本，避免載入過慢）。讀不到或逾時退回 CSV。
     """
+    import csv
     try:
-        from openpyxl import load_workbook
-        url = f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/export?format=xlsx"
-        response = requests.get(url, timeout=60)
+        response = requests.get(
+            f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/gviz/tq",
+            params={"tqx": "out:csv", "gid": gid, "range": cell_range, "headers": "1", "tq": "options no_format"},
+            timeout=15,
+        )
         response.raise_for_status()
-        workbook = load_workbook(io.BytesIO(response.content), read_only=True, data_only=True)
-        sheet = workbook[sheet_title]
-        return [["" if v is None else v for v in row] for row in sheet.iter_rows(values_only=True)]
+        if "<html" in response.text[:200].lower():
+            raise RuntimeError("gviz 回傳 HTML")
+        rows = [row for row in csv.reader(io.StringIO(response.text))]
+        if rows and any(rows[0]):
+            return [[_raw_cell(v) for v in row] for row in rows]
     except Exception:
-        return load_sheet_grid(gid)
+        pass
+    return load_sheet_grid(gid)
+
+
+def _raw_cell(value: str) -> Any:
+    """gviz no_format 的數字是未格式化文字（如 1854189.3654933337），轉成 float；其他維持文字。"""
+    text = value.strip()
+    try:
+        return float(text) if text and text.replace(".", "", 1).lstrip("-").isdigit() else value
+    except ValueError:
+        return value
 
 
 def load_other_assets() -> dict[str, Any] | None:

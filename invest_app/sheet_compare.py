@@ -24,6 +24,14 @@ def fund_key(name: Any) -> str:
     return "".join(unicodedata.normalize("NFKC", str(name or "")).lower().split())
 
 
+def _is_number_text(text: str) -> bool:
+    try:
+        float(text.replace(",", ""))
+        return True
+    except ValueError:
+        return False
+
+
 def _number(value: Any) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
@@ -46,8 +54,8 @@ def sheet_fund_dividends(grid: list[list[str]], name_header: str = "投資分類
     section = None
     for row in grid[header_row + 1:]:
         name = str(row[name_col]).strip() if name_col < len(row) else ""
-        if not name:
-            section = None  # 空白列結束目前分類
+        if not name or _is_number_text(name):
+            section = None  # 空白列（或表尾數字列）結束目前分類
             continue
         if name in SHEET_FUND_SECTIONS:
             section = name
