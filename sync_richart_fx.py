@@ -47,6 +47,8 @@ def main() -> int:
         if not raw:
             raise RuntimeError("Missing INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON secret")
         credentials = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
+    # 總帳需共用給這個帳號（編輯者）才能寫入
+    print("Service account:", credentials.service_account_email)
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     sheet = next(s for s in spreadsheet.worksheets() if s.id == OVERVIEW_SHEET_ID)
     rows = find_rate_rows(sheet.get(f"Q1:Q{min(sheet.row_count, 80)}"))
