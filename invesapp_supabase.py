@@ -34,6 +34,8 @@ try:
 except Exception:
     HAS_GSPREAD = False
 
+from asset_summary import monthly_income_block, sheet_other_assets
+
 
 APP_VERSION = "2026-09-26-v64-full-watchlist"
 
@@ -45,6 +47,7 @@ ONLINE_SHEET_SOURCES = {
     "每月收入": "1804324921",
     "資產總覽": "151289982",
 }
+OVERVIEW_SHEET_GID = "1120619093"  # 總帳「總覽」分頁（每月加總）
 
 DEFAULT_SUPABASE_URL = "https://qrvdztqyzxlsfskdgiqp.supabase.co"
 
@@ -1382,6 +1385,26 @@ def load_online_sheet_csv(gid: str) -> pd.DataFrame:
     if empty_cols:
         df = df.drop(columns=empty_cols)
     return df
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_sheet_grid(gid: str) -> list[list[str]]:
+    """整張分頁原樣讀成二維陣列（保留欄列位置，供依日期 / 名稱定位）。"""
+    response = requests.get(online_sheet_url(gid), timeout=30)
+    response.raise_for_status()
+    if "<html" in response.text[:200].lower():
+        raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
+    df = pd.read_csv(io.StringIO(response.text), header=None, dtype=str, keep_default_na=False)
+    return df.values.tolist()
+
+
+def load_other_assets() -> dict[str, Any] | None:
+    """總帳 Jennyall 本月的銀行 / 保險 / 懷思投資 / uncle待還 / 外幣 / 待還；讀不到回傳 None。"""
+    try:
+        return sheet_other_assets(load_sheet_grid(ONLINE_SHEET_SOURCES["資產總覽"]), today=tw_now().date())
+    except Exception as exc:
+        st.session_state["other_assets_error"] = str(exc)
+        return None
 
 
 @st.cache_resource(show_spinner=False)
@@ -3201,6 +3224,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
         fx_cols[i].metric(cur, money(rate, 4),
                           delta="✓" if status == "ok" else f"⚠ {status}")
 
+    render_other_assets_section(float(enriched["台幣市值"].dropna().sum()))
     st.markdown("---")
 
     # ── 各平台群組 ──
@@ -3223,6 +3247,99 @@ def render_fx_overview_cards() -> None:
             st.metric(cur, money(rate, 4), delta="ok" if status == "ok" else status)
 
 # ════════════════════════════════════════════════════════════════════════════
+# ★ 其他資產（總帳 Jennyall）與每月加總（總帳「總覽」）
+# ════════════════════════════════════════════════════════════════════════════
+
+OTHER_ASSET_FIELDS = {
+    "銀行total": "bank_total",
+    "保險total": "insurance_total",
+    "懷思投資": "huaisi_total",
+    "uncle待還": "uncle_total",
+    "外幣total": "fx_cash_total",
+}
+OTHER_ASSET_ICONS = {"銀行total": "🏦", "保險total": "🛡️", "懷思投資": "🤝", "uncle待還": "👨", "外幣total": "💴"}
+# 新增在 portfolio_snapshots / latest_portfolio_values 的欄位；資料表還沒加欄位時自動略過。
+OTHER_SNAPSHOT_KEYS = [*OTHER_ASSET_FIELDS.values(), "deposits_total", "other_assets_total", "grand_total"]
+
+
+def other_asset_snapshot_fields(total_investment: float) -> dict[str, float]:
+    other = load_other_assets()
+    if not other:
+        return {}
+    fields = {OTHER_ASSET_FIELDS[name]: round(data["total"], 0) for name, data in other["categories"].items()}
+    fields["deposits_total"] = round(other["deposits"], 0)
+    fields["other_assets_total"] = round(other["other_total"], 0)
+    fields["grand_total"] = round(total_investment + other["other_total"], 0)
+    return fields
+
+
+def write_with_optional_columns(table: str, data: dict[str, Any], upsert_on: str = "") -> bool:
+    """寫入 Supabase；若新欄位尚未建立，退回只寫原有欄位。回傳是否含新欄位。"""
+    query = supabase_client().table(table)
+    try:
+        (query.upsert(data, on_conflict=upsert_on) if upsert_on else query.insert(data)).execute()
+        return True
+    except Exception as exc:
+        extra = [k for k in OTHER_SNAPSHOT_KEYS if k in data]
+        if not extra or not any(k in str(exc) for k in extra):
+            raise
+        base = {k: v for k, v in data.items() if k not in extra}
+        query = supabase_client().table(table)
+        (query.upsert(base, on_conflict=upsert_on) if upsert_on else query.insert(base)).execute()
+        st.session_state["snapshot_columns_missing"] = True
+        return False
+
+
+def render_other_assets_section(total_investment: float) -> None:
+    """總覽：銀行 / 保險 / 懷思投資 / uncle待還 / 外幣，扣除待還，再與投資市值合計。"""
+    st.markdown("---")
+    st.markdown("### 🏦 其他資產（總帳 Jennyall）")
+    other = load_other_assets()
+    if not other:
+        st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
+        return
+    st.caption(f"月份 {other['month']}（Jennyall {other['column']} 欄）；每月欄位遞延時自動抓今天以前最新的月份。")
+
+    cols = st.columns(len(other["categories"]))
+    for col, (name, data) in zip(cols, other["categories"].items()):
+        col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
+    cols = st.columns(len(other["categories"]))
+    cols[0].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
+    cols[1].metric("其他資產小計", money(other["other_total"]))
+    cols[2].metric("投資總市值", money(total_investment))
+    cols[3].metric("💎 總資產", money(total_investment + other["other_total"]))
+
+    for name, data in other["categories"].items():
+        with st.expander(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}　{money(data['total'])}"):
+            if data["items"]:
+                items = pd.DataFrame(data["items"], columns=["項目", "金額"])
+                items["項目"] = items["項目"].replace("", "（無名稱）")
+                st.dataframe(items, use_container_width=True, hide_index=True,
+                             column_config={"金額": st.column_config.NumberColumn("金額", format="%.0f")})
+            else:
+                st.caption("沒有找到明細列。")
+
+    render_monthly_income_summary()
+
+
+def render_monthly_income_summary() -> None:
+    st.markdown("### 🧮 每月加總（總帳「總覽」）")
+    try:
+        rows = monthly_income_block(load_sheet_grid(OVERVIEW_SHEET_GID))
+    except Exception as exc:
+        st.warning(f"讀不到每月加總：{exc}")
+        return
+    st.dataframe(
+        pd.DataFrame(rows), use_container_width=True, hide_index=True,
+        height=min(36 * len(rows) + 40, 640),
+        column_config={
+            "金額": st.column_config.NumberColumn("金額", format="%.0f"),
+            "預估": st.column_config.NumberColumn("預估", format="%.0f"),
+        },
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # ★ 歷史記錄 Tab
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -3263,50 +3380,7 @@ def _take_snapshot_now(trigger: str = "manual") -> dict:
         "cumulative_dividend": round(total_div_sum, 0),
         "trigger":             trigger,
         "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
-    }
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# ★ 歷史記錄 Tab
-# ════════════════════════════════════════════════════════════════════════════
-
-def _take_snapshot_now(trigger: str = "manual") -> dict:
-    """即時抓取各平台市值並回傳 dict（供手動記錄用）"""
-    if enriched is None or enriched.empty:
-        return {}
-
-    platform_val: dict[str, float] = {
-        "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
-    }
-    total_cost_sum = 0.0
-    total_div_sum  = 0.0
-
-    for _, r in enriched.iterrows():
-        plt = normalize_text(r.get("platform", ""))
-        val = to_float(r.get("台幣市值"))
-        cost= to_float(r.get("台幣成本"))
-        div = to_float(r.get("累計已領配息"))
-        if plt in platform_val and val:
-            platform_val[plt] += val
-        if cost: total_cost_sum += cost
-        if div:  total_div_sum  += div
-
-    total = sum(platform_val.values())
-    from datetime import datetime, timezone, timedelta
-    tw_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-
-    return {
-        "total_twd":           round(total, 0),
-        "tw_stock":            round(platform_val["台股"], 0),
-        "us_stock":            round(platform_val["美股"], 0),
-        "kifutong":            round(platform_val["基富通"], 0),
-        "scb":                 round(platform_val["渣打基金"], 0),
-        "taishin":             round(platform_val["台新基金"], 0),
-        "total_cost":          round(total_cost_sum, 0),
-        "total_pnl":           round(total - total_cost_sum, 0),
-        "cumulative_dividend": round(total_div_sum, 0),
-        "trigger":             trigger,
-        "note":                f"手動快照 {tw_now.strftime('%Y-%m-%d %H:%M')}",
+        **other_asset_snapshot_fields(total),
     }
 
 
@@ -3320,7 +3394,7 @@ def render_history_tab() -> None:
         try:
             data = _take_snapshot_now("manual")
             if data:
-                supabase_client().table("portfolio_snapshots").insert(data).execute()
+                write_with_optional_columns("portfolio_snapshots", data)
                 st.success(f"✅ 已記錄！總市值：{money(data['total_twd'])}")
                 st.rerun()
             else:
@@ -3332,7 +3406,7 @@ def render_history_tab() -> None:
     # ── 讀取資料 ──
     try:
         rows = supabase_client().table("portfolio_snapshots") \
-            .select("snapshot_at,total_twd,tw_stock,us_stock,kifutong,scb,taishin,total_cost,total_pnl,cumulative_dividend,trigger,note") \
+            .select("*") \
             .order("snapshot_at", desc=True) \
             .execute().data or []
     except Exception as e:
@@ -3349,16 +3423,28 @@ def render_history_tab() -> None:
     df["snapshot_at"] = pd.to_datetime(df["snapshot_at"], utc=True).dt.tz_convert("Asia/Taipei")
     df = df.sort_values("snapshot_at", ascending=False).reset_index(drop=True)
     df["時間"] = df["snapshot_at"].dt.strftime("%m/%d %H:%M")
+    for key in OTHER_SNAPSHOT_KEYS:
+        if key not in df:
+            df[key] = None
+    # 新增欄位前的舊快照沒有其他資產，保持空白。
+    df[OTHER_SNAPSHOT_KEYS] = df[OTHER_SNAPSHOT_KEYS].apply(pd.to_numeric, errors="coerce")
+
+    if st.session_state.get("snapshot_columns_missing"):
+        st.warning("Supabase 尚未新增其他資產欄位，這次只記錄了投資市值。請到頁面上方「資料庫欄位提醒」執行 SQL。")
 
     # ── 明細表（愈新愈上）──
+    other_labels = {"bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資",
+                    "uncle_total": "uncle待還", "fx_cash_total": "外幣", "deposits_total": "扣除待還",
+                    "other_assets_total": "其他資產小計", "grand_total": "總資產"}
     df_show = df[[
         "時間", "total_twd", "tw_stock", "us_stock",
-        "kifutong", "scb", "taishin",
+        "kifutong", "scb", "taishin", *other_labels,
         "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
     ]].copy()
+    df_show["deposits_total"] = -df_show["deposits_total"]
     df_show.columns = [
         "時間", "總市值", "台股", "美股",
-        "基富通", "渣打", "台新",
+        "基富通", "渣打", "台新", *other_labels.values(),
         "總成本", "市值損益", "累計配息", "觸發方式", "備註"
     ]
     col_cfg = {
@@ -3369,6 +3455,8 @@ def render_history_tab() -> None:
         "基富通":   st.column_config.NumberColumn("基富通",   format="%.0f", width="medium"),
         "渣打":     st.column_config.NumberColumn("渣打",     format="%.0f", width="medium"),
         "台新":     st.column_config.NumberColumn("台新",     format="%.0f", width="medium"),
+        **{label: st.column_config.NumberColumn(label, format="%.0f", width="medium")
+           for label in other_labels.values()},
         "總成本":   st.column_config.NumberColumn("總成本",   format="%.0f", width="medium"),
         "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f", width="medium"),
         "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f", width="medium"),
@@ -6564,6 +6652,22 @@ st.caption(f"版本：{APP_VERSION}｜Supabase 永久資料庫")
 
 with st.expander("資料庫欄位提醒：請確認 Supabase 欄位"):
     st.code("""
+alter table portfolio_snapshots add column if not exists bank_total numeric;
+alter table portfolio_snapshots add column if not exists insurance_total numeric;
+alter table portfolio_snapshots add column if not exists huaisi_total numeric;
+alter table portfolio_snapshots add column if not exists uncle_total numeric;
+alter table portfolio_snapshots add column if not exists fx_cash_total numeric;
+alter table portfolio_snapshots add column if not exists deposits_total numeric;
+alter table portfolio_snapshots add column if not exists other_assets_total numeric;
+alter table portfolio_snapshots add column if not exists grand_total numeric;
+alter table latest_portfolio_values add column if not exists bank_total numeric;
+alter table latest_portfolio_values add column if not exists insurance_total numeric;
+alter table latest_portfolio_values add column if not exists huaisi_total numeric;
+alter table latest_portfolio_values add column if not exists uncle_total numeric;
+alter table latest_portfolio_values add column if not exists fx_cash_total numeric;
+alter table latest_portfolio_values add column if not exists deposits_total numeric;
+alter table latest_portfolio_values add column if not exists other_assets_total numeric;
+alter table latest_portfolio_values add column if not exists grand_total numeric;
 alter table positions add column if not exists purchase_ym text default '';
 alter table positions add column if not exists dividend_received_original_total numeric default 0;
 alter table positions add column if not exists dividend_received_original_base numeric default 0;
@@ -6677,10 +6781,11 @@ except Exception as e:
 
 enriched = enrich(positions)
 
+_live_snap: dict[str, Any] = {}
 try:
     _live_snap = _take_snapshot_now("auto")
     if _live_snap:
-        supabase_client().table("latest_portfolio_values").upsert({
+        write_with_optional_columns("latest_portfolio_values", {
             "id":                  1,
             "total_twd":           _live_snap["total_twd"],
             "tw_stock":            _live_snap["tw_stock"],
@@ -6691,7 +6796,8 @@ try:
             "total_cost":          _live_snap["total_cost"],
             "cumulative_dividend": _live_snap["cumulative_dividend"],
             "updated_at":          tw_now().isoformat(),
-        }, on_conflict="id").execute()
+            **{k: _live_snap[k] for k in OTHER_SNAPSHOT_KEYS if k in _live_snap},
+        }, upsert_on="id")
 except Exception as _e:
     st.warning(f"⚠️ latest_portfolio_values 更新失敗：{_e}")
 

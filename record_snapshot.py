@@ -12,6 +12,12 @@ from supabase import create_client
 SUPABASE_URL      = os.environ.get("SUPABASE_URL", "https://qrvdztqyzxlsfskdgiqp.supabase.co")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 
+# Streamlit 寫入 latest_portfolio_values 的其他資產（總帳 Jennyall）；欄位不存在時略過。
+OTHER_ASSET_KEYS = [
+    "bank_total", "insurance_total", "huaisi_total", "uncle_total", "fx_cash_total",
+    "deposits_total", "other_assets_total", "grand_total",
+]
+
 TW_NOW     = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
 IS_EVENING = TW_NOW.hour >= 18
 
@@ -58,6 +64,7 @@ def calc_portfolio() -> dict:
         "total_cost":          round(float(r.get("total_cost") or 0), 0),
         "total_pnl":           round(total - float(r.get("total_cost") or 0), 0),
         "cumulative_dividend": round(float(r.get("cumulative_dividend") or 0), 0),
+        **{k: r[k] for k in OTHER_ASSET_KEYS if r.get(k) is not None},
         "trigger":             "schedule",
         "note":                f"{'晚間' if IS_EVENING else '早間'}快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')}　資料時間：{updated_at}",
     }
@@ -119,7 +126,16 @@ def main():
     print(f"  台股：{data['tw_stock']:,.0f}  美股：{data['us_stock']:,.0f}")
     print(f"  基富通：{data['kifutong']:,.0f}  渣打：{data['scb']:,.0f}  台新：{data['taishin']:,.0f}")
 
-    sb().table("portfolio_snapshots").insert(data).execute()
+    if "grand_total" in data:
+        print(f"  其他資產小計：{data['other_assets_total']:,.0f}  總資產：{data['grand_total']:,.0f}")
+    try:
+        sb().table("portfolio_snapshots").insert(data).execute()
+    except Exception as e:
+        extra = [k for k in OTHER_ASSET_KEYS if k in data]
+        if not extra or not any(k in str(e) for k in extra):
+            raise
+        print("  ⚠️ portfolio_snapshots 尚未新增其他資產欄位，只寫入投資市值")
+        sb().table("portfolio_snapshots").insert({k: v for k, v in data.items() if k not in extra}).execute()
     print("  ✅ portfolio_snapshots 已寫入")
 
     if IS_EVENING:
