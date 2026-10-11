@@ -98,3 +98,14 @@ def compare_fund_dividends(sheet_rows: list[dict[str, Any]], enriched: pd.DataFr
     df["差額"] = df["資料庫配息原幣"].fillna(0) - df["總帳配息原幣"].fillna(0)
     # 只留有差異的基金（原幣差超過 0.5，避免小數進位誤報）
     return df[df["差額"].abs() >= 0.5].reset_index(drop=True)
+
+
+def sheet_value_for(sheet_rows: list[dict[str, Any]], platform: str, currency: str, name: str) -> float | None:
+    """單一基金在總帳的累積配息原幣（N 欄）；平台＋幣別找分類，名稱模糊比對。"""
+    sections = {k for k, v in SHEET_FUND_SECTIONS.items() if v == (str(platform), str(currency).upper())}
+    candidates = {fund_key(r["基金名稱"]): r["總帳配息原幣"] for r in sheet_rows if r["分類"] in sections}
+    key = fund_key(name)
+    if key not in candidates:
+        close = difflib.get_close_matches(key, list(candidates), n=1, cutoff=0.6)
+        key = close[0] if close else None
+    return candidates.get(key) if key else None
