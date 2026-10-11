@@ -1157,19 +1157,29 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     suggested: list[str] = []
     try:
         from asset_summary import monthly_income_block
-        from invest_app.sheet_compare import ledger_confirm_suggestions
+        from invest_app.sheet_compare import ledger_confirm_suggestions, sheet_fx_rates
         now = tw_now()
-        ledger_rows = monthly_income_block(load_sheet_grid(OVERVIEW_SHEET_GID))
+        ledger_grid = load_sheet_grid(OVERVIEW_SHEET_GID)
+        ledger_rows = monthly_income_block(ledger_grid)
         hits = ledger_confirm_suggestions(df, ledger_rows, (now.year, now.month))
         index_to_label = {v: k for k, v in pending_options.items()}
         suggested = [index_to_label[i] for i in hits if i in index_to_label]
         if suggested:
+            # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
             amounts = {r["項目"]: r["金額"] for r in ledger_rows}
+            sheet_fx = sheet_fx_rates(ledger_grid)
             lines = []
             for item in dict.fromkeys(hits.values()):
-                n = sum(1 for v in hits.values() if v == item)
-                rec_twd = sum(normalize_number(df.loc[i].get("_實際配息台幣", 0), 0) for i, v in hits.items() if v == item)
-                lines.append(f"{item}：總帳 {money(amounts.get(item))}／記錄 {n} 筆 {money(rec_twd)}")
+                idxs = [i for i, v in hits.items() if v == item]
+                rec_twd = 0.0
+                for i in idxs:
+                    rec = df.loc[i]
+                    rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
+                    original = normalize_number(rec.get("實際配息原幣", 0), 0)
+                    rec_twd += original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
+                diff = (amounts.get(item) or 0) - rec_twd
+                mark = "✅" if abs(diff) < 1 else f"⚠️ 差 {money(diff)}"
+                lines.append(f"{item}：總帳 {money(amounts.get(item))}／記錄 {len(idxs)} 筆 {money(rec_twd)}（總覽匯率）{mark}")
             st.info("📒 總帳每月加總已有本月金額，已預先選好對應的待確認記錄，核對後按「💾 套用確認狀態」：\n\n"
                     + "\n".join(f"- {line}" for line in lines))
     except Exception as exc:

@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from invest_app.sheet_compare import ledger_confirm_suggestions
+from invest_app.sheet_compare import ledger_confirm_suggestions, sheet_fx_rates
 
 
 def records():
@@ -32,6 +32,12 @@ class LedgerConfirmTests(unittest.TestCase):
 
     def test_nothing_filled(self):
         self.assertEqual(ledger_confirm_suggestions(records(), [{"項目": "配息-基富通-台", "金額": 0}], (2026, 10)), {})
+
+    def test_sheet_fx_rates_first_occurrence(self):
+        pad = [""] * 16
+        grid = [pad + ["匯率", "賣出"], pad + ["美金", "31.9614"], pad + ["南非", "1.9334"],
+                pad + ["人民", "4.7715"], pad + ["日幣", "0.2017"], pad + ["美金", "31.6380"], ["短列"]]
+        self.assertEqual(sheet_fx_rates(grid), {"TWD": 1.0, "USD": 31.9614, "ZAR": 1.9334, "CNY": 4.7715, "JPY": 0.2017})
 
 
 if __name__ == "__main__":

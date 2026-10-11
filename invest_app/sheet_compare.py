@@ -167,3 +167,23 @@ def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str
                 out[int(idx)] = label
                 break
     return out
+
+
+# 總覽 Q 欄幣別名稱 → 幣別代碼；R 欄為匯率（台幣）
+SHEET_FX_LABELS = {"美金": "USD", "南非": "ZAR", "人民": "CNY", "日幣": "JPY"}
+
+
+def sheet_fx_rates(grid: list[list[Any]], label_col: int = 16, rate_col: int = 17) -> dict[str, float]:
+    """總覽 Q/R 欄的匯率（取每個幣別第一次出現的值），TWD 固定 1。"""
+    rates: dict[str, float] = {"TWD": 1.0}
+    for row in grid:
+        if len(row) <= rate_col:
+            continue
+        code = SHEET_FX_LABELS.get(str(row[label_col]).strip())
+        if not code or code in rates:
+            continue
+        try:
+            rates[code] = float(str(row[rate_col]).replace(",", ""))
+        except ValueError:
+            continue
+    return rates
