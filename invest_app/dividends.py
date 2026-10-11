@@ -68,13 +68,13 @@ def _fund_name_from_rows(rows: list[pd.Series]) -> str:
 DIVIDEND_CATCH_UP_DAYS = 45
 
 
-def auto_dividend_update(positions: pd.DataFrame) -> int:
+def auto_dividend_update(positions: pd.DataFrame, recognize: bool = True) -> int:
     """
     配息記錄頁每天自動執行一次（也可按「執行配息快照 / 認列」）：
     1. 【快照】今天在除息日前 2 天到除息後 45 天之間，且 fund_dividends 還沒有這筆
        （除息日過後才補登的，用目前單位數，扣掉除息日後才買的批次）
        → 加總同基金所有 units → 寫入 fund_dividends
-    2. 【認列】pay_date <= 今天 且 is_paid=False
+    2. 【認列】pay_date <= 今天 且 is_paid=False（只有按按鈕時；recognize=False 時跳過，由人工確認入帳）
        → twd_total = units_at_ex × actual_div_amount × fx_rate
        → is_paid = True
        → 依已確認記錄去重後重算持倉累計配息
@@ -167,6 +167,8 @@ def auto_dividend_update(positions: pd.DataFrame) -> int:
                     pass  # 唯一鍵衝突表示已存在
 
         # ── Step 2：認列（發放日已到，且 is_paid=False）──
+        if not recognize:
+            continue
         if not exist_row:
             continue
         if exist_row.get("is_paid"):
@@ -1174,15 +1176,15 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
-    # 每天第一次打開本頁自動快照／認列配息，避免除息日那幾天沒按按鈕就漏記
+    # 每天第一次打開本頁自動補登配息快照（只新增未入帳記錄，不自動勾確認入帳）
     today_key = tw_now().strftime("%Y-%m-%d")
     if st.session_state.get("auto_dividend_checked") != today_key:
         st.session_state["auto_dividend_checked"] = today_key
         try:
-            added = auto_dividend_update(positions)
+            added = auto_dividend_update(positions, recognize=False)
             if added:
                 st.cache_data.clear()
-                st.success(f"已自動補登／認列 {added} 筆配息。")
+                st.success(f"已自動補登 {added} 筆配息記錄（未入帳，請確認後勾選）。")
                 st.rerun()
         except Exception as exc:
             st.warning(f"自動配息快照失敗：{exc}")
