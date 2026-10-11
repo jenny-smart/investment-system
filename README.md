@@ -1,6 +1,20 @@
 # Jenny 投資系統
 
 Streamlit 主程式：`invesapp_supabase.py`（部署於 investment-system.streamlit.app，分支 `main`）。
+主程式只負責讀資料、最上方指標與功能列，各頁程式在 `invest_app/`；一頁出錯只影響該頁。
+
+| 模組 | 內容 |
+|---|---|
+| `invest_app/core.py` | 設定、Supabase、持倉讀寫、報價／匯率、enrich 計算、總帳讀取 |
+| `invest_app/overview.py` | 投資總覽 |
+| `invest_app/non_investment.py` | 非投資總覽、總資產列、快照的非投資欄位 |
+| `invest_app/history.py` | 歷史記錄 |
+| `invest_app/platform_page.py` | 台股／美股／基富通／渣打基金／台新基金 |
+| `invest_app/research.py` | 股票研究 |
+| `invest_app/data_safety.py` | 資料安全 |
+| `invest_app/positions_admin.py` | 工具（批次更新、修復、重建、抓價測試）與持倉編輯表 |
+| `invest_app/dividends.py` | 基金配息與配息記錄 |
+| `invest_app/stock_dividends.py` | 台股股利 |
 
 ## 功能列
 
