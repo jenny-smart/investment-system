@@ -213,7 +213,7 @@ with st.container():
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("投資市值損益", signed_money(total_pnl_all))
     c4.metric("投資總配息", money(total_div_received))
-    c5, c6, c8, _spare = st.columns(4)
+    _spare, c5, c6, c8 = st.columns(4)  # 對齊第一排第二張卡起
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
     # 預計配息對應的月份（下個月），小字放在金額後面
