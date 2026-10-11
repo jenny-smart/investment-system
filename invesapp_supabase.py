@@ -37,7 +37,7 @@ except Exception:
 from asset_summary import monthly_income_block, sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v67-history-other-assets"
+APP_VERSION = "2026-10-11-v68-total-asset-row"
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
 
@@ -3217,7 +3217,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame) -> None:
 
     # ── 其他資產小卡（總帳 Jennyall）──
     other = load_other_assets()
-    render_other_asset_cards(float(enriched["台幣市值"].dropna().sum()), other)
+    render_other_asset_cards(other)
 
     # ── 匯率列（精簡一行）──
     render_fx_strip("💱 即時匯率")
@@ -3344,20 +3344,32 @@ def _sub_header_html(label: str, fields: list[tuple[str, str, str]]) -> str:
 </div>"""
 
 
-def render_other_asset_cards(total_investment: float, other: dict[str, Any] | None) -> None:
-    """投資平台卡片下方：銀行 / 保險 / 懷思投資 / uncle待還 / 外幣，扣除待還與總資產。"""
+# 最上方總資產列顯示的類別；其餘類別留在總覽的投資平台卡片下方。
+TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
+
+
+def render_total_asset_row(total_investment: float, other: dict[str, Any] | None) -> None:
+    """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。"""
+    if not other:
+        return
+    cols = st.columns(7)
+    cols[0].metric("💎 總資產", money(total_investment + other["other_total"]))
+    cols[1].metric("其他資產小計", money(other["other_total"]))
+    cols[2].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
+    for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
+        col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
+    cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+
+
+def render_other_asset_cards(other: dict[str, Any] | None) -> None:
+    """投資平台卡片下方：不在最上方總資產列的其他資產（保險 / 懷思投資 / uncle待還）。"""
     if not other:
         st.warning(f"讀不到總帳其他資產：{st.session_state.get('other_assets_error', '')}")
         return
     cols = st.columns(5)
-    for col, (name, data) in zip(cols, other["categories"].items()):
+    rest = [(name, data) for name, data in other["categories"].items() if name not in TOP_ROW_CATEGORIES]
+    for col, (name, data) in zip(cols, rest):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(data["total"]))
-    cols = st.columns(5)
-    cols[0].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
-    cols[1].metric("其他資產小計", money(other["other_total"]))
-    cols[2].metric("投資總市值", money(total_investment))
-    cols[3].metric("💎 總資產", money(total_investment + other["other_total"]))
-    cols[4].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
 
 
 def render_other_asset_groups(other: dict[str, Any] | None) -> None:
@@ -6947,6 +6959,7 @@ with st.container():
     c6.metric("今年台股現金股利", money(stock_cash_dividend_this_year))
     if c7.button("🔄 更新即時價"):
         st.cache_data.clear(); st.rerun()
+    render_total_asset_row(float(total_value), load_other_assets())
     st.markdown("</div>", unsafe_allow_html=True)
 
 tabs = st.tabs(["總覽", "台股", "美股", "基富通", "渣打基金", "台新基金", "🔎 股票研究", "資料安全", "工具", "📊 歷史市值", "💰 配息記錄", "📈 台股股利", "📒 線上總表", "💵 現金流", "🏦 銀行明細", "🔍 明細查詢"])
