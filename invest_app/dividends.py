@@ -234,6 +234,7 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "基金名稱",
     "幣別",
     "配息單位數",
+    "除息日期",
     "發放日期",
     "每單位配息",
     "實際配息原幣",
@@ -670,6 +671,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "基金名稱": name,
             "幣別": currency,
             "配息單位數": units,
+            "除息日期": _format_dividend_date(record.get("ex_date", "")),
             "發放日期": _format_dividend_date(record.get("pay_date", "")),
             "每單位配息": display_div if display_div > 0 else None,
             "實際配息原幣": total_amount if total_amount is not None else None,
@@ -691,7 +693,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "_id": record.get("id"),
             "_source_table": record.get("_source_table", "fund_dividends"),
             "_fx_rate": fx,
-            "_sort_date": _parse_dividend_date(record.get("pay_date", "")),
+            # 沒有發放日的用除息日排序，避免整批被排到最下面
+            "_sort_date": _parse_dividend_date(record.get("pay_date", "")) or _parse_dividend_date(record.get("ex_date", "")),
         })
 
     for _, grp in _fund_dividend_groups(enriched_df):
@@ -730,7 +733,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "基金名稱": estimate["fund_name"],
             "幣別": estimate["currency"],
             "配息單位數": estimate["units"],
-            "發放日期": estimate["pay_date"] or estimate["ex_date"] or "—",
+            "除息日期": estimate["ex_date"] or "—",
+            "發放日期": estimate["pay_date"] or "—",
             "每單位配息": estimate["div_per_unit"],
             "實際配息原幣": estimate["total_amount"],
             "匯率": estimate["fx"],
@@ -1092,7 +1096,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     def _option_label(idx: int, row: pd.Series) -> str:
         return (
             f"{idx + 1}｜{normalize_text(row.get('平台', ''))}｜"
-            f"{normalize_text(row.get('基金名稱', ''))}｜{normalize_text(row.get('發放日期', ''))}｜"
+            f"{normalize_text(row.get('基金名稱', ''))}｜"
+            f"{normalize_text(row.get('發放日期', '')) if normalize_text(row.get('發放日期', '')) not in {'', '—'} else '除息 ' + normalize_text(row.get('除息日期', ''))}｜"
             f"{money(normalize_number(row.get('實際配息原幣', 0), 0), 2)} {normalize_text(row.get('幣別', ''))}"
         )
 
