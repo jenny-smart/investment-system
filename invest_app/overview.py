@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
+    two_line_metric,
     TW_STOCK_SELL_COST_RATE,
     CURRENCIES,
     _get_gas_date,
@@ -443,15 +444,14 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
         miss = int(r["價格缺漏"])
         warn = f" ⚠️{miss}缺" if miss else ""
         with card_cols[i % 5]:
-            # 台股：市值 / 扣稅後市值（賣出稅費 0.4425%）
-            value_text = money(r["台幣市值"] or 0)
+            label = f"{PLATFORM_ICONS.get(p, '💼')} {p}{warn}"
+            delta = f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}"
             if r["賣出稅費"]:
-                value_text += f" / {money(r['台幣市值'] - r['賣出稅費'])}"
-            st.metric(
-                f"{PLATFORM_ICONS.get(p, '💼')} {p}{warn}",
-                value_text,
-                delta=f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}",
-            )
+                # 台股：市值一行、扣稅後市值一行（賣出稅費 0.4425%）
+                two_line_metric(st, label, money(r["台幣市值"] or 0),
+                                f"扣稅後 {money(r['台幣市值'] - r['賣出稅費'])}", delta)
+            else:
+                st.metric(label, money(r["台幣市值"] or 0), delta=delta)
             st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
     # ── 匯率列 ──

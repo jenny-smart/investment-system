@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v99-assets-after-tax"
+APP_VERSION = "2026-10-11-v100-two-line-cards"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1425,3 +1425,21 @@ def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), 
 .jt-table th, .jt-table td {{ padding:5px 12px; border-bottom:1px solid #f1f5f9; }}
 .jt-table th {{ color:#6b7280; font-weight:600; }}
 </style>"""
+
+
+def two_line_metric(container: Any, label: str, value: str, sub: str = "", delta: str = "") -> None:
+    """和 st.metric 同樣外觀的卡片，數值下面多一行（例如「扣稅後 xxx」），避免數字並排被截斷。"""
+    delta_html = ""
+    if delta:
+        color = "#dc2626" if delta.strip().startswith("-") else "#059669"
+        arrow = "↓" if delta.strip().startswith("-") else "↑"
+        delta_html = f'<div style="font-size:.9rem;color:{color};margin-top:2px">{arrow} {html_lib.escape(delta)}</div>'
+    sub_html = (f'<div style="font-size:clamp(.78rem,1.3vw,1.02rem);font-weight:700;color:#475569;margin-top:2px">'
+                f'{html_lib.escape(sub)}</div>') if sub else ""
+    container.markdown(f"""
+<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;
+            box-shadow:0 1px 4px rgba(0,0,0,.05);margin-bottom:1rem">
+  <div style="font-size:14px;color:#31333f;margin-bottom:4px">{html_lib.escape(label)}</div>
+  <div style="font-size:clamp(.82rem,1.7vw,1.35rem);font-weight:700;color:#1e293b;white-space:nowrap">{html_lib.escape(value)}</div>
+  {sub_html}{delta_html}
+</div>""", unsafe_allow_html=True)
