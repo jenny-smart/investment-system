@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v94-tw-sell-cost"
+APP_VERSION = "2026-10-11-v95-pnl-after-tax"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1009,7 +1009,7 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
     return float(price), status
 
 
-# 台股賣出成本：手續費 0.1425% + 證交稅 0.3%；市值維持原值，另列稅費與扣稅後市值
+# 台股賣出成本：手續費 0.1425% + 證交稅 0.3%；市值維持原值，損益扣除這筆稅費
 TW_STOCK_SELL_COST_RATE = 0.004425
 
 
@@ -1027,7 +1027,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
     sell_cost = (twd_value * TW_STOCK_SELL_COST_RATE
                  if twd_value is not None and normalize_text(r.get("asset_type", "")) == "台股" else 0.0)
-    pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
+    # 損益 = 市值 − 成本 − 賣出稅費（台股）
+    pnl = twd_value - twd_cost - sell_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
     dividend_received_original_total = normalize_number(r.get("dividend_received_original_total", 0), 0)
     dividend_received_total = dividend_received_original_total * fx if fx is not None else 0

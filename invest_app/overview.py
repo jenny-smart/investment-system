@@ -103,7 +103,8 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
     total_rate = total_pnl / total_cost if total_cost else None
     pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
-    nav_pnl_sub   = total_val - total_cost if total_val and total_cost else 0
+    sell_cost_sub = sub_rows["賣出稅費"].fillna(0).sum() if "賣出稅費" in sub_rows else 0
+    nav_pnl_sub   = total_val - total_cost - sell_cost_sub if total_val and total_cost else 0
     total_pnl_sub = nav_pnl_sub + total_div
     nav_color  = "#6ee7b7" if nav_pnl_sub >= 0 else "#fca5a5"
     tot_color  = "#6ee7b7" if total_pnl_sub >= 0 else "#fca5a5"
@@ -158,8 +159,8 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
         if price_val is None:
             date_str = "❌"
 
-        # 市值損益 = 台幣市值 - 台幣成本（不含配息）
-        nav_pnl = (mval - cost_val) if mval and cost_val else None
+        # 市值損益 = 台幣市值 - 台幣成本 - 賣出稅費（台股；不含配息）
+        nav_pnl = (mval - cost_val - (to_float(pr.get("賣出稅費")) or 0)) if mval and cost_val else None
         nav_pnl_rate = (nav_pnl / cost_val * 100) if nav_pnl is not None and cost_val else None
         total_pnl_val = (nav_pnl + div_val) if nav_pnl is not None else None
         total_pnl_rate = (total_pnl_val / cost_val * 100) if total_pnl_val is not None and cost_val else None
@@ -227,7 +228,8 @@ def render_platform_group(platform: str, p_rows: pd.DataFrame) -> None:
     icon       = PLATFORM_ICONS.get(platform, "💼")
     pnl_color  = "#6ee7b7" if total_pnl >= 0 else "#fca5a5"
 
-    nav_pnl_plt   = total_val - total_cost if total_val and total_cost else 0
+    sell_cost_total = p_rows["賣出稅費"].fillna(0).sum() if "賣出稅費" in p_rows else 0
+    nav_pnl_plt   = total_val - total_cost - sell_cost_total if total_val and total_cost else 0
     total_pnl_plt = nav_pnl_plt + total_div
     nav_color_plt = "#6ee7b7" if nav_pnl_plt >= 0 else "#fca5a5"
     tot_color_plt = "#6ee7b7" if total_pnl_plt >= 0 else "#fca5a5"
