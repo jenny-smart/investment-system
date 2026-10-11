@@ -1,8 +1,0 @@
-streamlit
-requests
-pandas
-yfinance
-beautifulsoup4
-lxml
-playwright
-supabase
