@@ -216,7 +216,7 @@ with st.container():
     c8.metric("基金預計配息", money(total_div))
     _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
     c8.caption(_next_month)  # 預計配息對應的月份（下個月），小字
-    refresh_col = render_total_asset_row(float(total_value), load_other_assets()) or st
+    refresh_col = render_total_asset_row(float(total_value), load_other_assets(), float(total_sell_cost)) or st
     if refresh_col.button("🔄 更新即時價"):
         st.cache_data.clear()
         st.session_state.pop("latest_values_written_at", None)
