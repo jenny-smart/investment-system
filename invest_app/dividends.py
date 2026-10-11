@@ -102,6 +102,9 @@ def auto_dividend_update(positions: pd.DataFrame, recognize: bool = True) -> int
     except Exception:
         existing = {}
 
+    # 每檔基金每月只能有一筆：已有同月記錄（任一表、任一除息日）就不再新增
+    month_keys = _existing_dividend_record_keys(_combined_dividend_records())
+
     # 按基金分組處理
     fund_groups: dict[tuple, list[pd.Series]] = {}
     for _, r in positions.iterrows():
@@ -133,7 +136,9 @@ def auto_dividend_update(positions: pd.DataFrame, recognize: bool = True) -> int
 
         # ── Step 1：快照（除息日前 1 天到除息後 45 天內，且還沒有記錄；過期沒按到的會補登）──
         diff = _date_diff_days(ex_date)
-        if diff is not None and -DIVIDEND_CATCH_UP_DAYS <= diff <= 2 and not exist_row:
+        month_key = _dividend_business_key(fc, plt, cur, _fund_name_from_rows(rows), ex_date, pay_date)
+        if diff is not None and -DIVIDEND_CATCH_UP_DAYS <= diff <= 2 and not exist_row \
+                and month_key not in month_keys:
             # 加總這個基金所有持倉的單位數
             total_units = sum(
                 _position_dividend_units(r)
@@ -409,11 +414,12 @@ def _latest_past_record(records: list[dict[str, Any]], date_col: str) -> dict[st
 
 
 def _record_date_key(record: dict[str, Any]) -> str:
-    ex_date = _format_dividend_date(record.get("ex_date", ""))
-    if ex_date != "—":
-        return ex_date
-    pay_date = _format_dividend_date(record.get("pay_date", ""))
-    return "" if pay_date == "—" else pay_date
+    """配息月份（YYYY/MM）：每檔基金每月只算一筆，優先用發放日，沒有才用除息日。"""
+    for field in ("pay_date", "ex_date"):
+        date = _format_dividend_date(record.get(field, ""))
+        if date != "—":
+            return date[:7]
+    return ""
 
 
 def _dividend_name_key(value: Any) -> str:
@@ -455,20 +461,39 @@ def _dividend_record_key(record: dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _combined_dividend_records() -> list[dict[str, Any]]:
-    records = _fetch_dividend_rows("fund_dividends")
-    log_records = _fetch_dividend_rows("dividend_log")
-    existing_keys = {_dividend_record_key(r) for r in records}
-    for record in log_records:
+def _dividend_record_rank(record: dict[str, Any]) -> tuple:
+    """同基金同月多筆時保留：已入帳 > fund_dividends > 較早建立（id 小）。"""
+    try:
+        record_id = int(float(record.get("id") or 0))
+    except (TypeError, ValueError):
+        record_id = 0
+    return (
+        0 if normalize_bool(record.get("is_paid", False), False) else 1,
+        0 if record.get("_source_table") == "fund_dividends" else 1,
+        record_id,
+    )
+
+
+def _split_dividend_records() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """fund_dividends + dividend_log，每檔基金每月一筆；回傳（保留的, 重複的）。"""
+    records = [dict(r, _source_table="fund_dividends") for r in _fetch_dividend_rows("fund_dividends")]
+    records += [dict(r, _source_table="dividend_log") for r in _fetch_dividend_rows("dividend_log")]
+    kept: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    duplicates: list[dict[str, Any]] = []
+    unkeyed: list[dict[str, Any]] = []
+    for record in sorted(records, key=_dividend_record_rank):
         key = _dividend_record_key(record)
-        if key not in existing_keys:
-            copy = dict(record)
-            copy["_source_table"] = "dividend_log"
-            records.append(copy)
-            existing_keys.add(key)
-    for record in records:
-        record.setdefault("_source_table", "fund_dividends")
-    return records
+        if not key[0] or not key[3]:
+            unkeyed.append(record)
+        elif key in kept:
+            duplicates.append(record)
+        else:
+            kept[key] = record
+    return list(kept.values()) + unkeyed, duplicates
+
+
+def _combined_dividend_records() -> list[dict[str, Any]]:
+    return _split_dividend_records()[0]
 
 
 def _existing_dividend_record_keys(records: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
@@ -1189,6 +1214,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
         except Exception as exc:
             st.warning(f"自動配息快照失敗：{exc}")
     render_sheet_dividend_diff(enriched_df)
+    render_duplicate_dividend_cleanup()
 
     source = enriched_df
     estimate_df = build_estimated_dividend_table(source)
@@ -1304,3 +1330,33 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
         return
     st.markdown(f"#### ⚠️ 與總帳累積配息原幣不一致（{len(diff)} 檔，差額 = 資料庫 − 總帳，原幣）")
     st.markdown(html_table(diff, ["總帳配息原幣", "資料庫配息原幣", "差額"], decimals=2), unsafe_allow_html=True)
+
+
+def render_duplicate_dividend_cleanup() -> None:
+    """列出同基金同月的重複配息記錄（fund_dividends），確認後刪除並重算累計配息。"""
+    _, duplicates = _split_dividend_records()
+    removable = [r for r in duplicates if r.get("_source_table") == "fund_dividends" and r.get("id") is not None]
+    if not removable:
+        return
+    st.markdown(f"#### ⚠️ 重複的配息記錄（同基金同月 {len(removable)} 筆，表中已不重複計算）")
+    preview = pd.DataFrame([{
+        "平台": r.get("platform", ""), "基金名稱": r.get("fund_name", ""), "幣別": r.get("currency", ""),
+        "除息日": _format_dividend_date(r.get("ex_date", "")), "發放日": _format_dividend_date(r.get("pay_date", "")),
+        "單位數": r.get("units_at_ex"), "每單位配息": r.get("actual_div_amount") or r.get("div_amount"),
+        "已入帳": "是" if normalize_bool(r.get("is_paid", False), False) else "否",
+    } for r in removable])
+    st.markdown(html_table(preview, ["單位數", "每單位配息"]), unsafe_allow_html=True)
+    with st.form("delete_duplicate_dividends"):
+        confirmed = st.checkbox("我確認刪除以上重複記錄（保留同月另一筆已入帳／較早建立的記錄）")
+        if st.form_submit_button("🗑️ 刪除重複記錄") and confirmed:
+            sb = supabase_client()
+            groups = set()
+            for r in removable:
+                sb.table("fund_dividends").delete().eq("id", int(float(r["id"]))).execute()
+                groups.add((normalize_text(r.get("fund_code", "")), normalize_text(r.get("platform", "")),
+                            normalize_text(r.get("currency", ""))))
+            for fund_code, platform, currency in groups:
+                recompute_position_dividend_original_total(fund_code, platform, currency)
+            st.cache_data.clear()
+            st.success(f"已刪除 {len(removable)} 筆重複記錄並重算累計配息。")
+            st.rerun()
