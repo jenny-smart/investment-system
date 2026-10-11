@@ -183,7 +183,7 @@ def _received_dividends(asset_type: str) -> float:
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="hero">', unsafe_allow_html=True)
-    # 第一排：市值、成本、損益、總配息；第二排：基金／台股配息與基金預計配息（一排 4 張，不會被截斷）
+    # 第一排：市值、成本、損益、更新按鈕；第二排：總配息、基金／台股配息、基金預計配息（一排 4 張，不會被截斷）
     c1, c2, c3, c4 = st.columns(4)
     # 顯示缺報價的台股名稱
     tw_missing = []
@@ -212,18 +212,19 @@ with st.container():
     c2.metric("投資總成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("投資市值損益", signed_money(total_pnl_all))
-    c4.metric("投資總配息", money(total_div_received))
-    _spare, c5, c6, c8 = st.columns(4)  # 對齊第一排第二張卡起
+    # 第一排第四格放更新按鈕；投資總配息移到第二排第一格
+    if c4.button("🔄 更新即時價"):
+        st.cache_data.clear()
+        st.session_state.pop("latest_values_written_at", None)
+        st.rerun()
+    c_div, c5, c6, c8 = st.columns(4)
+    c_div.metric("投資總配息", money(total_div_received))
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
     # 預計配息對應的月份（下個月），小字放在金額後面
     _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
     two_line_metric(c8, "基金預計配息", money(total_div), suffix=_next_month)
-    refresh_col = render_total_asset_row(float(total_value), load_other_assets(), float(total_sell_cost)) or st
-    if refresh_col.button("🔄 更新即時價"):
-        st.cache_data.clear()
-        st.session_state.pop("latest_values_written_at", None)
-        st.rerun()
+    render_total_asset_row(float(total_value), load_other_assets(), float(total_sell_cost))
     st.markdown("</div>", unsafe_allow_html=True)
 PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "台股股利"]
 
