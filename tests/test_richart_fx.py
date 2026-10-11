@@ -24,7 +24,14 @@ TABLE = """<div id="buyTab"><table><tbody>
 </tbody></table></div>"""
 
 
+ARRAY = """<input type="hidden" id="exchangeRateArray" value="[{'code':'JPY','exchangeBuyRates':'0.1996','richartBuyRates':'0.2003','exchangeSellRates':'0.2031','richartSellRates':'0.2024'},{'code':'USD','exchangeBuyRates':31.834,'richartBuyRates':31.864,'exchangeSellRates':31.994,'richartSellRates':31.964},{'code':'ZAR','richartBuyRates':'1.9088'},{'code':'CNY','richartBuyRates':'4.7480'},{'code':'EUR','richartBuyRates':'35.6290'}]">
+<table><tr id="USD-sell"><td>美元</td></tr></table>"""
+
+
 class RichartFxTests(unittest.TestCase):
+    def test_hidden_rate_array(self):
+        self.assertEqual(parse_richart_rates(ARRAY), {"JPY": 0.2003, "USD": 31.864, "ZAR": 1.9088, "CNY": 4.748})
+
     def test_table_sell_rows_richart_column(self):
         self.assertEqual(parse_richart_rates(TABLE), {"JPY": 0.1958, "USD": 31.724, "ZAR": 1.8888, "CNY": 4.494})
 
