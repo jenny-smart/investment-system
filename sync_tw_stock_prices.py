@@ -1,4 +1,4 @@
-"""Update six Taiwan securities in the two requested Google Sheet tabs."""
+"""Update seven Taiwan securities in the two requested Google Sheet tabs."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
 SHEET_IDS = (0, 1591931043)
-CODES = ("4401", "6261", "00740B", "00927", "6244", "5314")
+CODES = ("4401", "6261", "00740B", "00927", "6244", "5314", "5478")
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
@@ -105,7 +105,7 @@ def main():
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     sheets = {sheet.id: sheet for sheet in spreadsheet.worksheets()}
     targets = {}
-    # All tabs must contain all six codes before any writes are attempted.
+    # All tabs must contain every code in CODES before any writes are attempted.
     for sheet_id in SHEET_IDS:
         sheet = sheets[sheet_id]
         rows = find_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
