@@ -95,6 +95,12 @@ def debug_endpoints(raw: str, base: str = "https://richart.tw") -> None:
         except Exception as exc:
             print("  ", url, "ERR", exc)
             continue
+        if "demandDeposit" in url:
+            # 匯率頁專用 JS：印出含網址／ajax 的行，找匯率 API
+            print("== demandDeposit.js ==", len(js))
+            for line in js.splitlines():
+                if re.search(r"(?i)url|ajax|fetch|\.get|\.post|-sell|-buy|rate", line):
+                    print("   |", line.strip()[:300])
         hits = sorted(set(pattern.findall(js)))
         rate_hits = [h for h in hits if re.search(r"(?i)rate|fx|currency|exchange|RC\d|foreign", h)]
         if rate_hits:
