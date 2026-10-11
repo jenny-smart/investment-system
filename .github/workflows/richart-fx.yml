@@ -1,9 +1,7 @@
 name: Richart FX to 總帳 R column
 
 on:
-  schedule:
-    # 每天每半小時（整點與半點）
-    - cron: "0,30 * * * *"
+  # cron-job.org 每半小時觸發（workflow_dispatch）
   workflow_dispatch:
     inputs:
       dry_run:
@@ -31,9 +29,6 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
-      - name: Debug Richart endpoints
-        continue-on-error: true
-        run: python richart_fx.py
       - name: Fetch Richart rates and update R cells
         env:
           DRY_RUN: ${{ inputs.dry_run }}
