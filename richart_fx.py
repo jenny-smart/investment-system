@@ -27,8 +27,21 @@ def page_text(raw: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(text))
 
 
+def parse_richart_table(raw: str, side: str = "sell") -> dict[str, float]:
+    """頁面匯率表：<tr id="USD-sell"> … <td>牌告匯率</td><td>Richart 匯率</td>；取 Richart 欄（最後一個數字）。"""
+    rates: dict[str, float] = {}
+    for code, body in re.findall(rf'(?is)<tr[^>]*\bid=["\']([A-Z]{{3}})-{side}["\'][^>]*>(.*?)</tr>', raw):
+        numbers = re.findall(r"<td[^>]*>\s*(\d+(?:\.\d+)?)\s*</td>", body)
+        if code in RICHART_CURRENCIES and numbers:
+            rates[code] = float(numbers[-1])
+    return rates
+
+
 def parse_richart_rates(raw: str, window: int = 240) -> dict[str, float]:
-    """回傳 {幣別: 賣外幣匯率}；找不到的幣別不放進結果。"""
+    """回傳 {幣別: 賣外幣匯率}；先讀匯率表的 -sell 列，沒有才用文字搜尋。找不到的幣別不放進結果。"""
+    table = parse_richart_table(raw)
+    if table:
+        return table
     text = page_text(raw)
     rates: dict[str, float] = {}
     for code, (names, (low, high)) in RICHART_CURRENCIES.items():
