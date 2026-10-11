@@ -9,6 +9,7 @@ import streamlit as st
 
 from asset_summary import monthly_income_block
 from invest_app.dividends import build_estimated_dividend_table
+from invest_app.sheet_compare import MONTHLY_ESTIMATE_RULES
 from invest_app.core import (
     two_line_metric,
     html_table,
@@ -169,17 +170,6 @@ def render_other_asset_groups(other: dict[str, Any] | None) -> None:
             st.markdown(f'<div style="margin-left:20px">{html_table(items, ["金額"])}</div>', unsafe_allow_html=True)
 
 
-# 每月加總各列對應的基金配息預估（平台、幣別、名稱篩選）；沒有對應的列（利息、股利…）預估留空。
-MONTHLY_ESTIMATE_RULES: dict[str, tuple[str, str, str]] = {
-    "配息-基富通-台": ("基富通", "TWD", ""),
-    "配息-基富通-人": ("基富通", "CNY", ""),
-    "配息-基富通-日": ("基富通", "JPY", ""),
-    "配息-渣打-大華": ("渣打基金", "USD", "大華"),
-    "配息-渣打-美金": ("渣打基金", "USD", "!大華"),
-    "配息-渣打-南非": ("渣打基金", "ZAR", ""),
-    "配息-台新-南非": ("台新基金", "ZAR", ""),
-    "配息-台新-美金": ("台新基金", "USD", ""),
-}
 # 小計列 = 下列項目的預估加總（與總帳「總覽」B 欄公式相同結構）
 MONTHLY_SUBTOTALS: dict[str, list[str]] = {
     "台幣-加總": ["股利-台股", "配息-懷思投資", "回饋金-保險", "利息-銀行"],
