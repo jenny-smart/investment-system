@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
+    load_sheet_raw_grid,
     html_table,
     OVERVIEW_SHEET_GID,
     load_sheet_grid,
@@ -817,7 +818,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     # 對照欄：總帳「總覽」N 欄的累積配息原幣
     try:
         from invest_app.sheet_compare import sheet_fund_dividends, sheet_value_for
-        sheet_rows = sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID))
+        sheet_rows = sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID))
     except Exception:
         sheet_rows = []
     df["總帳累積配息原幣"] = df.apply(
@@ -1355,7 +1356,7 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
     """總帳「總覽」N 欄累積配息原幣 vs 資料庫累計配息原幣：只列有差異的基金。"""
     from invest_app.sheet_compare import compare_fund_dividends, sheet_fund_dividends
     try:
-        diff = compare_fund_dividends(sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID)), enriched_df)
+        diff = compare_fund_dividends(sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID)), enriched_df)
     except Exception as exc:
         st.caption(f"總帳累積配息比對暫時無法執行：{exc}")
         return
@@ -1373,8 +1374,9 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
                                 "（只調整歷史基準，配息記錄不變）")
         if st.form_submit_button("🔄 以總帳 N 欄更新資料庫") and confirmed:
             # 重新讀總帳（不用 10 分鐘快取），確保用到最新、含小數的 N 欄
+            load_sheet_raw_grid.clear()
             load_sheet_grid.clear()
-            fresh = compare_fund_dividends(sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID)), enriched_df)
+            fresh = compare_fund_dividends(sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID)), enriched_df)
             updatable = fresh[fresh["總帳配息原幣"].notna() & fresh["_position_id"].notna()]
             done = sum(bool(set_position_dividend_original_total(int(float(r["_position_id"])), float(r["總帳配息原幣"])))
                        for _, r in updatable.iterrows())

@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v86-sheet-n-column"
+APP_VERSION = "2026-10-11-v87-sheet-raw-values"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1262,6 +1262,24 @@ def load_sheet_grid(gid: str) -> list[list[str]]:
         raise RuntimeError("Google Sheet CSV 下載失敗，請確認分享權限或部署端可讀取。")
     import csv
     return [row for row in csv.reader(io.StringIO(response.text))]
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_sheet_raw_grid(gid: str, sheet_title: str = "總覽") -> list[list[Any]]:
+    """整張分頁讀成二維陣列，數字用儲存格實際值（含格式隱藏的小數）。
+
+    CSV 匯出只有顯示文字，格式設成整數的儲存格會丟掉小數；改下載 xlsx 讀實際值。讀不到時退回 CSV。
+    """
+    try:
+        from openpyxl import load_workbook
+        url = f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/export?format=xlsx"
+        response = requests.get(url, timeout=60)
+        response.raise_for_status()
+        workbook = load_workbook(io.BytesIO(response.content), read_only=True, data_only=True)
+        sheet = workbook[sheet_title]
+        return [["" if v is None else v for v in row] for row in sheet.iter_rows(values_only=True)]
+    except Exception:
+        return load_sheet_grid(gid)
 
 
 def load_other_assets() -> dict[str, Any] | None:
