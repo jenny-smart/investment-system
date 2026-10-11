@@ -65,14 +65,10 @@ def _fund_name_from_rows(rows: list[pd.Series]) -> str:
     return " / ".join(names[:2])
 
 
-DIVIDEND_CATCH_UP_DAYS = 45
-
-
 def auto_dividend_update(positions: pd.DataFrame, recognize: bool = True) -> int:
     """
-    配息記錄頁每天自動執行一次（也可按「執行配息快照 / 認列」）：
-    1. 【快照】今天在除息日前 2 天到除息後 45 天之間，且 fund_dividends 還沒有這筆
-       （除息日過後才補登的，用目前單位數，扣掉除息日後才買的批次）
+    按「執行配息快照 / 認列」時執行：
+    1. 【快照】今天在 [ex_date-1天, ex_date+2天] 且該基金當月還沒有記錄
        → 加總同基金所有 units → 寫入 fund_dividends
     2. 【認列】pay_date <= 今天 且 is_paid=False（只有按按鈕時；recognize=False 時跳過，由人工確認入帳）
        → twd_total = units_at_ex × actual_div_amount × fx_rate
@@ -137,8 +133,7 @@ def auto_dividend_update(positions: pd.DataFrame, recognize: bool = True) -> int
         # ── Step 1：快照（除息日前 1 天到除息後 45 天內，且還沒有記錄；過期沒按到的會補登）──
         diff = _date_diff_days(ex_date)
         month_key = _dividend_business_key(fc, plt, cur, _fund_name_from_rows(rows), ex_date, pay_date)
-        if diff is not None and -DIVIDEND_CATCH_UP_DAYS <= diff <= 2 and not exist_row \
-                and month_key not in month_keys:
+        if diff is not None and -1 <= diff <= 2 and not exist_row and month_key not in month_keys:
             # 加總這個基金所有持倉的單位數
             total_units = sum(
                 _position_dividend_units(r)
@@ -487,6 +482,11 @@ def _split_dividend_records() -> tuple[list[dict[str, Any]], list[dict[str, Any]
         if not key[0] or not key[3]:
             unkeyed.append(record)
         elif key in kept:
+            # 同月重複：保留的那筆缺日期／名稱時，用另一份補上（例如 fund_dividends 沒有發放日、dividend_log 有）
+            target = kept[key]
+            for field in ("pay_date", "ex_date", "fund_name"):
+                if normalize_text(target.get(field, "")) in {"", "—", "None", "nan"} and normalize_text(record.get(field, "")):
+                    target[field] = record.get(field)
             duplicates.append(record)
         else:
             kept[key] = record
@@ -1206,18 +1206,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
-    # 每天第一次打開本頁自動補登配息快照（只新增未入帳記錄，不自動勾確認入帳）
-    today_key = tw_now().strftime("%Y-%m-%d")
-    if st.session_state.get("auto_dividend_checked") != today_key:
-        st.session_state["auto_dividend_checked"] = today_key
-        try:
-            added = auto_dividend_update(positions, recognize=False)
-            if added:
-                st.cache_data.clear()
-                st.success(f"已自動補登 {added} 筆配息記錄（未入帳，請確認後勾選）。")
-                st.rerun()
-        except Exception as exc:
-            st.warning(f"自動配息快照失敗：{exc}")
+    render_auto_catch_up_cleanup()
     render_sheet_dividend_diff(enriched_df)
     render_duplicate_dividend_cleanup()
     render_monthly_dividend_check(positions)
@@ -1335,7 +1324,20 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
         st.success("總帳「總覽」N 欄累積配息原幣與資料庫一致。")
         return
     st.markdown(f"#### ⚠️ 與總帳累積配息原幣不一致（{len(diff)} 檔，差額 = 資料庫 − 總帳，原幣）")
-    st.markdown(html_table(diff, ["總帳配息原幣", "資料庫配息原幣", "差額"], decimals=2), unsafe_allow_html=True)
+    st.markdown(html_table(diff.drop(columns=["_position_id"]), ["總帳配息原幣", "資料庫配息原幣", "差額"], decimals=2),
+                unsafe_allow_html=True)
+    updatable = diff[diff["總帳配息原幣"].notna() & diff["_position_id"].notna()]
+    if updatable.empty:
+        return
+    with st.form("sync_sheet_dividend_totals"):
+        confirmed = st.checkbox(f"我確認把以上 {len(updatable)} 檔的資料庫累計配息原幣改成總帳 N 欄數字"
+                                "（只調整歷史基準，配息記錄不變）")
+        if st.form_submit_button("🔄 以總帳 N 欄更新資料庫") and confirmed:
+            done = sum(bool(set_position_dividend_original_total(int(float(r["_position_id"])), float(r["總帳配息原幣"])))
+                       for _, r in updatable.iterrows())
+            st.cache_data.clear()
+            st.success(f"已更新 {done} 檔基金的累計配息原幣。")
+            st.rerun()
 
 
 def render_duplicate_dividend_cleanup() -> None:
@@ -1455,3 +1457,49 @@ def render_monthly_dividend_check(positions: pd.DataFrame) -> None:
                     st.cache_data.clear()
                     st.success("已新增，請在下方配息記錄表確認入帳。")
                     st.rerun()
+
+
+# v77 曾在這些日期（台灣時間）自動補登配息快照，造成 10 月候選列消失、發放日空白
+AUTO_CATCH_UP_DATES = {"2026-10-11"}
+
+
+def _auto_catch_up_records() -> list[dict[str, Any]]:
+    out = []
+    for r in _fetch_dividend_rows("fund_dividends"):
+        created = pd.to_datetime(r.get("created_at"), utc=True, errors="coerce")
+        if pd.isna(created) or normalize_text(r.get("note", "")):
+            continue
+        if created.tz_convert("Asia/Taipei").strftime("%Y-%m-%d") in AUTO_CATCH_UP_DATES:
+            out.append(r)
+    return out
+
+
+def render_auto_catch_up_cleanup() -> None:
+    """列出 10/11 自動補登寫入的記錄，確認後刪除，讓原本的候選列（待人工確認）回來。"""
+    records = _auto_catch_up_records()
+    if not records:
+        return
+    st.markdown(f"#### ⚠️ 10/11 自動補登寫入的配息記錄（{len(records)} 筆）")
+    st.caption("這些是 v77 自動補登寫入的，會擋住原本的 10 月候選列，部分還被自動勾了入帳。"
+               "刪除後，10 月會恢復成候選列，由你確認入帳。")
+    preview = pd.DataFrame([{
+        "平台": r.get("platform", ""), "基金名稱": r.get("fund_name", ""), "幣別": r.get("currency", ""),
+        "除息日": _format_dividend_date(r.get("ex_date", "")), "發放日": _format_dividend_date(r.get("pay_date", "")),
+        "單位數": r.get("units_at_ex"), "每單位配息": r.get("div_amount"),
+        "已入帳": "是" if normalize_bool(r.get("is_paid", False), False) else "否",
+    } for r in records])
+    st.markdown(html_table(preview, ["單位數", "每單位配息"]), unsafe_allow_html=True)
+    with st.form("delete_auto_catch_up"):
+        confirmed = st.checkbox("我確認刪除以上自動補登的記錄")
+        if st.form_submit_button("🗑️ 刪除自動補登記錄") and confirmed:
+            sb = supabase_client()
+            groups = set()
+            for r in records:
+                sb.table("fund_dividends").delete().eq("id", int(float(r["id"]))).execute()
+                groups.add((normalize_text(r.get("fund_code", "")), normalize_text(r.get("platform", "")),
+                            normalize_text(r.get("currency", ""))))
+            for fund_code, platform, currency in groups:
+                recompute_position_dividend_original_total(fund_code, platform, currency)
+            st.cache_data.clear()
+            st.success(f"已刪除 {len(records)} 筆並重算累計配息。")
+            st.rerun()

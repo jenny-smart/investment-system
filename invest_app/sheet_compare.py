@@ -63,12 +63,14 @@ def compare_fund_dividends(sheet_rows: list[dict[str, Any]], enriched: pd.DataFr
     funds = enriched[enriched["asset_type"].astype(str) == "基金"] if not enriched.empty else enriched
     db: dict[tuple[str, str], dict[str, float]] = {}
     names: dict[tuple[str, str], dict[str, str]] = {}
+    ids: dict[tuple[str, str], dict[str, Any]] = {}
     for _, r in funds.iterrows():
         sec = (str(r.get("platform", "")), str(r.get("currency", "")).upper())
         key = fund_key(r.get("name", ""))
         db.setdefault(sec, {}).setdefault(key, 0.0)
         db[sec][key] += float(pd.to_numeric(r.get("累計配息原幣"), errors="coerce") or 0)
         names.setdefault(sec, {})[key] = str(r.get("name", ""))
+        ids.setdefault(sec, {}).setdefault(key, r.get("id"))
 
     rows: list[dict[str, Any]] = []
     used: set[tuple[tuple[str, str], str]] = set()
@@ -82,16 +84,16 @@ def compare_fund_dividends(sheet_rows: list[dict[str, Any]], enriched: pd.DataFr
         db_value = candidates.get(key) if key else None
         if key:
             used.add((sec, key))
-        rows.append({**item, "資料庫配息原幣": db_value})
+        rows.append({**item, "資料庫配息原幣": db_value, "_position_id": ids.get(sec, {}).get(key) if key else None})
     # 資料庫有、總帳沒有的基金
     section_of = {v: k for k, v in SHEET_FUND_SECTIONS.items()}
     for sec, funds_in_sec in db.items():
         for key, value in funds_in_sec.items():
             if (sec, key) not in used and value:
                 rows.append({"分類": section_of.get(sec, f"{sec[0]}-{sec[1]}"), "基金名稱": names[sec][key],
-                             "總帳配息原幣": None, "資料庫配息原幣": value})
+                             "總帳配息原幣": None, "資料庫配息原幣": value, "_position_id": ids[sec][key]})
 
-    df = pd.DataFrame(rows, columns=["分類", "基金名稱", "總帳配息原幣", "資料庫配息原幣"])
+    df = pd.DataFrame(rows, columns=["分類", "基金名稱", "總帳配息原幣", "資料庫配息原幣", "_position_id"])
     df.insert(1, "幣別", df["分類"].map(lambda s: SHEET_FUND_SECTIONS.get(s, ("", ""))[1]))
     df["差額"] = df["資料庫配息原幣"].fillna(0) - df["總帳配息原幣"].fillna(0)
     # 只留有差異的基金（原幣差超過 0.5，避免小數進位誤報）
