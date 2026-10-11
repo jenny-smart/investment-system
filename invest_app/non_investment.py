@@ -113,10 +113,10 @@ TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
 
 def render_total_asset_row(total_investment: float, other: dict[str, Any] | None, sell_cost: float = 0.0) -> Any:
     """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。
-    回傳最右邊的欄位（目前只放總帳月份說明）。"""
+    總帳月份說明放在這排下方，不佔卡片欄位。"""
     if not other:
         return None
-    cols = st.columns(6)
+    cols = st.columns(5)
     total_assets = total_investment + other["other_total"]
     # 總資產 / 扣稅後總資產（扣台股賣出稅費 0.4425%）
     two_line_metric(cols[0], "💎 總資產", money(total_assets),
@@ -125,8 +125,8 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     cols[2].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
-    cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
-    return cols[5]
+    st.caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
+    return None
 
 
 def render_other_assets_tab(enriched: pd.DataFrame) -> None:
