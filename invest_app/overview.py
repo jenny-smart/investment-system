@@ -443,13 +443,16 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
         miss = int(r["價格缺漏"])
         warn = f" ⚠️{miss}缺" if miss else ""
         with card_cols[i % 5]:
+            # 台股：市值 / 扣稅後市值（賣出稅費 0.4425%）
+            value_text = money(r["台幣市值"] or 0)
+            if r["賣出稅費"]:
+                value_text += f" / {money(r['台幣市值'] - r['賣出稅費'])}"
             st.metric(
                 f"{PLATFORM_ICONS.get(p, '💼')} {p}{warn}",
-                money(r["台幣市值"] or 0),
+                value_text,
                 delta=f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}",
             )
-            after_tax = f"｜扣稅後 {money(r['台幣市值'] - r['賣出稅費'])}" if r["賣出稅費"] else ""
-            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}{after_tax}")
+            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
 
     # ── 匯率列 ──
     st.markdown("<br>", unsafe_allow_html=True)
