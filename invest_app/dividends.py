@@ -1274,7 +1274,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame) -> None:
 
 
 def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
-    """總帳「總覽」L 欄累積配息 vs 資料庫累計配息：只列有差異的基金。"""
+    """總帳「總覽」N 欄累積配息原幣 vs 資料庫累計配息原幣：只列有差異的基金。"""
     from invest_app.sheet_compare import compare_fund_dividends, sheet_fund_dividends
     try:
         diff = compare_fund_dividends(sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID)), enriched_df)
@@ -1282,7 +1282,7 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
         st.caption(f"總帳累積配息比對暫時無法執行：{exc}")
         return
     if diff.empty:
-        st.success("總帳「總覽」L 欄累積配息與資料庫一致。")
+        st.success("總帳「總覽」N 欄累積配息原幣與資料庫一致。")
         return
-    st.markdown(f"#### ⚠️ 與總帳累積配息不一致（{len(diff)} 檔，差額 = 資料庫 − 總帳）")
-    st.markdown(html_table(diff, ["總帳累積配息", "資料庫累計配息", "差額"]), unsafe_allow_html=True)
+    st.markdown(f"#### ⚠️ 與總帳累積配息原幣不一致（{len(diff)} 檔，差額 = 資料庫 − 總帳，原幣）")
+    st.markdown(html_table(diff, ["總帳配息原幣", "資料庫配息原幣", "差額"], decimals=2), unsafe_allow_html=True)
