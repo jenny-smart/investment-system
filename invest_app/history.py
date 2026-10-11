@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 from invest_app.core import (
+    html_table,
     money,
     supabase_client,
 )
@@ -62,47 +63,21 @@ def render_history_tab(enriched: pd.DataFrame) -> None:
 
     if columns_missing or st.session_state.get("snapshot_columns_missing"):
         st.warning("Supabase 的 portfolio_snapshots 還沒有其他資產欄位，新快照不會存這幾欄。"
-                   "請到 Supabase → SQL Editor 執行頁面上方「資料庫欄位提醒」裡 portfolio_snapshots / latest_portfolio_values 那幾行 SQL。")
+                   "請到 Supabase → SQL Editor 執行「資料安全」分頁「資料庫欄位提醒」裡 portfolio_snapshots / latest_portfolio_values 那幾行 SQL。")
     st.caption("非投資資產（銀行、保險…總資產）自 2026/10/11 起記錄，之前的快照這幾欄空白。")
 
     # ── 明細表（愈新愈上）──
-    other_labels = {"bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資",
-                    "uncle_total": "uncle待還", "fx_cash_total": "外幣", "deposits_total": "扣除待還",
-                    "other_assets_total": "其他資產小計", "grand_total": "總資產"}
-    df_show = df[[
-        "時間", "total_twd", "tw_stock", "us_stock",
-        "kifutong", "scb", "taishin", *other_labels,
-        "total_cost", "total_pnl", "cumulative_dividend", "trigger", "note"
-    ]].copy()
-    df_show["deposits_total"] = -df_show["deposits_total"]
-    df_show.columns = [
-        "時間", "總市值", "台股", "美股",
-        "基富通", "渣打", "台新", *other_labels.values(),
-        "總成本", "市值損益", "累計配息", "觸發方式", "備註"
-    ]
-    col_cfg = {
-        "時間":     st.column_config.TextColumn("時間",       width="small"),
-        "總市值":   st.column_config.NumberColumn("總市值",   format="%.0f", width="medium"),
-        "台股":     st.column_config.NumberColumn("台股",     format="%.0f", width="medium"),
-        "美股":     st.column_config.NumberColumn("美股",     format="%.0f", width="medium"),
-        "基富通":   st.column_config.NumberColumn("基富通",   format="%.0f", width="medium"),
-        "渣打":     st.column_config.NumberColumn("渣打",     format="%.0f", width="medium"),
-        "台新":     st.column_config.NumberColumn("台新",     format="%.0f", width="medium"),
-        **{label: st.column_config.NumberColumn(label, format="%.0f", width="medium")
-           for label in other_labels.values()},
-        "總成本":   st.column_config.NumberColumn("總成本",   format="%.0f", width="medium"),
-        "市值損益": st.column_config.NumberColumn("市值損益", format="%.0f", width="medium"),
-        "累計配息": st.column_config.NumberColumn("累計配息", format="%.0f", width="medium"),
-        "觸發方式": st.column_config.TextColumn("觸發方式",   width="small"),
-        "備註":     st.column_config.TextColumn("備註",       width="medium"),
+    # 欄位順序：總資產 / 非投資小計 / 投資小計，再來各項明細
+    columns = {
+        "時間": "時間", "grand_total": "總資產", "other_assets_total": "非投資小計", "total_twd": "投資小計",
+        "bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資", "uncle_total": "uncle待還",
+        "fx_cash_total": "外幣", "deposits_total": "扣除待還",
+        "tw_stock": "台股", "us_stock": "美股", "kifutong": "基富通", "scb": "渣打", "taishin": "台新",
+        "total_cost": "投資總成本", "total_pnl": "投資市值損益", "cumulative_dividend": "基金累計配息",
+        "trigger": "觸發方式", "note": "備註",
     }
-    number_cols = [c for c, cfg in col_cfg.items() if c not in {"時間", "觸發方式", "備註"}]
-    # 數字欄用 Styler 格式化：沒有資料的格子顯示空白，不顯示 None。
-    col_cfg = {c: (st.column_config.Column(c, width="medium") if c in number_cols else cfg)
-               for c, cfg in col_cfg.items()}
-    st.dataframe(
-        df_show.style.format("{:,.0f}", subset=number_cols, na_rep=""),
-        use_container_width=True, hide_index=True,
-        height=min(42 * len(df_show) + 44, 600),
-        column_config=col_cfg
-    )
+    df_show = df[list(columns)].copy()
+    df_show["deposits_total"] = -df_show["deposits_total"]
+    df_show = df_show.rename(columns=columns)
+    number_cols = [c for c in df_show.columns if c not in {"時間", "觸發方式", "備註"}]
+    st.markdown(html_table(df_show, number_cols, max_height=600), unsafe_allow_html=True)
