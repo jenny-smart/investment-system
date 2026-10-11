@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from invest_app.core import (
+    two_line_metric,
     APP_VERSION,
     PLATFORMS,
     enrich,
@@ -182,7 +183,8 @@ def _received_dividends(asset_type: str) -> float:
 # Hero bar（不再 sticky，標題不被蓋）
 with st.container():
     st.markdown('<div class="hero">', unsafe_allow_html=True)
-    c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+    # 第一排：市值、成本、損益、總配息；第二排：基金／台股配息與基金預計配息（一排 4 張，不會被截斷）
+    c1, c2, c3, c4 = st.columns(4)
     # 顯示缺報價的台股名稱
     tw_missing = []
     if not enriched.empty:
@@ -203,16 +205,17 @@ with st.container():
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
     # 投資總市值 / 扣稅後總市值（台股賣出稅費 0.4425%）
-    c1.metric("投資總市值", f"{money(total_value)} / {money(total_value - total_sell_cost)}", delta=pnl_delta)
+    two_line_metric(c1, "投資總市值", money(total_value),
+                    f"扣稅後 {money(total_value - total_sell_cost)}" if total_sell_cost else "", pnl_delta)
     # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
     c2.metric("投資總成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
     c3.metric("投資市值損益", signed_money(total_pnl_all))
     c4.metric("投資總配息", money(total_div_received))
+    c5, c6, c8, _spare = st.columns(4)
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
-    c7.metric("美股配息", money(_received_dividends("美股")))
     c8.metric("基金預計配息", money(total_div))
     _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
     c8.caption(_next_month)  # 預計配息對應的月份（下個月），小字

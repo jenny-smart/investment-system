@@ -10,6 +10,7 @@ import streamlit as st
 from asset_summary import monthly_income_block
 from invest_app.dividends import build_estimated_dividend_table
 from invest_app.core import (
+    two_line_metric,
     html_table,
     OVERVIEW_SHEET_GID,
     load_other_assets,
@@ -115,17 +116,17 @@ def render_total_asset_row(total_investment: float, other: dict[str, Any] | None
     回傳最右邊空著的欄位，給「更新即時價」按鈕用。"""
     if not other:
         return None
-    cols = st.columns(7)
+    cols = st.columns(6)
     total_assets = total_investment + other["other_total"]
     # 總資產 / 扣稅後總資產（扣台股賣出稅費 0.4425%）
-    cols[0].metric("💎 總資產", f"{money(total_assets)} / {money(total_assets - sell_cost)}" if sell_cost
-                   else money(total_assets))
+    two_line_metric(cols[0], "💎 總資產", money(total_assets),
+                    f"扣稅後 {money(total_assets - sell_cost)}" if sell_cost else "")
     cols[1].metric("其他資產小計", money(other["other_total"]))
     cols[2].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
         col.metric(f"{OTHER_ASSET_ICONS.get(name, '💼')} {name}", money(other["categories"][name]["total"]))
     cols[5].caption(f"總帳 {other['month']}（Jennyall {other['column']} 欄），每月自動換欄。")
-    return cols[6]
+    return cols[5]
 
 
 def render_other_assets_tab(enriched: pd.DataFrame) -> None:
