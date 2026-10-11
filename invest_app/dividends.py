@@ -482,6 +482,11 @@ def _split_dividend_records() -> tuple[list[dict[str, Any]], list[dict[str, Any]
         if not key[0] or not key[3]:
             unkeyed.append(record)
         elif key in kept:
+            # 同月重複：保留的那筆缺日期／名稱時，用另一份補上（例如 fund_dividends 沒有發放日、dividend_log 有）
+            target = kept[key]
+            for field in ("pay_date", "ex_date", "fund_name"):
+                if normalize_text(target.get(field, "")) in {"", "—", "None", "nan"} and normalize_text(record.get(field, "")):
+                    target[field] = record.get(field)
             duplicates.append(record)
         else:
             kept[key] = record
