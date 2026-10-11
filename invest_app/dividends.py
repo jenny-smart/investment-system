@@ -229,7 +229,6 @@ ACTUAL_DIVIDEND_COLUMNS = [
     "基金名稱",
     "幣別",
     "配息單位數",
-    "除息日期",
     "發放日期",
     "每單位配息",
     "實際配息原幣",
@@ -625,6 +624,34 @@ def _fetch_dividend_rows(table_name: str) -> list[dict[str, Any]]:
         return []
 
 
+def _roll_estimate_to_current_month(estimate: dict[str, Any] | None) -> dict[str, Any] | None:
+    """月配息基金的來源（GAS／歷史）若還停在上個月，推算本月同一天的除息／發放日作為候選列，
+    到期後就出現在配息記錄表等人工確認；來源更新後會以來源日期為準。"""
+    if not estimate:
+        return estimate
+    today = tw_now().date()
+    ex = _parse_dividend_date(estimate.get("ex_date"))
+    pay = _parse_dividend_date(estimate.get("pay_date"))
+    ref = pay or ex
+    if ref is None or (ref.year, ref.month) >= (today.year, today.month):
+        return estimate
+
+    def this_month(d):
+        import calendar
+        return d.replace(year=today.year, month=today.month,
+                         day=min(d.day, calendar.monthrange(today.year, today.month)[1]))
+
+    new_ex = this_month(ex) if ex else None
+    new_pay = this_month(pay) if pay else None
+    if (new_pay or new_ex) > today:
+        return estimate  # 本月還沒到發放日
+    rolled = dict(estimate)
+    rolled["ex_date"] = new_ex.strftime("%Y/%m/%d") if new_ex else ""
+    rolled["pay_date"] = new_pay.strftime("%Y/%m/%d") if new_pay else ""
+    rolled["sort_date"] = new_pay or new_ex
+    return rolled
+
+
 def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     name_lookup = _fund_name_lookup(enriched_df)
     position_totals = _position_dividend_total_lookup(enriched_df)
@@ -671,8 +698,8 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "基金名稱": name,
             "幣別": currency,
             "配息單位數": units,
-            "除息日期": _format_dividend_date(record.get("ex_date", "")),
-            "發放日期": _format_dividend_date(record.get("pay_date", "")),
+            # 沒有發放日的（東方匯理等 GAS 不提供）以除息日顯示，不留空白
+            "發放日期": _format_dividend_date(record.get("pay_date", "") or record.get("ex_date", "")),
             "每單位配息": display_div if display_div > 0 else None,
             "實際配息原幣": total_amount if total_amount is not None else None,
             "匯率": fx,
@@ -698,7 +725,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         })
 
     for _, grp in _fund_dividend_groups(enriched_df):
-        estimate = _dividend_estimate_from_group(grp, history_index)
+        estimate = _roll_estimate_to_current_month(_dividend_estimate_from_group(grp, history_index))
         if not estimate:
             continue
         fund_code = normalize_text(estimate.get("fund_code", "")).lower()
@@ -733,8 +760,7 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
             "基金名稱": estimate["fund_name"],
             "幣別": estimate["currency"],
             "配息單位數": estimate["units"],
-            "除息日期": estimate["ex_date"] or "—",
-            "發放日期": estimate["pay_date"] or "—",
+            "發放日期": estimate["pay_date"] or estimate["ex_date"] or "—",
             "每單位配息": estimate["div_per_unit"],
             "實際配息原幣": estimate["total_amount"],
             "匯率": estimate["fx"],
@@ -1097,7 +1123,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         return (
             f"{idx + 1}｜{normalize_text(row.get('平台', ''))}｜"
             f"{normalize_text(row.get('基金名稱', ''))}｜"
-            f"{normalize_text(row.get('發放日期', '')) if normalize_text(row.get('發放日期', '')) not in {'', '—'} else '除息 ' + normalize_text(row.get('除息日期', ''))}｜"
+            f"{normalize_text(row.get('發放日期', ''))}｜"
             f"{money(normalize_number(row.get('實際配息原幣', 0), 0), 2)} {normalize_text(row.get('幣別', ''))}"
         )
 
@@ -1206,10 +1232,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) -> None:
     """💰 配息記錄"""
     st.subheader("💰 配息記錄")
-    render_auto_catch_up_cleanup()
-    render_sheet_dividend_diff(enriched_df)
-    render_duplicate_dividend_cleanup()
-    render_monthly_dividend_check(positions)
+    render_auto_catch_up_cleanup()  # 只在還有 10/11 自動補登記錄時出現
 
     source = enriched_df
     estimate_df = build_estimated_dividend_table(source)
@@ -1245,16 +1268,21 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
     c2.metric("已確認實際配息折台幣", money(paid_twd))
     c3.metric("配息記錄筆數", f"{len(actual_df):,}")
 
-    st.markdown("#### 預估配息表")
-    st.caption("目前單位數 × 最近一次每單位配息金額 = 預估配息原幣；再乘匯率得到預估配息台幣。日期優先取最近一次除息日；若來源沒有除息日，才以最近一次發放日備援。")
-    render_estimated_dividend_table(estimate_df)
-
     st.markdown("#### 配息記錄表")
-    st.caption("累計配息原幣 / 台幣＝歷史累計基準＋已確認記錄（去重）；重算不會再清掉先前配息。")
+    st.caption("未勾確認入帳的是待確認的配息（含本月候選）；勾選並套用後才計入累計配息。")
     render_actual_dividend_table(actual_df)
-    render_position_dividend_total_fix_tool()
 
-    st.markdown("---")
+    with st.expander("預估配息表"):
+        st.caption("目前單位數 × 最近一次每單位配息 = 預估配息原幣，再乘匯率得到台幣。")
+        render_estimated_dividend_table(estimate_df)
+
+    # 對帳與維護工具平常收起來，需要時再打開
+    if not st.toggle("🔧 顯示對帳與維護工具（總帳比對、本月檢查、重複記錄、手動新增）", key="dividend_tools"):
+        return
+    render_sheet_dividend_diff(enriched_df)
+    render_monthly_dividend_check(positions)
+    render_duplicate_dividend_cleanup()
+    render_position_dividend_total_fix_tool()
 
     with st.expander("➕ 手動新增配息記錄（補填歷史）"):
         st.caption("用於補填歷史配息；實際配息留 0 時，已發放記錄會用預估配息代入。")
@@ -1333,6 +1361,10 @@ def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
         confirmed = st.checkbox(f"我確認把以上 {len(updatable)} 檔的資料庫累計配息原幣改成總帳 N 欄數字"
                                 "（只調整歷史基準，配息記錄不變）")
         if st.form_submit_button("🔄 以總帳 N 欄更新資料庫") and confirmed:
+            # 重新讀總帳（不用 10 分鐘快取），確保用到最新、含小數的 N 欄
+            load_sheet_grid.clear()
+            fresh = compare_fund_dividends(sheet_fund_dividends(load_sheet_grid(OVERVIEW_SHEET_GID)), enriched_df)
+            updatable = fresh[fresh["總帳配息原幣"].notna() & fresh["_position_id"].notna()]
             done = sum(bool(set_position_dividend_original_total(int(float(r["_position_id"])), float(r["總帳配息原幣"])))
                        for _, r in updatable.iterrows())
             st.cache_data.clear()
