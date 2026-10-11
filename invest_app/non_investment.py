@@ -110,13 +110,16 @@ def _sub_header_html(label: str, fields: list[tuple[str, str, str]]) -> str:
 TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
 
 
-def render_total_asset_row(total_investment: float, other: dict[str, Any] | None) -> Any:
+def render_total_asset_row(total_investment: float, other: dict[str, Any] | None, sell_cost: float = 0.0) -> Any:
     """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。
     回傳最右邊空著的欄位，給「更新即時價」按鈕用。"""
     if not other:
         return None
     cols = st.columns(7)
-    cols[0].metric("💎 總資產", money(total_investment + other["other_total"]))
+    total_assets = total_investment + other["other_total"]
+    # 總資產 / 扣稅後總資產（扣台股賣出稅費 0.4425%）
+    cols[0].metric("💎 總資產", f"{money(total_assets)} / {money(total_assets - sell_cost)}" if sell_cost
+                   else money(total_assets))
     cols[1].metric("其他資產小計", money(other["other_total"]))
     cols[2].metric("➖ 扣除待還（別人寄放）", money(-other["deposits"]))
     for col, name in zip(cols[3:], TOP_ROW_CATEGORIES):
