@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v93-investment-dividend-label"
+APP_VERSION = "2026-10-11-v94-tw-sell-cost"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1009,6 +1009,10 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
     return float(price), status
 
 
+# 台股賣出成本：手續費 0.1425% + 證交稅 0.3%；市值維持原值，另列稅費與扣稅後市值
+TW_STOCK_SELL_COST_RATE = 0.004425
+
+
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
     original_units = normalize_number(r.get("original_units", 0), 0)
     units = normalize_number(r.get("units", 0), 0)
@@ -1021,6 +1025,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     value_original_currency = market_units * latest_price if latest_price is not None else None
     twd_cost = cost_original_currency * fx if fx is not None else None
     twd_value = value_original_currency * fx if value_original_currency is not None and fx is not None else None
+    sell_cost = (twd_value * TW_STOCK_SELL_COST_RATE
+                 if twd_value is not None and normalize_text(r.get("asset_type", "")) == "台股" else 0.0)
     pnl = twd_value - twd_cost if twd_value is not None and twd_cost is not None else None
     pnl_rate = pnl / twd_cost if pnl is not None and twd_cost else None
     dividend_received_original_total = normalize_number(r.get("dividend_received_original_total", 0), 0)
@@ -1031,6 +1037,8 @@ def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float
     return {
         "成本原幣": cost_original_currency, "市值原幣": value_original_currency,
         "台幣成本": twd_cost, "台幣市值": twd_value,
+        "賣出稅費": sell_cost,
+        "扣稅後市值": twd_value - sell_cost if twd_value is not None else None,
         "價差損益": pnl, "價差損益率": pnl_rate,
         "累計配息原幣": dividend_received_original_total,
         "累計已領配息": dividend_received_total,
