@@ -119,3 +119,51 @@ def sheet_value_for(sheet_rows: list[dict[str, Any]], platform: str, currency: s
         close = difflib.get_close_matches(key, list(candidates), n=1, cutoff=0.6)
         key = close[0] if close else None
     return candidates.get(key) if key else None
+
+
+# 總帳「總覽」每月加總各列對應的基金（平台、幣別、名稱篩選；! 開頭表示排除）。\n# 用於預估配息與「總帳有金額 → 建議確認入帳」；沒有對應的列（利息、股利…）不處理。
+MONTHLY_ESTIMATE_RULES: dict[str, tuple[str, str, str]] = {
+    "配息-基富通-台": ("基富通", "TWD", ""),
+    "配息-基富通-人": ("基富通", "CNY", ""),
+    "配息-基富通-日": ("基富通", "JPY", ""),
+    "配息-渣打-大華": ("渣打基金", "USD", "大華"),
+    "配息-渣打-美金": ("渣打基金", "USD", "!大華"),
+    "配息-渣打-南非": ("渣打基金", "ZAR", ""),
+    "配息-台新-南非": ("台新基金", "ZAR", ""),
+    "配息-台新-美金": ("台新基金", "USD", ""),
+}
+
+
+def _matches_rule(platform: Any, currency: Any, name: Any, rule: tuple[str, str, str]) -> bool:
+    want_platform, want_currency, name_filter = rule
+    if str(platform).strip() != want_platform or str(currency).strip().upper() != want_currency:
+        return False
+    name = str(name)
+    if name_filter.startswith("!"):
+        return name_filter[1:] not in name
+    return name_filter in name if name_filter else True
+
+
+def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
+                               month: tuple[int, int]) -> dict[int, str]:
+    """總帳每月加總某列本月金額 > 0（已入帳），對應平台／幣別且本月、尚未確認入帳的配息記錄 → 建議確認。
+
+    records 需有 平台、幣別、基金名稱、_確認前、_sort_date（date）；回傳 {records 的 index: 每月加總列名}。
+    只是建議（預先選好），仍由人工按套用才會寫入。
+    """
+    filled = {r["項目"]: r["金額"] for r in ledger_rows
+              if r.get("項目") in MONTHLY_ESTIMATE_RULES and (r.get("金額") or 0) > 0}
+    out: dict[int, str] = {}
+    if not filled or records.empty:
+        return out
+    for idx, row in records.iterrows():
+        if bool(row.get("_確認前")) or row.get("_確認前") in ("True", "true", 1):
+            continue
+        when = row.get("_sort_date")
+        if not when or (getattr(when, "year", None), getattr(when, "month", None)) != month:
+            continue
+        for label in filled:
+            if _matches_rule(row.get("平台"), row.get("幣別"), row.get("基金名稱"), MONTHLY_ESTIMATE_RULES[label]):
+                out[int(idx)] = label
+                break
+    return out

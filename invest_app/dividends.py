@@ -1153,8 +1153,30 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         else:
             pending_options[label] = int(idx)
 
+    # 總帳「總覽」每月加總已填本月金額的基金類別 → 對應的本月待確認記錄預先選好（仍需按套用）
+    suggested: list[str] = []
+    try:
+        from asset_summary import monthly_income_block
+        from invest_app.sheet_compare import ledger_confirm_suggestions
+        now = tw_now()
+        ledger_rows = monthly_income_block(load_sheet_grid(OVERVIEW_SHEET_GID))
+        hits = ledger_confirm_suggestions(df, ledger_rows, (now.year, now.month))
+        index_to_label = {v: k for k, v in pending_options.items()}
+        suggested = [index_to_label[i] for i in hits if i in index_to_label]
+        if suggested:
+            amounts = {r["項目"]: r["金額"] for r in ledger_rows}
+            lines = []
+            for item in dict.fromkeys(hits.values()):
+                n = sum(1 for v in hits.values() if v == item)
+                rec_twd = sum(normalize_number(df.loc[i].get("_實際配息台幣", 0), 0) for i, v in hits.items() if v == item)
+                lines.append(f"{item}：總帳 {money(amounts.get(item))}／記錄 {n} 筆 {money(rec_twd)}")
+            st.info("📒 總帳每月加總已有本月金額，已預先選好對應的待確認記錄，核對後按「💾 套用確認狀態」：\n\n"
+                    + "\n".join(f"- {line}" for line in lines))
+    except Exception as exc:
+        st.caption(f"讀不到總帳每月加總，無法建議確認：{exc}")
+
     with st.form("actual_dividend_confirm_form"):
-        confirm_labels = st.multiselect("確認入帳", list(pending_options.keys()))
+        confirm_labels = st.multiselect("確認入帳", list(pending_options.keys()), default=suggested)
         cancel_labels = st.multiselect("取消確認", list(confirmed_options.keys()))
         submitted = st.form_submit_button("💾 套用確認狀態")
         recompute_submitted = st.form_submit_button("重算已確認累計")
