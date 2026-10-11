@@ -216,9 +216,9 @@ with st.container():
     c5, c6, c8, _spare = st.columns(4)
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
-    c8.metric("基金預計配息", money(total_div))
+    # 預計配息對應的月份（下個月），小字放在金額後面
     _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
-    c8.caption(_next_month)  # 預計配息對應的月份（下個月），小字
+    two_line_metric(c8, "基金預計配息", money(total_div), suffix=_next_month)
     refresh_col = render_total_asset_row(float(total_value), load_other_assets(), float(total_sell_cost)) or st
     if refresh_col.button("🔄 更新即時價"):
         st.cache_data.clear()
