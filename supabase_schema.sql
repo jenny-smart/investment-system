@@ -127,6 +127,24 @@ create table if not exists public.portfolio_snapshots (
   note text default ''
 );
 
+-- 其他資產（總帳 Jennyall）：銀行 / 保險 / 懷思投資 / uncle待還 / 外幣，扣除待還後與投資市值合計
+alter table public.portfolio_snapshots add column if not exists bank_total numeric;
+alter table public.portfolio_snapshots add column if not exists insurance_total numeric;
+alter table public.portfolio_snapshots add column if not exists huaisi_total numeric;
+alter table public.portfolio_snapshots add column if not exists uncle_total numeric;
+alter table public.portfolio_snapshots add column if not exists fx_cash_total numeric;
+alter table public.portfolio_snapshots add column if not exists deposits_total numeric;
+alter table public.portfolio_snapshots add column if not exists other_assets_total numeric;
+alter table public.portfolio_snapshots add column if not exists grand_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists bank_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists insurance_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists huaisi_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists uncle_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists fx_cash_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists deposits_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists other_assets_total numeric;
+alter table if exists public.latest_portfolio_values add column if not exists grand_total numeric;
+
 alter table public.fund_dividends enable row level security;
 alter table public.dividend_log enable row level security;
 alter table public.portfolio_snapshots enable row level security;

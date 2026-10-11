@@ -70,10 +70,12 @@ def number(value):
     if isinstance(value, (int, float)):
         return float(value)
     text = str(value).replace(",", "").strip()
+    negative = text.startswith("(") and text.endswith(")")
     try:
-        return float(text)
+        result = float(text.strip("()"))
     except ValueError:
         return 0.0
+    return -result if negative else result
 
 
 def parse_date(value):
@@ -145,6 +147,83 @@ def find_category(values, formulas, sub_col, label):
                 "items": items,
             }
     raise RuntimeError(f"「{label}」那列之後的 {col_letters(sub_col)} 欄找不到 =SUM({col_letters(sub_col - 1)}{start}:…) 小計")
+
+
+# (summary name, label in the per-month summary block, first detail row label)
+SUMMARY_BLOCK = (
+    ("銀行total", "銀行", "零用金-淨值"),
+    ("保險total", "保險", "台新保險"),
+    ("懷思投資", "懷思投資", "懷思"),
+    ("uncle待還", "叔叔借款", "叔叔"),
+    ("外幣total", "外幣", "日幣 suica"),
+)
+
+
+def category_items(values, sub_col, label, max_rows=20):
+    """Detail rows of a category, found from values only (no formulas needed).
+
+    The subtotal sits in the subtotal column on the last row of the group and
+    equals the sum of the detail column from the label row down to it.
+    """
+    start = find_label_row(values, label)
+    detail_col, running = sub_col - 1, 0.0
+    for row in range(start, min(start + max_rows, len(values) + 1)):
+        running += number(cell(values, row, detail_col))
+        subtotal = number(cell(values, row, sub_col))
+        # Displayed values are rounded per cell, so allow a little drift.
+        if subtotal and abs(subtotal - running) <= 2:
+            return [(str(cell(values, r, 0)).strip(), number(cell(values, r, detail_col)))
+                    for r in range(start, row + 1)
+                    if number(cell(values, r, detail_col))]
+    raise RuntimeError(f"「{label}」找不到小計")
+
+
+def sheet_other_assets(values, month=None, today=None):
+    """Non-investment assets for one month, read from Jennyall's summary block.
+
+    The block (銀行, 保險, 懷思投資, 叔叔借款, 外幣, then the 待還 row) holds one
+    value per month in each subtotal column, so it follows the monthly roll.
+    Works on plain values, e.g. a CSV export.
+    """
+    sub_col = find_month_column(values, month, today)
+    row = find_label_row(values, SUMMARY_BLOCK[0][1])
+    categories = {}
+    for name, label, detail_label in SUMMARY_BLOCK:
+        row = find_label_row(values, label, start=row)
+        try:
+            items = category_items(values, sub_col, detail_label)
+        except RuntimeError:
+            items = []
+        categories[name] = {"total": number(cell(values, row, sub_col)), "items": items}
+    # 待還 (money held for others) is the row right after 外幣, stored as a negative.
+    deposits_row = row + 1
+    deposits = -number(cell(values, deposits_row, sub_col))
+    category_sum = sum(c["total"] for c in categories.values())
+    return {
+        "month": str(cell(values, date_row(values), sub_col)),
+        "column": col_letters(sub_col),
+        "categories": categories,
+        "category_sum": category_sum,
+        "deposits": deposits,
+        "other_total": category_sum - deposits,
+    }
+
+
+def monthly_income_block(values, title="每月加總"):
+    """Rows of the 總覽 tab's 每月加總 block: label, amount (B), 台/外 (D), estimate (E)."""
+    start = find_label_row(values, title)
+    rows = []
+    for row in range(start, len(values) + 1):
+        label = str(cell(values, row, 0)).strip()
+        if not label:
+            break
+        rows.append({
+            "項目": label,
+            "金額": number(cell(values, row, 1)),
+            "台/外": str(cell(values, row, 3)).strip(),
+            "預估": number(cell(values, row, 4)) if str(cell(values, row, 4)).strip() else None,
+        })
+    return rows
 
 
 def follow(formulas, row, col):

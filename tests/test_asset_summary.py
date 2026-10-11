@@ -1,8 +1,8 @@
 import unittest
 from datetime import date
 
-from asset_summary import (col_index, col_letters, find_month_column, parse_month,
-                           read_rates, spreadsheet_key, summarise)
+from asset_summary import (col_index, col_letters, find_month_column, monthly_income_block,
+                           parse_month, read_rates, sheet_other_assets, spreadsheet_key, summarise)
 
 
 def build_sheet(offset=0, blank_rows=0):
@@ -140,6 +140,63 @@ class AssetSummaryTests(unittest.TestCase):
         self.assertEqual(read_rates(RATES), {"USD": 31.9614, "CNY": 4.7715, "JPY": 0.2017})
         self.assertEqual(spreadsheet_key("https://docs.google.com/spreadsheets/d/abc_D-1/edit#gid=1"), "abc_D-1")
         self.assertEqual(find_month_column([["", "2026/12/1", "", "2026/12/1"]], parse_month("2026/12")), 1)
+
+
+
+def jennyall_csv():
+    """Values-only grid like the CSV export: A labels, B/C = 2026/9, D/E = 2026/10."""
+    rows = [
+        ["", "", "2026/9/1", "", "2026/10/1"],
+        ["零用金-淨值", "100", "", "170,644", ""],
+        ["台新銀行", "0", "", "-15,358", ""],
+        ["郵局", "0", "0", "4,421", "-220,000"],
+        ["富邦銀行", "0", "100", "4,289", "163,996"],
+        ["台新保險", "", "0", "", "0"],
+        ["保險", "1", "1", "3,000,000", "3,000,000"],
+        ["日幣 suica", "", "", "824", ""],
+        ["台新美金", "", "", "156,090", "0"],
+        ["渣打南非", "", "", "113,456", "270,371"],
+        ["懷思", "", "", "600,000", ""],
+        ["懷思投資", "", "", "", "600,000"],
+        ["叔叔", "", "", "6,027,000", ""],
+        ["", "", "", "0", "6,027,000"],
+        ["銀行", "", "100", "4.9%", "163,996"],
+        ["保險", "", "1", "", "3,000,000"],
+        ["懷思投資", "", "", "", "600,000"],
+        ["叔叔借款", "", "", "", "6,027,000"],
+        ["外幣", "", "", "", "270,370"],
+        ["", "", "", "", "-1,690,479"],
+    ]
+    return rows
+
+
+class SheetOtherAssetsTests(unittest.TestCase):
+    def test_reads_summary_block_and_details_for_current_month(self):
+        other = sheet_other_assets(jennyall_csv(), today=date(2026, 10, 11))
+        self.assertEqual((other["month"], other["column"]), ("2026/10/1", "E"))
+        cats = other["categories"]
+        self.assertEqual(cats["銀行total"]["total"], 163996)
+        self.assertEqual([label for label, _ in cats["銀行total"]["items"]],
+                         ["零用金-淨值", "台新銀行", "郵局", "富邦銀行"])
+        self.assertEqual(cats["保險total"]["total"], 3000000)
+        self.assertEqual(cats["外幣total"]["total"], 270370)
+        self.assertEqual(len(cats["外幣total"]["items"]), 3)
+        self.assertEqual(cats["uncle待還"]["items"], [("叔叔", 6027000)])
+        self.assertEqual(other["deposits"], 1690479)
+        self.assertEqual(other["other_total"], 163996 + 3000000 + 600000 + 6027000 + 270370 - 1690479)
+
+    def test_previous_month(self):
+        other = sheet_other_assets(jennyall_csv(), month=parse_month("2026/9"))
+        self.assertEqual(other["categories"]["銀行total"]["total"], 100)
+        self.assertEqual(other["deposits"], 0)
+
+    def test_monthly_income_block(self):
+        grid = [["加總Total", "1"], [], ["每月加總", "300", "0"], ["台幣-加總", "100", "0", "台"],
+                ["利息-銀行", "200", "", "台", "508,798"], ["", "0.00"], ["股票", "9"]]
+        rows = monthly_income_block(grid)
+        self.assertEqual([r["項目"] for r in rows], ["每月加總", "台幣-加總", "利息-銀行"])
+        self.assertEqual(rows[2]["預估"], 508798)
+        self.assertIsNone(rows[1]["預估"])
 
 
 if __name__ == "__main__":
