@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v111-ledger-confirm-suggest"
+APP_VERSION = "2026-10-11-v112-richart-fx"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -980,6 +980,16 @@ def fetch_fx_fallback(currency: str) -> tuple[float | None, str]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_richart_fx() -> tuple[dict[str, float], str]:
+    """Richart 外幣活存「賣外幣」匯率（與總帳總覽 R 欄同來源）；失敗回空 dict 與原因。"""
+    try:
+        from richart_fx import fetch_richart_rates
+        return fetch_richart_rates(timeout=PRICE_REQUEST_TIMEOUT_SECONDS), "Richart"
+    except Exception as e:
+        return {}, f"Richart 失敗:{str(e)[:60]}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_fx(currency: str) -> tuple[float | None, str]:
     currency = normalize_text(currency, "TWD").upper()
     alias = {
@@ -997,6 +1007,10 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
         "KRW": "KRWTWD=X", "HKD": "HKDTWD=X", "THB": "THBTWD=X",
         "EUR": "EURTWD=X", "ZAR": "ZARTWD=X",
     }
+    # 優先用 Richart 賣外幣匯率；抓不到才用 Yahoo / 備援
+    richart, _richart_status = fetch_richart_fx()
+    if richart.get(currency):
+        return float(richart[currency]), "ok"
     pair = direct_pairs.get(currency)
     if not pair:
         return None, f"未知幣別:{currency}"
