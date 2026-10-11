@@ -113,7 +113,7 @@ TOP_ROW_CATEGORIES = ["銀行total", "外幣total"]
 
 def render_total_asset_row(total_investment: float, other: dict[str, Any] | None, sell_cost: float = 0.0) -> Any:
     """總台幣市值那排下方：總資產、其他資產小計、扣除待還、銀行、外幣（每個分頁都看得到）。
-    回傳最右邊空著的欄位，給「更新即時價」按鈕用。"""
+    回傳最右邊的欄位（目前只放總帳月份說明）。"""
     if not other:
         return None
     cols = st.columns(6)
