@@ -425,6 +425,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
         含息總損益   =("含息總損益",    "sum"),
         累計已領配息 =("累計已領配息",  "sum"),
         每月配息     =("每月配息",      "sum"),
+        賣出稅費     =("賣出稅費",      "sum"),
         價格缺漏     =("即時價格/淨值", lambda s: int(s.isna().sum())),
         筆數         =("id",            "count"),
     ).reset_index()
@@ -447,7 +448,8 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
                 money(r["台幣市值"] or 0),
                 delta=f"{signed_money(r['含息總損益'] or 0)} / {pct(r['含息總損益率'])}",
             )
-            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}")
+            after_tax = f"｜扣稅後 {money(r['台幣市值'] - r['賣出稅費'])}" if r["賣出稅費"] else ""
+            st.caption(f"成本 {money(r['台幣成本'])}｜月配 {money(r['每月配息'])}{after_tax}")
 
     # ── 匯率列 ──
     st.markdown("<br>", unsafe_allow_html=True)
