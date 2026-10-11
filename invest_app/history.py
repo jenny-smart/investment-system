@@ -17,8 +17,8 @@ from invest_app.non_investment import (
 
 
 def render_history_tab(enriched: pd.DataFrame) -> None:
-    """📊 歷史記錄"""
-    st.subheader("📊 歷史記錄")
+    """歷史記錄"""
+    st.subheader("歷史記錄")
 
     # ── 手動記錄按鈕 ──
     col_btn, col_info = st.columns([1, 4])
@@ -63,7 +63,7 @@ def render_history_tab(enriched: pd.DataFrame) -> None:
 
     if columns_missing or st.session_state.get("snapshot_columns_missing"):
         st.warning("Supabase 的 portfolio_snapshots 還沒有其他資產欄位，新快照不會存這幾欄。"
-                   "請到 Supabase → SQL Editor 執行「資料安全」分頁「資料庫欄位提醒」裡 portfolio_snapshots / latest_portfolio_values 那幾行 SQL。")
+                   "請到 Supabase → SQL Editor 執行 supabase_schema.sql 裡 portfolio_snapshots / latest_portfolio_values 的 alter table。")
     st.caption("非投資資產（銀行、保險…總資產）自 2026/10/11 起記錄，之前的快照這幾欄空白。")
 
     # ── 明細表（愈新愈上）──

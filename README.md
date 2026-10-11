@@ -11,8 +11,7 @@ Streamlit 主程式：`invesapp_supabase.py`（部署於 investment-system.strea
 | `invest_app/history.py` | 歷史記錄 |
 | `invest_app/platform_page.py` | 台股／美股／基富通／渣打基金／台新基金 |
 | `invest_app/research.py` | 股票研究 |
-| `invest_app/data_safety.py` | 資料安全 |
-| `invest_app/positions_admin.py` | 工具（批次更新、修復、重建、抓價測試）與持倉編輯表 |
+| `invest_app/positions_admin.py` | 平台持倉編輯表、上傳檔讀取 |
 | `invest_app/dividends.py` | 基金配息與配息記錄 |
 | `invest_app/stock_dividends.py` | 台股股利 |
 
@@ -22,12 +21,10 @@ Streamlit 主程式：`invesapp_supabase.py`（部署於 investment-system.strea
 |---|---|
 | 投資總覽 | 各投資平台市值、損益、配息與即時匯率 |
 | 非投資總覽 | 銀行、保險、懷思投資、uncle待還、外幣與明細，每月加總（讀總帳試算表） |
-| 📊 歷史記錄 | 每日快照：投資市值；自 2026/10/11 起另記其他資產、扣除待還、總資產 |
+| 歷史記錄 | 每日快照：投資市值；自 2026/10/11 起另記其他資產、扣除待還、總資產 |
 | 台股／美股／基富通／渣打基金／台新基金 | 各平台持倉明細與編輯 |
-| 🔎 股票研究 | 持股分析、觀察股票池、熱門候選 |
-| 資料安全 | 匯出備份、Supabase 欄位提醒 SQL |
-| 工具 | 批次更新、修復排序、抓價測試 |
-| 💰 配息記錄／📈 台股股利 | 基金配息與台股股利 |
+| 股票研究 | 持股分析、觀察股票池、熱門候選 |
+| 配息記錄／📈 台股股利 | 基金配息與台股股利 |
 
 最上方固定顯示總台幣市值等指標，下方一列為總資產（投資市值 + 其他資產 − 待還）。功能列一次只執行選到的那一頁，網址 `?page=` 記住目前頁面。
 

@@ -1247,8 +1247,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 
 
 def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) -> None:
-    """💰 配息記錄"""
-    st.subheader("💰 配息記錄")
+    """配息記錄"""
+    st.subheader("配息記錄")
     render_auto_catch_up_cleanup()  # 只在還有 10/11 自動補登記錄時出現
 
     source = enriched_df

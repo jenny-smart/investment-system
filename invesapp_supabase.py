@@ -18,9 +18,6 @@ from invest_app.core import (
     signed_money,
     tw_now,
 )
-from invest_app.data_safety import (
-    render_data_safety_page,
-)
 from invest_app.dividends import (
     render_dividend_log_tab,
 )
@@ -39,9 +36,6 @@ from invest_app.overview import (
 )
 from invest_app.platform_page import (
     render_platform_page,
-)
-from invest_app.positions_admin import (
-    render_tools_page,
 )
 from invest_app.research import (
     render_research_page,
@@ -207,25 +201,26 @@ with st.container():
     if tw_missing:
         st.warning(f"⚠️ 台股缺報價：{'、'.join(tw_missing)}")
     pnl_delta = f"{total_pnl:+,.0f} / {pct(total_rate)}"
-    c1.metric("總台幣市值", money(total_value), delta=pnl_delta)
+    c1.metric("投資總市值", money(total_value), delta=pnl_delta)
     # 外部投入 = 排除配息再投入的成本
     external_cost = enriched[enriched["is_reinvest"].fillna(False) == False]["台幣成本"].dropna().sum() if not enriched.empty else 0
-    c2.metric("總台幣成本", money(total_cost),
+    c2.metric("投資總成本", money(total_cost),
               delta=f"外部投入 {money(external_cost)}" if external_cost != total_cost else None)
-    c3.metric("總損益（市值）", signed_money(total_pnl_all))
+    c3.metric("投資市值損益", signed_money(total_pnl_all))
     c4.metric("總投資配息", money(total_div_received))
     c5.metric("基金配息", money(_received_dividends("基金")))
     c6.metric("台股配息", money(_received_dividends("台股")))
     c7.metric("美股配息", money(_received_dividends("美股")))
     c8.metric("基金預計配息", money(total_div))
+    _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
+    c8.caption(_next_month)  # 預計配息對應的月份（下個月），小字
     refresh_col = render_total_asset_row(float(total_value), load_other_assets()) or st
     if refresh_col.button("🔄 更新即時價"):
         st.cache_data.clear()
         st.session_state.pop("latest_values_written_at", None)
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-PAGE_NAMES = ["投資總覽", "非投資總覽", "📊 歷史記錄", *PLATFORMS, "🔎 股票研究", "資料安全", "工具",
-              "💰 配息記錄", "📈 台股股利"]
+PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "📈 台股股利"]
 
 # 功能列：只執行選到的那一頁（st.tabs 會每次把全部分頁都跑一遍，載入慢）。
 # 選擇記在網址 ?page=，重新整理後停在同一頁。
@@ -243,22 +238,18 @@ try:
     if page == "非投資總覽":
         render_other_assets_tab(enriched)
 
-    if page == "🔎 股票研究":
+    if page == "股票研究":
         render_research_page(enriched)
 
     if page in PLATFORMS:
         render_platform_page(page, positions, enriched, total_value, total_cost, total_pnl, total_rate, total_div)
 
-    if page == "資料安全":
-        render_data_safety_page(positions)
 
-    if page == "工具":
-        render_tools_page(positions)
 
-    if page == "📊 歷史記錄":
+    if page == "歷史記錄":
         render_history_tab(enriched)
 
-    if page == "💰 配息記錄":
+    if page == "配息記錄":
         render_dividend_log_tab(enriched, positions)
 
     if page == "📈 台股股利":
