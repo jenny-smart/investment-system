@@ -1,13 +1,7 @@
 name: Taiwan stock prices to Google Sheets
 
 on:
-  schedule:
-    # UTC: 07:30/19:30 Asia/Taipei — temporarily replace #N/A formulas.
-    - cron: "30 23,11 * * *"
-    # UTC: 08:30/20:30 Asia/Taipei — restore formulas and original backgrounds.
-    - cron: "30 0,12 * * *"
-    # UTC: 14:00 Asia/Taipei — refresh the seven fixed securities.
-    - cron: "0 6 * * *"
+  # cron-job.org dispatches this workflow with an explicit mode.
   workflow_dispatch:
     inputs:
       mode:
@@ -40,23 +34,10 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'yfinance>=0.2,<2'
-      - name: Select operation
-        id: operation
-        env:
-          REQUESTED_MODE: ${{ inputs.mode || 'auto' }}
-          SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          case "$SCHEDULE" in
-            "0 6 * * *") MODE=fixed ;;
-            "30 23,11 * * *") MODE=temporary ;;
-            "30 0,12 * * *") MODE=restore ;;
-            *) MODE="$REQUESTED_MODE" ;;
-          esac
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
       - name: Update or restore J cells
         env:
           DRY_RUN: ${{ inputs.dry_run }}
-          MODE: ${{ steps.operation.outputs.mode }}
+          MODE: ${{ inputs.mode || 'auto' }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
             python sync_tw_stock_prices.py --mode "$MODE" --dry-run
