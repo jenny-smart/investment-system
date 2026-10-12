@@ -1,9 +1,20 @@
 name: Taiwan stock prices to Google Sheets
 
 on:
-  # cron-job.org dispatches this workflow every day at 15:00 Asia/Taipei.
+  schedule:
+    # UTC: 07:30/19:30 Asia/Taipei — temporarily replace #N/A formulas.
+    - cron: "30 23,11 * * *"
+    # UTC: 08:30/21:30 Asia/Taipei — restore formulas and original backgrounds.
+    - cron: "30 0,13 * * *"
+    # UTC: 14:00 Asia/Taipei — refresh the seven fixed securities.
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Operation (auto uses the current Taipei hour)"
+        type: choice
+        options: [auto, fixed, temporary, restore]
+        default: auto
       dry_run:
         description: "Only look up prices and preview writes"
         type: boolean
@@ -29,12 +40,26 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'yfinance>=0.2,<2'
-      - name: Look up prices and update J cells
+      - name: Select operation
+        id: operation
+        env:
+          REQUESTED_MODE: ${{ inputs.mode || 'auto' }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          case "$SCHEDULE" in
+            "0 6 * * *") MODE=fixed ;;
+            "30 23,11 * * *") MODE=temporary ;;
+            "30 0,13 * * *") MODE=restore ;;
+            *) MODE="$REQUESTED_MODE" ;;
+          esac
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+      - name: Update or restore J cells
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          MODE: ${{ steps.operation.outputs.mode }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            python sync_tw_stock_prices.py --dry-run
+            python sync_tw_stock_prices.py --mode "$MODE" --dry-run
           else
-            python sync_tw_stock_prices.py
+            python sync_tw_stock_prices.py --mode "$MODE"
           fi

@@ -1,4 +1,4 @@
-"""Update requested Taiwan securities and repair #N/A prices in Google Sheets."""
+"""Safely refresh Taiwan stock prices and temporarily repair #N/A formulas."""
 from __future__ import annotations
 
 import argparse
@@ -14,44 +14,51 @@ from zoneinfo import ZoneInfo
 SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
 SHEET_IDS = (0, 1591931043)
 CODES = ("4401", "6261", "00740B", "00927", "6244", "5314", "5478")
+BACKUP_SHEET_TITLE = "_tw_price_formula_backup"
+BACKUP_HEADER = [
+    "version", "sheet_id", "sheet_title", "row", "code", "formula",
+    "background_json", "temporary_price", "saved_at",
+]
+HIGHLIGHT = {"backgroundColorStyle": {"rgbColor": {"red": 1.0, "green": 0.85, "blue": 0.35}}}
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
-def normalize_code(value):
-    text = str(value).strip().upper()
-    if re.fullmatch(r"\d{4}\.0", text):
-        text = text[:-2]
-    return text if text in CODES else None
-
-
 def normalize_tw_code(value):
-    """Accept common Taiwan stock/ETF codes without limiting them to CODES."""
     text = str(value).strip().upper()
     if re.fullmatch(r"\d{4,6}\.0", text):
         text = text[:-2]
     return text if re.fullmatch(r"\d{4,6}[A-Z]?", text) else None
 
 
-def find_targets(column):
+def normalize_fixed_code(value):
+    code = normalize_tw_code(value)
+    return code if code in CODES else None
+
+
+def find_fixed_targets(column):
     return [(row, code) for row, values in enumerate(column, 1)
-            if values and (code := normalize_code(values[0]))]
+            if values and (code := normalize_fixed_code(values[0]))]
 
 
-def find_na_targets(rows, start_row=7):
-    """Find rows where A is nonblank and J is #N/A, using C as the ticker."""
+def find_na_targets(rows, formulas=None, start_row=7):
+    """Return restorable #N/A targets plus unsafe row numbers."""
     targets = []
-    unresolved = []
-    for row_number, values in enumerate(rows, start_row):
+    unsafe = []
+    formulas = formulas or []
+    for offset, values in enumerate(rows):
+        row_number = start_row + offset
         col_a = values[0] if values else ""
         col_c = values[2] if len(values) > 2 else ""
         col_j = values[9] if len(values) > 9 else ""
-        if str(col_a).strip() and str(col_j).strip().upper() == "#N/A":
-            code = normalize_tw_code(col_c)
-            if code:
-                targets.append((row_number, code))
-            else:
-                unresolved.append(row_number)
-    return targets, unresolved
+        if not str(col_a).strip() or str(col_j).strip().upper() != "#N/A":
+            continue
+        code = normalize_tw_code(col_c)
+        formula = formulas[offset][0] if offset < len(formulas) and formulas[offset] else ""
+        if code and str(formula).startswith("="):
+            targets.append({"row": row_number, "code": code, "formula": formula})
+        else:
+            unsafe.append(row_number)
+    return targets, unsafe
 
 
 def valid_price(value):
@@ -72,8 +79,6 @@ def recent_date(date_text, today):
 
 def fetch_quote(code, today):
     import requests
-    # Probe listed and OTC markets; do not mistake a bid or yesterday's close
-    # for the latest trade when MIS reports z='-'.
     try:
         response = requests.get(
             "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
@@ -103,20 +108,294 @@ def fetch_quote(code, today):
                 return {"price": price, "date": quote_date, "source": "Yahoo " + code + suffix}
         except Exception as exc:
             print(f"{code + suffix}: Yahoo unavailable ({type(exc).__name__})")
-    raise RuntimeError(f"{code}: no valid quote within seven days; original cells preserved")
+    raise RuntimeError(f"{code}: no valid quote within seven days; original cell preserved")
 
 
-def build_updates(title, targets, quotes):
-    quoted_title = "'" + title.replace("'", "''") + "'"
-    return [{"range": f"{quoted_title}!J{row}", "values": [[quotes[code]["price"]]]}
-            for row, code in targets if code in quotes]
+def fetch_quotes(codes, today):
+    quotes, errors = {}, []
+    for code in dict.fromkeys(codes):
+        try:
+            quotes[code] = fetch_quote(code, today)
+            print(code, json.dumps(quotes[code], ensure_ascii=False))
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            print(str(exc), file=sys.stderr)
+    return quotes, errors
+
+
+def quoted_title(title):
+    return "'" + title.replace("'", "''") + "'"
+
+
+def cell_range(title, row):
+    return f"{quoted_title(title)}!J{row}"
+
+
+def get_or_create_backup_sheet(spreadsheet):
+    from gspread.exceptions import WorksheetNotFound
+    try:
+        sheet = spreadsheet.worksheet(BACKUP_SHEET_TITLE)
+    except WorksheetNotFound:
+        sheet = spreadsheet.add_worksheet(BACKUP_SHEET_TITLE, rows=1000, cols=len(BACKUP_HEADER))
+        sheet.hide()
+    values = sheet.get_all_values()
+    if not values:
+        sheet.update([BACKUP_HEADER], "A1:I1", value_input_option="RAW")
+    elif values[0] != BACKUP_HEADER:
+        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    return sheet
+
+
+def read_backups(spreadsheet):
+    from gspread.exceptions import WorksheetNotFound
+    try:
+        sheet = spreadsheet.worksheet(BACKUP_SHEET_TITLE)
+    except WorksheetNotFound:
+        return None, []
+    values = sheet.get_all_values()
+    if not values:
+        return sheet, []
+    if values[0] != BACKUP_HEADER:
+        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    records = [dict(zip(BACKUP_HEADER, row + [""] * (len(BACKUP_HEADER) - len(row))))
+               for row in values[1:] if any(str(value).strip() for value in row)]
+    return sheet, records
+
+
+def fetch_backgrounds(credentials, sheet, rows):
+    """Read user-entered J-cell backgrounds for exact restoration."""
+    if not rows:
+        return {}
+    from google.auth.transport.requests import AuthorizedSession
+    ranges = [("ranges", cell_range(sheet.title, row)) for row in rows]
+    params = [("includeGridData", "true"), *ranges]
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
+    response = AuthorizedSession(credentials).get(url, params=params, timeout=30)
+    response.raise_for_status()
+    result = {}
+    for returned_sheet in response.json().get("sheets", []):
+        if returned_sheet.get("properties", {}).get("sheetId") != sheet.id:
+            continue
+        for data in returned_sheet.get("data", []):
+            row_number = int(data.get("startRow", 0)) + 1
+            row_data = data.get("rowData", [])
+            cell = row_data[0].get("values", [{}])[0] if row_data else {}
+            user_format = cell.get("userEnteredFormat", {})
+            result[row_number] = {
+                key: user_format[key]
+                for key in ("backgroundColor", "backgroundColorStyle") if key in user_format
+            }
+    return {row: result.get(row, {}) for row in rows}
+
+
+def update_cell_request(sheet_id, row, value, background, restore=False):
+    cell = {"userEnteredValue": value, "userEnteredFormat": background}
+    fields = "userEnteredValue,userEnteredFormat.backgroundColorStyle"
+    if restore:
+        fields += ",userEnteredFormat.backgroundColor"
+    return {
+        "updateCells": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row - 1,
+                "endRowIndex": row,
+                "startColumnIndex": 9,
+                "endColumnIndex": 10,
+            },
+            "rows": [{"values": [cell]}],
+            "fields": fields,
+        }
+    }
+
+
+def run_fixed(spreadsheet, sheets, today, dry_run):
+    targets = {}
+    for sheet_id in SHEET_IDS:
+        sheet = sheets[sheet_id]
+        rows = find_fixed_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
+        missing = set(CODES) - {code for _, code in rows}
+        if missing:
+            raise RuntimeError(f"{sheet.title}: missing codes {sorted(missing)}; no cells changed")
+        targets[sheet_id] = rows
+    quotes, errors = fetch_quotes(CODES, today)
+    updates = [
+        {"range": cell_range(sheets[sheet_id].title, row), "values": [[quotes[code]["price"]]]}
+        for sheet_id, rows in targets.items() for row, code in rows if code in quotes
+    ]
+    print(json.dumps({"mode": "fixed", "dry_run": dry_run, "updates": updates}, ensure_ascii=False))
+    if updates and not dry_run:
+        for sheet_id, expected in targets.items():
+            current = find_fixed_targets(
+                sheets[sheet_id].get(
+                    f"C1:C{sheets[sheet_id].row_count}", value_render_option="FORMATTED_VALUE"
+                )
+            )
+            if current != expected:
+                raise RuntimeError(f"{sheets[sheet_id].title}: rows changed during lookup; no cells changed")
+        spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates})
+        actual = spreadsheet.values_batch_get(
+            [item["range"] for item in updates], params={"valueRenderOption": "UNFORMATTED_VALUE"}
+        ).get("valueRanges", [])
+        if len(actual) != len(updates) or any(
+            valid_price(cell.get("values", [[None]])[0][0]) != item["values"][0][0]
+            for cell, item in zip(actual, updates)
+        ):
+            raise RuntimeError("Fixed-price write verification failed")
+    return 1 if errors else 0
+
+
+def scan_temporary_targets(sheet):
+    formatted = sheet.get(
+        f"A7:J{sheet.row_count}", value_render_option="FORMATTED_VALUE", maintain_size=True
+    )
+    formulas = sheet.get(
+        f"J7:J{sheet.row_count}", value_render_option="FORMULA", maintain_size=True
+    )
+    return find_na_targets(formatted, formulas)
+
+
+def run_temporary(spreadsheet, sheets, credentials, today, dry_run):
+    _, existing = read_backups(spreadsheet)
+    if existing:
+        raise RuntimeError("A previous temporary update still awaits restoration; no cells changed")
+
+    targets, unsafe_by_sheet, errors = {}, {}, []
+    for sheet_id in SHEET_IDS:
+        found, unsafe = scan_temporary_targets(sheets[sheet_id])
+        targets[sheet_id] = found
+        unsafe_by_sheet[sheet_id] = unsafe
+        if unsafe:
+            message = f"{sheets[sheet_id].title}: cannot safely restore rows {unsafe}; preserved"
+            errors.append(message)
+            print(message, file=sys.stderr)
+    quotes, quote_errors = fetch_quotes(
+        [target["code"] for found in targets.values() for target in found], today
+    )
+    errors.extend(quote_errors)
+    writable = {
+        sheet_id: [target for target in found if target["code"] in quotes]
+        for sheet_id, found in targets.items()
+    }
+    preview = [
+        {"range": cell_range(sheets[sheet_id].title, target["row"]),
+         "code": target["code"], "price": quotes[target["code"]]["price"]}
+        for sheet_id, found in writable.items() for target in found
+    ]
+    print(json.dumps({"mode": "temporary", "dry_run": dry_run, "updates": preview}, ensure_ascii=False))
+    if dry_run or not preview:
+        return 1 if errors else 0
+
+    for sheet_id, expected in targets.items():
+        current, unsafe = scan_temporary_targets(sheets[sheet_id])
+        if current != expected or unsafe != unsafe_by_sheet[sheet_id]:
+            raise RuntimeError(f"{sheets[sheet_id].title}: rows changed during lookup; no cells changed")
+
+    backgrounds = {
+        sheet_id: fetch_backgrounds(credentials, sheets[sheet_id], [item["row"] for item in found])
+        for sheet_id, found in writable.items()
+    }
+    saved_at = datetime.now(TAIPEI).isoformat(timespec="seconds")
+    backup_rows = []
+    requests = []
+    for sheet_id, found in writable.items():
+        sheet = sheets[sheet_id]
+        for target in found:
+            price = quotes[target["code"]]["price"]
+            background = backgrounds[sheet_id][target["row"]]
+            backup_rows.append([
+                "1", str(sheet_id), sheet.title, str(target["row"]), target["code"],
+                target["formula"], json.dumps(background, ensure_ascii=False), str(price), saved_at,
+            ])
+            requests.append(update_cell_request(
+                sheet_id, target["row"], {"numberValue": price}, HIGHLIGHT
+            ))
+
+    backup_sheet = get_or_create_backup_sheet(spreadsheet)
+    backup_sheet.append_rows(backup_rows, value_input_option="RAW")
+    spreadsheet.batch_update({"requests": requests})
+    print(f"Temporarily repaired and highlighted {len(requests)} cells; formulas backed up")
+    return 1 if errors else 0
+
+
+def run_restore(spreadsheet, sheets, dry_run):
+    backup_sheet, records = read_backups(spreadsheet)
+    if not records:
+        print(json.dumps({"mode": "restore", "dry_run": dry_run, "updates": []}))
+        return 0
+
+    parsed = []
+    for record in records:
+        try:
+            sheet_id = int(record["sheet_id"])
+            row = int(record["row"])
+            price = valid_price(record["temporary_price"])
+            background = json.loads(record["background_json"] or "{}")
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Invalid formula backup; no cells changed") from exc
+        if sheet_id not in sheets or not record["formula"].startswith("=") or not price:
+            raise RuntimeError("Invalid formula backup; no cells changed")
+        parsed.append({**record, "sheet_id": sheet_id, "row": row,
+                       "temporary_price": price, "background": background})
+
+    for item in parsed:
+        sheet = sheets[item["sheet_id"]]
+        code_values = sheet.get(f"C{item['row']}", value_render_option="FORMATTED_VALUE")
+        price_values = sheet.get(f"J{item['row']}", value_render_option="UNFORMATTED_VALUE")
+        code = normalize_tw_code(code_values[0][0]) if code_values and code_values[0] else None
+        price = valid_price(price_values[0][0]) if price_values and price_values[0] else None
+        if code != item["code"] or price != item["temporary_price"]:
+            raise RuntimeError(
+                f"{sheet.title}!J{item['row']}: row or temporary value changed; no cells restored"
+            )
+
+    preview = [cell_range(sheets[item["sheet_id"]].title, item["row"]) for item in parsed]
+    print(json.dumps({"mode": "restore", "dry_run": dry_run, "updates": preview}, ensure_ascii=False))
+    if dry_run:
+        return 0
+
+    requests = [
+        update_cell_request(
+            item["sheet_id"], item["row"], {"formulaValue": item["formula"]},
+            item["background"], restore=True,
+        )
+        for item in parsed
+    ]
+    spreadsheet.batch_update({"requests": requests})
+    ranges = [cell_range(sheets[item["sheet_id"]].title, item["row"]) for item in parsed]
+    actual = spreadsheet.values_batch_get(ranges, params={"valueRenderOption": "FORMULA"}).get("valueRanges", [])
+    if len(actual) != len(parsed) or any(
+        cell.get("values", [[None]])[0][0] != item["formula"]
+        for cell, item in zip(actual, parsed)
+    ):
+        raise RuntimeError("Formula restoration verification failed; backup retained")
+    backup_sheet.batch_clear([f"A2:I{backup_sheet.row_count}"])
+    print(f"Restored {len(requests)} formulas and original backgrounds")
+    return 0
+
+
+def resolve_auto_mode(now):
+    if now.hour == 14:
+        return "fixed"
+    if now.hour in {7, 19}:
+        return "temporary"
+    if now.hour in {8, 21}:
+        return "restore"
+    return None
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credentials-file", type=Path)
+    parser.add_argument("--mode", choices=("auto", "fixed", "temporary", "restore"), default="auto")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    now = datetime.now(TAIPEI)
+    mode = resolve_auto_mode(now) if args.mode == "auto" else args.mode
+    if not mode:
+        print(f"No scheduled action at {now:%H:%M} Asia/Taipei; skipped")
+        return 0
+
     import gspread
     from google.oauth2.service_account import Credentials
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -129,65 +408,15 @@ def main():
         credentials = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     sheets = {sheet.id: sheet for sheet in spreadsheet.worksheets()}
-    targets = {}
-    unresolved_by_sheet = {}
-    # All tabs must contain every code in CODES before any writes are attempted.
-    for sheet_id in SHEET_IDS:
-        sheet = sheets[sheet_id]
-        rows = find_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
-        missing = set(CODES) - {code for _, code in rows}
-        if missing:
-            raise RuntimeError(f"{sheet.title}: missing codes {sorted(missing)}; no cells changed")
-        na_rows, unresolved = find_na_targets(
-            sheet.get(f"A7:J{sheet.row_count}", value_render_option="FORMATTED_VALUE")
-        )
-        unresolved_by_sheet[sheet_id] = unresolved
-        # The fixed list is always refreshed; #N/A rows are added dynamically.
-        targets[sheet_id] = list(dict.fromkeys(rows + na_rows))
-    quotes, errors = {}, []
-    for sheet_id, unresolved in unresolved_by_sheet.items():
-        if unresolved:
-            message = (
-                f"{sheets[sheet_id].title}: A is nonblank and J is #N/A, but C has no "
-                f"valid ticker at rows {unresolved}; those cells are preserved"
-            )
-            errors.append(message)
-            print(message, file=sys.stderr)
-    today = datetime.now(TAIPEI).date()
-    requested_codes = list(dict.fromkeys(
-        list(CODES) + [code for rows in targets.values() for _, code in rows]
-    ))
-    for code in requested_codes:
-        try:
-            quotes[code] = fetch_quote(code, today)
-            print(code, json.dumps(quotes[code], ensure_ascii=False))
-        except RuntimeError as exc:
-            errors.append(str(exc))
-            print(str(exc), file=sys.stderr)
-    updates = []
-    for sheet_id, rows in targets.items():
-        sheet = sheets[sheet_id]
-        # Recheck identities after network price queries in case rows moved.
-        fixed = find_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
-        na_rows, unresolved = find_na_targets(
-            sheet.get(f"A7:J{sheet.row_count}", value_render_option="FORMATTED_VALUE")
-        )
-        current = list(dict.fromkeys(fixed + na_rows))
-        if current != rows or unresolved != unresolved_by_sheet[sheet_id]:
-            raise RuntimeError(f"{sheet.title}: rows changed during lookup; no cells changed")
-        updates.extend(build_updates(sheet.title, rows, quotes))
-    print(json.dumps({"dry_run": args.dry_run, "updates": updates}, ensure_ascii=False))
-    if updates and not args.dry_run:
-        spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates})
-        result = spreadsheet.values_batch_get([item["range"] for item in updates])
-        actual = result.get("valueRanges", [])
-        if len(actual) != len(updates) or any(
-            valid_price(cell.get("values", [[None]])[0][0]) != item["values"][0][0]
-            for cell, item in zip(actual, updates)
-        ):
-            raise RuntimeError("Write readback verification failed")
-        print(f"Verified {len(updates)} J cells across both tabs")
-    return 1 if errors else 0
+    missing_sheets = set(SHEET_IDS) - set(sheets)
+    if missing_sheets:
+        raise RuntimeError(f"Missing sheet IDs {sorted(missing_sheets)}; no cells changed")
+
+    if mode == "fixed":
+        return run_fixed(spreadsheet, sheets, now.date(), args.dry_run)
+    if mode == "temporary":
+        return run_temporary(spreadsheet, sheets, credentials, now.date(), args.dry_run)
+    return run_restore(spreadsheet, sheets, args.dry_run)
 
 
 if __name__ == "__main__":
