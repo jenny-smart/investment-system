@@ -1,4 +1,4 @@
-"""Update seven Taiwan securities in the two requested Google Sheet tabs."""
+"""Update requested Taiwan securities and repair #N/A prices in Google Sheets."""
 from __future__ import annotations
 
 import argparse
@@ -24,9 +24,34 @@ def normalize_code(value):
     return text if text in CODES else None
 
 
+def normalize_tw_code(value):
+    """Accept common Taiwan stock/ETF codes without limiting them to CODES."""
+    text = str(value).strip().upper()
+    if re.fullmatch(r"\d{4,6}\.0", text):
+        text = text[:-2]
+    return text if re.fullmatch(r"\d{4,6}[A-Z]?", text) else None
+
+
 def find_targets(column):
     return [(row, code) for row, values in enumerate(column, 1)
             if values and (code := normalize_code(values[0]))]
+
+
+def find_na_targets(rows, start_row=7):
+    """Find rows where A is nonblank and J is #N/A, using C as the ticker."""
+    targets = []
+    unresolved = []
+    for row_number, values in enumerate(rows, start_row):
+        col_a = values[0] if values else ""
+        col_c = values[2] if len(values) > 2 else ""
+        col_j = values[9] if len(values) > 9 else ""
+        if str(col_a).strip() and str(col_j).strip().upper() == "#N/A":
+            code = normalize_tw_code(col_c)
+            if code:
+                targets.append((row_number, code))
+            else:
+                unresolved.append(row_number)
+    return targets, unresolved
 
 
 def valid_price(value):
@@ -105,6 +130,7 @@ def main():
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     sheets = {sheet.id: sheet for sheet in spreadsheet.worksheets()}
     targets = {}
+    unresolved_by_sheet = {}
     # All tabs must contain every code in CODES before any writes are attempted.
     for sheet_id in SHEET_IDS:
         sheet = sheets[sheet_id]
@@ -112,10 +138,26 @@ def main():
         missing = set(CODES) - {code for _, code in rows}
         if missing:
             raise RuntimeError(f"{sheet.title}: missing codes {sorted(missing)}; no cells changed")
-        targets[sheet_id] = rows
+        na_rows, unresolved = find_na_targets(
+            sheet.get(f"A7:J{sheet.row_count}", value_render_option="FORMATTED_VALUE")
+        )
+        unresolved_by_sheet[sheet_id] = unresolved
+        # The fixed list is always refreshed; #N/A rows are added dynamically.
+        targets[sheet_id] = list(dict.fromkeys(rows + na_rows))
     quotes, errors = {}, []
+    for sheet_id, unresolved in unresolved_by_sheet.items():
+        if unresolved:
+            message = (
+                f"{sheets[sheet_id].title}: A is nonblank and J is #N/A, but C has no "
+                f"valid ticker at rows {unresolved}; those cells are preserved"
+            )
+            errors.append(message)
+            print(message, file=sys.stderr)
     today = datetime.now(TAIPEI).date()
-    for code in CODES:
+    requested_codes = list(dict.fromkeys(
+        list(CODES) + [code for rows in targets.values() for _, code in rows]
+    ))
+    for code in requested_codes:
         try:
             quotes[code] = fetch_quote(code, today)
             print(code, json.dumps(quotes[code], ensure_ascii=False))
@@ -126,8 +168,12 @@ def main():
     for sheet_id, rows in targets.items():
         sheet = sheets[sheet_id]
         # Recheck identities after network price queries in case rows moved.
-        current = find_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
-        if current != rows:
+        fixed = find_targets(sheet.get(f"C1:C{sheet.row_count}", value_render_option="FORMATTED_VALUE"))
+        na_rows, unresolved = find_na_targets(
+            sheet.get(f"A7:J{sheet.row_count}", value_render_option="FORMATTED_VALUE")
+        )
+        current = list(dict.fromkeys(fixed + na_rows))
+        if current != rows or unresolved != unresolved_by_sheet[sheet_id]:
             raise RuntimeError(f"{sheet.title}: rows changed during lookup; no cells changed")
         updates.extend(build_updates(sheet.title, rows, quotes))
     print(json.dumps({"dry_run": args.dry_run, "updates": updates}, ensure_ascii=False))
