@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from sync_tw_stock_prices import (
     find_fixed_targets,
+    find_legacy_0050_rows,
     find_na_targets,
     normalize_tw_code,
     recent_date,
@@ -42,6 +43,14 @@ class StockSyncTests(unittest.TestCase):
         rows = [["股票甲", "", "2330", "", "", "", "", "", "", "#N/A"]]
         self.assertEqual(find_na_targets(rows, [["#N/A"]]), ([], [7]))
 
+    def test_find_only_legacy_0050_raw_values(self):
+        rows = [
+            ["0050", "", "", "", "", "", "", 114.8],
+            ["0050", "", "", "", "", "", "", '=GOOGLEFINANCE("TPE:"&C8)'],
+            ["0056", "", "", "", "", "", "", 58.6],
+        ]
+        self.assertEqual(find_legacy_0050_rows(rows), [7])
+
     def test_normalize_dynamic_taiwan_ticker(self):
         self.assertEqual(normalize_tw_code("2330.0"), "2330")
         self.assertEqual(normalize_tw_code(" 00740b "), "00740B")
@@ -60,7 +69,8 @@ class StockSyncTests(unittest.TestCase):
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 7, 45, tzinfo=tz)), "temporary")
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 19, 45, tzinfo=tz)), "temporary")
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 8, 45, tzinfo=tz)), "restore")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 21, 45, tzinfo=tz)), "restore")
+        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 20, 45, tzinfo=tz)), "restore")
+        self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 21, 45, tzinfo=tz)))
         self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 15, 0, tzinfo=tz)))
 
     def test_restore_request_writes_formula_and_background(self):
