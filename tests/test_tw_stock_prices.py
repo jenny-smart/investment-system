@@ -77,9 +77,9 @@ class StockSyncTests(unittest.TestCase):
     def test_auto_schedule_uses_taipei_hours(self):
         tz = ZoneInfo("Asia/Taipei")
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 14, 5, tzinfo=tz)), "fixed")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 7, 45, tzinfo=tz)), "temporary")
+        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 6, 45, tzinfo=tz)), "temporary")
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 19, 45, tzinfo=tz)), "temporary")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 8, 45, tzinfo=tz)), "restore")
+        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 7, 45, tzinfo=tz)), "restore")
         self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 20, 45, tzinfo=tz)), "restore")
         self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 21, 45, tzinfo=tz)))
         self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 15, 0, tzinfo=tz)))
