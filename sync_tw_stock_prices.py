@@ -451,9 +451,9 @@ def run_repair_0050(spreadsheet, sheets, dry_run):
 def resolve_auto_mode(now):
     if now.hour == 14:
         return "fixed"
-    if now.hour in {7, 19}:
+    if now.hour in {6, 19}:
         return "temporary"
-    if now.hour in {8, 20}:
+    if now.hour in {7, 20}:
         return "restore"
     return None
 
