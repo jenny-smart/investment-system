@@ -148,6 +148,25 @@ def cell_range(title, row):
     return f"{quoted_title(title)}!J{row}"
 
 
+def backup_header_matches(row):
+    """Accept harmless whitespace/BOM differences in an existing backup header."""
+    normalized = [str(value).strip().lstrip("\ufeff") for value in row]
+    return normalized == BACKUP_HEADER
+
+
+def backup_has_records(values):
+    return any(any(str(value).strip() for value in row) for row in values[1:])
+
+
+def ensure_backup_header(sheet, values):
+    """Repair an empty/stale backup header without ever discarding backup records."""
+    if values and backup_header_matches(values[0]):
+        return
+    if values and backup_has_records(values):
+        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    sheet.update([BACKUP_HEADER], "A1:I1", value_input_option="RAW")
+
+
 def get_or_create_backup_sheet(spreadsheet):
     from gspread.exceptions import WorksheetNotFound
     try:
@@ -156,10 +175,7 @@ def get_or_create_backup_sheet(spreadsheet):
         sheet = spreadsheet.add_worksheet(BACKUP_SHEET_TITLE, rows=1000, cols=len(BACKUP_HEADER))
         sheet.hide()
     values = sheet.get_all_values()
-    if not values:
-        sheet.update([BACKUP_HEADER], "A1:I1", value_input_option="RAW")
-    elif values[0] != BACKUP_HEADER:
-        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    ensure_backup_header(sheet, values)
     return sheet
 
 
@@ -172,8 +188,11 @@ def read_backups(spreadsheet):
     values = sheet.get_all_values()
     if not values:
         return sheet, []
-    if values[0] != BACKUP_HEADER:
-        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    if not backup_header_matches(values[0]):
+        if backup_has_records(values):
+            raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+        ensure_backup_header(sheet, values)
+        return sheet, []
     records = [dict(zip(BACKUP_HEADER, row + [""] * (len(BACKUP_HEADER) - len(row))))
                for row in values[1:] if any(str(value).strip() for value in row)]
     return sheet, records

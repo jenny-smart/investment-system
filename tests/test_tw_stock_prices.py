@@ -3,6 +3,9 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sync_tw_stock_prices import (
+    BACKUP_HEADER,
+    backup_has_records,
+    backup_header_matches,
     find_fixed_targets,
     find_legacy_0050_rows,
     find_na_targets,
@@ -15,6 +18,14 @@ from sync_tw_stock_prices import (
 
 
 class StockSyncTests(unittest.TestCase):
+    def test_backup_header_accepts_bom_and_whitespace(self):
+        header = ["\ufeffversion ", *BACKUP_HEADER[1:]]
+        self.assertTrue(backup_header_matches(header))
+
+    def test_backup_records_are_detected_below_header(self):
+        self.assertFalse(backup_has_records([["old header"], [""]]))
+        self.assertTrue(backup_has_records([["old header"], ["1", "0"]]))
+
     def test_match_fixed_codes_after_row_insert_and_keep_duplicates(self):
         column = [["代號"], ["3312"], ["00740B"], ["5478"], ["6244"], ["6244"]]
         self.assertEqual(
