@@ -20,6 +20,12 @@ BACKUP_HEADER = [
     "background_json", "temporary_price", "saved_at",
 ]
 HIGHLIGHT = {"backgroundColorStyle": {"rgbColor": {"red": 1.0, "green": 0.85, "blue": 0.35}}}
+PRICE_BACKGROUND = {
+    "backgroundColor": {"red": 0.9882353, "green": 0.8980392, "blue": 0.8039216},
+    "backgroundColorStyle": {
+        "rgbColor": {"red": 0.9882353, "green": 0.8980392, "blue": 0.8039216}
+    },
+}
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
@@ -59,6 +65,17 @@ def find_na_targets(rows, formulas=None, start_row=7):
         else:
             unsafe.append(row_number)
     return targets, unsafe
+
+
+def find_legacy_0050_rows(rows, start_row=7):
+    """Find 0050 rows whose J cell is still a raw value instead of a formula."""
+    found = []
+    for offset, values in enumerate(rows):
+        code = normalize_tw_code(values[0]) if values else None
+        current = values[7] if len(values) > 7 else ""
+        if code == "0050" and current != "" and not str(current).startswith("="):
+            found.append(offset + start_row)
+    return found
 
 
 def valid_price(value):
@@ -131,6 +148,25 @@ def cell_range(title, row):
     return f"{quoted_title(title)}!J{row}"
 
 
+def backup_header_matches(row):
+    """Accept harmless whitespace/BOM differences in an existing backup header."""
+    normalized = [str(value).strip().lstrip("\ufeff") for value in row]
+    return normalized == BACKUP_HEADER
+
+
+def backup_has_records(values):
+    return any(any(str(value).strip() for value in row) for row in values[1:])
+
+
+def ensure_backup_header(sheet, values):
+    """Repair an empty/stale backup header without ever discarding backup records."""
+    if values and backup_header_matches(values[0]):
+        return
+    if values and backup_has_records(values):
+        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    sheet.update([BACKUP_HEADER], "A1:I1", value_input_option="RAW")
+
+
 def get_or_create_backup_sheet(spreadsheet):
     from gspread.exceptions import WorksheetNotFound
     try:
@@ -139,10 +175,7 @@ def get_or_create_backup_sheet(spreadsheet):
         sheet = spreadsheet.add_worksheet(BACKUP_SHEET_TITLE, rows=1000, cols=len(BACKUP_HEADER))
         sheet.hide()
     values = sheet.get_all_values()
-    if not values:
-        sheet.update([BACKUP_HEADER], "A1:I1", value_input_option="RAW")
-    elif values[0] != BACKUP_HEADER:
-        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    ensure_backup_header(sheet, values)
     return sheet
 
 
@@ -155,8 +188,11 @@ def read_backups(spreadsheet):
     values = sheet.get_all_values()
     if not values:
         return sheet, []
-    if values[0] != BACKUP_HEADER:
-        raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+    if not backup_header_matches(values[0]):
+        if backup_has_records(values):
+            raise RuntimeError(f"{BACKUP_SHEET_TITLE}: unexpected header; no cells changed")
+        ensure_backup_header(sheet, values)
+        return sheet, []
     records = [dict(zip(BACKUP_HEADER, row + [""] * (len(BACKUP_HEADER) - len(row))))
                for row in values[1:] if any(str(value).strip() for value in row)]
     return sheet, records
@@ -373,12 +409,51 @@ def run_restore(spreadsheet, sheets, dry_run):
     return 0
 
 
+def run_repair_0050(spreadsheet, sheets, dry_run):
+    """One-time repair for 0050 cells overwritten before formula backups existed."""
+    targets = []
+    for sheet_id in SHEET_IDS:
+        sheet = sheets[sheet_id]
+        rows = sheet.get(
+            f"C7:J{sheet.row_count}", value_render_option="FORMULA", maintain_size=True
+        )
+        for row in find_legacy_0050_rows(rows):
+            targets.append({"sheet_id": sheet_id, "title": sheet.title, "row": row})
+
+    preview = [cell_range(item["title"], item["row"]) for item in targets]
+    print(json.dumps({"mode": "repair-0050", "dry_run": dry_run, "updates": preview}, ensure_ascii=False))
+    if dry_run or not targets:
+        return 0
+
+    requests = [
+        update_cell_request(
+            item["sheet_id"], item["row"],
+            {"formulaValue": f'=GOOGLEFINANCE("TPE:"&C{item["row"]})'},
+            PRICE_BACKGROUND, restore=True,
+        )
+        for item in targets
+    ]
+    spreadsheet.batch_update({"requests": requests})
+    ranges = [cell_range(item["title"], item["row"]) for item in targets]
+    actual = spreadsheet.values_batch_get(
+        ranges, params={"valueRenderOption": "FORMULA"}
+    ).get("valueRanges", [])
+    expected = [f'=GOOGLEFINANCE("TPE:"&C{item["row"]})' for item in targets]
+    if len(actual) != len(targets) or any(
+        cell.get("values", [[None]])[0][0] != formula
+        for cell, formula in zip(actual, expected)
+    ):
+        raise RuntimeError("0050 formula repair verification failed")
+    print(f"Restored {len(targets)} legacy 0050 formulas and price-cell backgrounds")
+    return 0
+
+
 def resolve_auto_mode(now):
     if now.hour == 14:
         return "fixed"
     if now.hour in {7, 19}:
         return "temporary"
-    if now.hour in {8, 21}:
+    if now.hour in {8, 20}:
         return "restore"
     return None
 
@@ -386,7 +461,10 @@ def resolve_auto_mode(now):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credentials-file", type=Path)
-    parser.add_argument("--mode", choices=("auto", "fixed", "temporary", "restore"), default="auto")
+    parser.add_argument(
+        "--mode", choices=("auto", "fixed", "temporary", "restore", "repair-0050"),
+        default="auto",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -416,6 +494,8 @@ def main():
         return run_fixed(spreadsheet, sheets, now.date(), args.dry_run)
     if mode == "temporary":
         return run_temporary(spreadsheet, sheets, credentials, now.date(), args.dry_run)
+    if mode == "repair-0050":
+        return run_repair_0050(spreadsheet, sheets, args.dry_run)
     return run_restore(spreadsheet, sheets, args.dry_run)
 
 
