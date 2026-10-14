@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+from datetime import date
 from typing import Any
 
 import pandas as pd
@@ -362,6 +363,12 @@ def _latest_past_date(values: list[Any]) -> str:
     return max(parsed_dates).strftime("%Y/%m/%d")
 
 
+def _latest_dividend_date(values: list[Any]) -> str:
+    """取得最新已知日期，包含今日或已公告的未來日期。"""
+    parsed_dates = [d for d in (_parse_dividend_date(value) for value in values) if d is not None]
+    return max(parsed_dates).strftime("%Y/%m/%d") if parsed_dates else "—"
+
+
 def _dividend_record_variants(fund_code: str, platform: str, currency: str) -> list[tuple[str, str, str]]:
     return [
         (fund_code, platform, currency),
@@ -545,12 +552,26 @@ def _dividend_estimate_from_group(
     latest_history = _latest_past_record(history_rows, "ex_date") or _latest_past_record(history_rows, "pay_date")
     gas = _get_gas_data(fund_code) if fund_code else {}
 
-    ex_date = _latest_past_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
-    pay_date = _latest_past_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
+    ex_date = _latest_dividend_date([gas.get("ex_date")] + [r.get("ex_date", "") for r in history_rows])
+    pay_date = _latest_dividend_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
     display_date = ex_date if ex_date != "—" else pay_date
 
-    # 當期公告金額可能與上期不同，最新 GAS 值必須優先於持倉舊值。
-    div_per_unit = normalize_number(gas.get("monthly_div"), 0)
+    # 依公告／入帳日期取最近一期金額；同日時 GAS 更新值優先。
+    amount_candidates: list[tuple[int, int, float]] = []
+    gas_amount = normalize_number(gas.get("monthly_div"), 0)
+    gas_date = _parse_dividend_date(gas.get("pay_date")) or _parse_dividend_date(gas.get("ex_date"))
+    if gas_amount > 0:
+        amount_candidates.append((gas_date.toordinal() if gas_date else 0, 1, gas_amount))
+    for history in history_rows:
+        history_amount = _first_positive([
+            history.get("actual_div_amount", 0),
+            history.get("div_amount", 0),
+        ])
+        history_date = _parse_dividend_date(history.get("pay_date")) or _parse_dividend_date(history.get("ex_date"))
+        if history_amount > 0:
+            amount_candidates.append((history_date.toordinal() if history_date else 0, 0, history_amount))
+
+    div_per_unit = max(amount_candidates)[2] if amount_candidates else 0
     if div_per_unit <= 0:
         div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
     if div_per_unit <= 0:
@@ -603,22 +624,19 @@ def _shift_dividend_date_month(value: Any, months: int = 1) -> str:
     return parsed.replace(year=year, month=month, day=day).strftime("%Y/%m/%d")
 
 
-def _roll_estimate_after_recorded_period(
+def _roll_estimate_to_next_period(
     estimate: dict[str, Any],
-    existing_keys: set[tuple[str, str, str, str]],
+    today: date | None = None,
 ) -> dict[str, Any]:
-    """當期已進入配息記錄表後，月配息預估自動推到下一個尚未記錄的月份。"""
+    """月配息預估日期必須是未來；舊日期逐月推到下一次預估除息日。"""
     rolled = dict(estimate)
+    today = today or tw_now().date()
     for _ in range(24):
-        key = _dividend_business_key(
-            rolled.get("fund_code", ""),
-            rolled.get("platform", ""),
-            rolled.get("currency", ""),
-            rolled.get("fund_name", ""),
-            rolled.get("ex_date", ""),
-            rolled.get("pay_date", ""),
+        reference_date = (
+            _parse_dividend_date(rolled.get("ex_date"))
+            or _parse_dividend_date(rolled.get("pay_date"))
         )
-        if not key[3] or key not in existing_keys:
+        if reference_date is None or reference_date > today:
             break
         next_ex = _shift_dividend_date_month(rolled.get("ex_date", ""))
         next_pay = _shift_dividend_date_month(rolled.get("pay_date", ""))
@@ -642,14 +660,13 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
 
     records = _combined_dividend_records()
     history_index = _dividend_history_index(records)
-    existing_keys = _existing_dividend_record_keys(records)
 
     rows: list[dict[str, Any]] = []
     for _, grp in fund_groups:
         estimate = _dividend_estimate_from_group(grp, history_index)
         if not estimate:
             continue
-        estimate = _roll_estimate_after_recorded_period(estimate, existing_keys)
+        estimate = _roll_estimate_to_next_period(estimate)
         rows.append({
             "平台": estimate["platform"],
             "基金名稱": estimate["fund_name"],
