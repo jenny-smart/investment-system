@@ -1,6 +1,7 @@
 """基金配息：自動快照／認列、預估與實際配息表、配息記錄頁。"""
 from __future__ import annotations
 
+import calendar
 from typing import Any
 
 import pandas as pd
@@ -548,11 +549,12 @@ def _dividend_estimate_from_group(
     pay_date = _latest_past_date([gas.get("pay_date")] + [r.get("pay_date", "") for r in history_rows])
     display_date = ex_date if ex_date != "—" else pay_date
 
-    div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
+    # 當期公告金額可能與上期不同，最新 GAS 值必須優先於持倉舊值。
+    div_per_unit = normalize_number(gas.get("monthly_div"), 0)
+    if div_per_unit <= 0:
+        div_per_unit = _first_positive(grp.get("每單位月配息估算", pd.Series(dtype=float)).tolist())
     if div_per_unit <= 0:
         div_per_unit = _first_positive(grp.get("monthly_dividend_per_unit", pd.Series(dtype=float)).tolist())
-    if div_per_unit <= 0:
-        div_per_unit = normalize_number(gas.get("monthly_div"), 0)
     if div_per_unit <= 0 and latest_history:
         div_per_unit = _first_positive([
             latest_history.get("actual_div_amount", 0),
@@ -590,6 +592,46 @@ def _dividend_estimate_from_group(
     }
 
 
+def _shift_dividend_date_month(value: Any, months: int = 1) -> str:
+    parsed = _parse_dividend_date(value)
+    if parsed is None:
+        return normalize_text(value)
+    month_index = parsed.year * 12 + parsed.month - 1 + months
+    year, month_zero = divmod(month_index, 12)
+    month = month_zero + 1
+    day = min(parsed.day, calendar.monthrange(year, month)[1])
+    return parsed.replace(year=year, month=month, day=day).strftime("%Y/%m/%d")
+
+
+def _roll_estimate_after_recorded_period(
+    estimate: dict[str, Any],
+    existing_keys: set[tuple[str, str, str, str]],
+) -> dict[str, Any]:
+    """當期已進入配息記錄表後，月配息預估自動推到下一個尚未記錄的月份。"""
+    rolled = dict(estimate)
+    for _ in range(24):
+        key = _dividend_business_key(
+            rolled.get("fund_code", ""),
+            rolled.get("platform", ""),
+            rolled.get("currency", ""),
+            rolled.get("fund_name", ""),
+            rolled.get("ex_date", ""),
+            rolled.get("pay_date", ""),
+        )
+        if not key[3] or key not in existing_keys:
+            break
+        next_ex = _shift_dividend_date_month(rolled.get("ex_date", ""))
+        next_pay = _shift_dividend_date_month(rolled.get("pay_date", ""))
+        if next_ex == rolled.get("ex_date", "") and next_pay == rolled.get("pay_date", ""):
+            break
+        rolled["ex_date"] = next_ex
+        rolled["pay_date"] = next_pay
+
+    rolled["display_date"] = rolled.get("ex_date") or rolled.get("pay_date") or "—"
+    rolled["sort_date"] = _parse_dividend_date(rolled.get("pay_date") or rolled.get("ex_date"))
+    return rolled
+
+
 def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if enriched_df is None or enriched_df.empty:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
@@ -598,13 +640,16 @@ def build_estimated_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
     if not fund_groups:
         return pd.DataFrame(columns=ESTIMATED_DIVIDEND_COLUMNS + ["_預估配息台幣"])
 
-    history_index = _dividend_history_index(_combined_dividend_records())
+    records = _combined_dividend_records()
+    history_index = _dividend_history_index(records)
+    existing_keys = _existing_dividend_record_keys(records)
 
     rows: list[dict[str, Any]] = []
     for _, grp in fund_groups:
         estimate = _dividend_estimate_from_group(grp, history_index)
         if not estimate:
             continue
+        estimate = _roll_estimate_after_recorded_period(estimate, existing_keys)
         rows.append({
             "平台": estimate["platform"],
             "基金名稱": estimate["fund_name"],
@@ -678,6 +723,18 @@ def build_actual_dividend_table(enriched_df: pd.DataFrame) -> pd.DataFrame:
         estimated_div = normalize_number(record.get("div_amount", 0), 0)
         is_paid = normalize_bool(record.get("is_paid", False), False)
         actual_div = normalize_number(record.get("actual_div_amount", 0), 0)
+        if not is_paid and fund_code:
+            gas = _get_gas_data(fund_code)
+            latest_div = normalize_number(gas.get("monthly_div"), 0)
+            gas_month = _record_date_key({
+                "ex_date": gas.get("ex_date", ""),
+                "pay_date": gas.get("pay_date", ""),
+            })
+            # 未確認的當期記錄跟隨最新公告；已手動輸入的實際入帳值保留。
+            if latest_div > 0 and gas_month and _record_date_key(record) == gas_month:
+                if actual_div <= 0 or abs(actual_div - estimated_div) <= 1e-9:
+                    actual_div = latest_div
+                estimated_div = latest_div
         if is_paid and actual_div <= 0:
             actual_div = estimated_div
         display_div = actual_div if actual_div > 0 else estimated_div
