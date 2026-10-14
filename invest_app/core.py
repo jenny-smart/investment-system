@@ -28,7 +28,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-11-v115-ledger-refresh"
+APP_VERSION = "2026-10-14-v116-dividend-roll-forward"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -1159,7 +1159,7 @@ def _prefetch_quotes(df: pd.DataFrame) -> None:
             jobs.add((fetch_fund_quote, fund_code, fund_pattern))
             fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(
                 name, normalize_text(r.get("fund_code", "")), normalize_text(r.get("fund_pattern", "")))[0]
-            if fc and normalize_number(r.get("monthly_dividend_per_unit", 0), 0) <= 0:
+            if fc:
                 jobs.add((_fetch_gas_div_for_enrich, fc))
     ctx = get_script_run_ctx()
 
@@ -1226,9 +1226,10 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         if asset_type == "基金":
             _fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(normalize_text(r.get("name","")),normalize_text(r.get("fund_code","")),normalize_text(r.get("fund_pattern","")))[0]
             manual_div = normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
-            _gas_div = _fetch_gas_div_for_enrich(_fc) if _fc and manual_div <= 0 else None
-            div_per_unit = manual_div or _gas_div or 0
-            div_source = "手動" if manual_div else "GAS"
+            _gas_div = _fetch_gas_div_for_enrich(_fc) if _fc else None
+            # 基金公司公告的當期金額優先；持倉儲存值只在來源暫時失敗時備援。
+            div_per_unit = _gas_div or manual_div or 0
+            div_source = "GAS" if _gas_div else "手動"
         else:
             div_per_unit = normalize_number(r.get("monthly_dividend_per_unit", 0), 0)
             div_source = "手動"
