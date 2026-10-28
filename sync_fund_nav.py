@@ -151,7 +151,7 @@ def plan_updates(rows, fetch):
         name = (row + ["", "", ""])[0]
         fund = match_fund(name)
         if not fund:
-            if len(normalize_name(name)) > 8:
+            if len(normalize_name(name)) > 8 and re.search(r"[\u4e00-\u9fff]", name):
                 problems.append(f"F{index} 無對照代碼: {name}")
             continue
         if fund["code"] not in cache:

@@ -39,7 +39,7 @@ class FundNavTest(unittest.TestCase):
 
     def test_plan_updates(self):
         rows = [[""]] * 6 + [["基富通-台", "日期"], [SHEET_NAMES[7][0], "#N/A", "#N/A"],
-                             ["富蘭克林坦伯頓-穩定月收益日幣避險A(Mdis)H1"], [SHEET_NAMES[19][0]]]
+                             ["富蘭克林坦伯頓-穩定月收益日幣避險A(Mdis)H1"], [SHEET_NAMES[19][0]], ["1304432.838"]]
         calls = []
 
         def fetch(fund):
