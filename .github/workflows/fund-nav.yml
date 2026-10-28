@@ -36,8 +36,8 @@ jobs:
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
       - name: Unit tests
-        run: python -m unittest tests.test_fund_nav
-      - name: Update G/H on 總覽
+        run: python -m unittest tests.test_fund_nav tests.test_richart_fx
+      - name: Update G/H on 總覽 (fund NAV)
         env:
           # Pull requests only preview; they never write to the sheet.
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
@@ -46,4 +46,14 @@ jobs:
             python sync_fund_nav.py --dry-run
           else
             python sync_fund_nav.py
+          fi
+      - name: Update R on 總覽 (FX rates)
+        if: always()
+        env:
+          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_richart_fx.py --dry-run
+          else
+            python sync_richart_fx.py
           fi

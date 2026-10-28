@@ -195,13 +195,20 @@ def main():
         return 1
     if args.dry_run:
         print(f"Dry run: {len(updates)} rows would be written")
-        return 0
+        return 1 if problems else 0
     sheet.batch_update(
         [{"range": f"G{item['row']}:H{item['row']}", "values": [[item["date"], item["nav"]]]}
          for item in updates],
         value_input_option="USER_ENTERED",
     )
     print(f"Updated {len(updates)} rows at {datetime.now(TAIPEI):%Y/%m/%d %H:%M} Asia/Taipei")
+    if problems:
+        # Rows did get written above; this only fails the *run* so skipped/unmatched
+        # funds show up as a red X instead of silently going stale (previously this
+        # returned 0 as long as >=1 fund updated, so e.g. an unconfigured fund like
+        # 富蘭克林坦伯頓-科技 could sit at #N/A indefinitely with every run green).
+        print(f"FAILED: {len(problems)} row(s) not synced — see WARN lines above")
+        return 1
     return 0
 
 
