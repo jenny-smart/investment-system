@@ -21,6 +21,9 @@ HEADERS = {
 }
 
 # (keywords that must all appear in the normalized name, MoneyDJ code, MoneyDJ pattern, 鉅亨 ID)
+# Funds in column F that are intentionally not synced (no warning, no failure).
+IGNORED_FUNDS = ("富蘭克林坦伯頓-穩定月收益",)
+
 FUND_RULES = (
     (("富蘭克林華美新興國家", "新臺幣"), "acft94", "yp010000", "A3DaDtj"),
     (("富蘭克林華美新興國家", "人民幣"), "acft99", "yp010000", "A4OhWL3"),
@@ -149,6 +152,8 @@ def plan_updates(rows, fetch):
     updates, problems, cache = [], [], {}
     for index, row in enumerate(rows, start=1):
         name = (row + ["", "", ""])[0]
+        if any(keyword in normalize_name(name) for keyword in IGNORED_FUNDS):
+            continue
         fund = match_fund(name)
         if not fund:
             if len(normalize_name(name)) > 8 and re.search(r"[\u4e00-\u9fff]", name):

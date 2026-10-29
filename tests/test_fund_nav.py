@@ -39,7 +39,8 @@ class FundNavTest(unittest.TestCase):
 
     def test_plan_updates(self):
         rows = [[""]] * 6 + [["基富通-台", "日期"], [SHEET_NAMES[7][0], "#N/A", "#N/A"],
-                             ["富蘭克林坦伯頓-穩定月收益日幣避險A(Mdis)H1"], [SHEET_NAMES[19][0]], ["1304432.838"]]
+                             ["富蘭克林坦伯頓-穩定月收益日幣避險A(Mdis)H1"], [SHEET_NAMES[19][0]], ["1304432.838"],
+                             ["某某投信全球科技基金A累積"]]
         calls = []
 
         def fetch(fund):
@@ -50,6 +51,7 @@ class FundNavTest(unittest.TestCase):
         self.assertEqual([u["row"] for u in updates], [8])
         self.assertEqual(calls, ["acft94", "acob36"])
         self.assertEqual(len(problems), 2)
+        self.assertFalse(any("富蘭克林坦伯頓" in p for p in problems))
 
 
 if __name__ == "__main__":
