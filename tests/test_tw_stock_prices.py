@@ -3,64 +3,21 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from sync_tw_stock_prices import (
-    BACKUP_HEADER,
-    backup_has_records,
-    backup_header_matches,
-    find_fixed_targets,
-    find_legacy_0050_rows,
-    find_na_targets,
+    in_update_window,
     normalize_tw_code,
+    plan_rows,
     recent_date,
-    resolve_auto_mode,
-    update_cell_request,
     valid_price,
 )
 
 
 class StockSyncTests(unittest.TestCase):
-    def test_backup_header_accepts_bom_and_whitespace(self):
-        header = ["\ufeffversion ", *BACKUP_HEADER[1:]]
-        self.assertTrue(backup_header_matches(header))
-
-    def test_backup_records_are_detected_below_header(self):
-        self.assertFalse(backup_has_records([["old header"], [""]]))
-        self.assertTrue(backup_has_records([["old header"], ["1", "0"]]))
-
-    def test_match_fixed_codes_after_row_insert_and_keep_duplicates(self):
-        column = [["代號"], ["3312"], ["00740B"], ["5478"], ["6244"], ["6244"]]
-        self.assertEqual(
-            find_fixed_targets(column),
-            [(3, "00740B"), (4, "5478"), (5, "6244"), (6, "6244")],
-        )
-
-    def test_find_only_restorable_na_targets_from_row_7(self):
-        rows = [
-            ["股票甲", "", "2330", "", "", "", "", "", "", "#N/A"],
-            ["股票乙", "", "0050", "", "", "", "", "", "", "123"],
-            ["", "", "2317", "", "", "", "", "", "", "#N/A"],
-            ["股票丙", "", "00740B", "", "", "", "", "", "", "#N/A"],
-            ["股票丁", "", "", "", "", "", "", "", "", "#N/A"],
-        ]
-        formulas = [["=F7"], ["=F8"], ["=F9"], ["=F10"], ["=F11"]]
-        self.assertEqual(
-            find_na_targets(rows, formulas),
-            ([
-                {"row": 7, "code": "2330", "formula": "=F7"},
-                {"row": 10, "code": "00740B", "formula": "=F10"},
-            ], [11]),
-        )
-
-    def test_na_without_formula_is_not_safe_to_replace(self):
-        rows = [["股票甲", "", "2330", "", "", "", "", "", "", "#N/A"]]
-        self.assertEqual(find_na_targets(rows, [["#N/A"]]), ([], [7]))
-
-    def test_find_only_legacy_0050_raw_values(self):
-        rows = [
-            ["0050", "", "", "", "", "", "", 114.8],
-            ["0050", "", "", "", "", "", "", '=GOOGLEFINANCE("TPE:"&C8)'],
-            ["0056", "", "", "", "", "", "", 58.6],
-        ]
-        self.assertEqual(find_legacy_0050_rows(rows), [7])
+    def test_duplicate_codes_reference_first_j_cell(self):
+        column = [["2330"], [""], ["0050"], ["2330.0"], [], ["AAPL"], ["0050"], ["2330"]]
+        prices, duplicates, skipped = plan_rows(column)
+        self.assertEqual(prices, [(7, "2330"), (9, "0050")])
+        self.assertEqual(duplicates, [(10, "=J7"), (13, "=J9"), (14, "=J7")])
+        self.assertEqual(skipped, [12])
 
     def test_normalize_dynamic_taiwan_ticker(self):
         self.assertEqual(normalize_tw_code("2330.0"), "2330")
@@ -74,24 +31,15 @@ class StockSyncTests(unittest.TestCase):
         self.assertFalse(recent_date("20260901", date(2026, 10, 7)))
         self.assertFalse(recent_date("20261008", date(2026, 10, 7)))
 
-    def test_auto_schedule_uses_taipei_hours(self):
+    def test_update_window_is_0730_to_1430_taipei(self):
         tz = ZoneInfo("Asia/Taipei")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 14, 5, tzinfo=tz)), "fixed")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 5, 45, tzinfo=tz)), "temporary")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 19, 45, tzinfo=tz)), "temporary")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 6, 45, tzinfo=tz)), "restore")
-        self.assertEqual(resolve_auto_mode(datetime(2026, 10, 12, 20, 45, tzinfo=tz)), "restore")
-        self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 21, 45, tzinfo=tz)))
-        self.assertIsNone(resolve_auto_mode(datetime(2026, 10, 12, 15, 0, tzinfo=tz)))
-
-    def test_restore_request_writes_formula_and_background(self):
-        request = update_cell_request(
-            123, 9, {"formulaValue": "=GOOGLEFINANCE(C9)"},
-            {"backgroundColor": {"red": 0.5}}, restore=True,
-        )["updateCells"]
-        self.assertEqual(request["range"]["startRowIndex"], 8)
-        self.assertIn("formulaValue", request["rows"][0]["values"][0]["userEnteredValue"])
-        self.assertIn("backgroundColor", request["fields"])
+        at = lambda h, m: datetime(2026, 10, 29, h, m, tzinfo=tz)
+        self.assertFalse(in_update_window(at(7, 20)))
+        self.assertTrue(in_update_window(at(7, 30)))
+        self.assertTrue(in_update_window(at(11, 0)))
+        self.assertTrue(in_update_window(at(14, 35)))  # delayed 14:30 trigger
+        self.assertFalse(in_update_window(at(14, 40)))
+        self.assertFalse(in_update_window(at(19, 30)))
 
 
 if __name__ == "__main__":
