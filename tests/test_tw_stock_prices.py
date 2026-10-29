@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from sync_tw_stock_prices import (
     in_update_window,
     normalize_tw_code,
+    parse_holidays,
     plan_rows,
     recent_date,
     valid_price,
@@ -31,15 +32,28 @@ class StockSyncTests(unittest.TestCase):
         self.assertFalse(recent_date("20260901", date(2026, 10, 7)))
         self.assertFalse(recent_date("20261008", date(2026, 10, 7)))
 
-    def test_update_window_is_0730_to_1430_taipei(self):
+    def test_update_window_is_weekday_0830_to_1430_taipei(self):
         tz = ZoneInfo("Asia/Taipei")
-        at = lambda h, m: datetime(2026, 10, 29, h, m, tzinfo=tz)
-        self.assertFalse(in_update_window(at(7, 20)))
-        self.assertTrue(in_update_window(at(7, 30)))
-        self.assertTrue(in_update_window(at(11, 0)))
-        self.assertTrue(in_update_window(at(14, 35)))  # delayed 14:30 trigger
-        self.assertFalse(in_update_window(at(14, 40)))
-        self.assertFalse(in_update_window(at(19, 30)))
+        at = lambda d, h, m: datetime(2026, 10, d, h, m, tzinfo=tz)  # 29 = Thursday
+        self.assertFalse(in_update_window(at(29, 8, 20)))
+        self.assertTrue(in_update_window(at(29, 8, 30)))
+        self.assertTrue(in_update_window(at(29, 11, 0)))
+        self.assertTrue(in_update_window(at(29, 14, 35)))  # delayed 14:30 trigger
+        self.assertFalse(in_update_window(at(29, 14, 40)))
+        self.assertFalse(in_update_window(at(31, 10, 0)))  # Saturday
+
+    def test_holidays_exclude_first_and_last_trading_days(self):
+        items = [
+            {"Name": "中華民國開國紀念日", "Date": "1150101"},
+            {"Name": "國曆新年開始交易日", "Date": "1150102", "Description": "國曆新年開始交易。"},
+            {"Name": "農曆春節前最後交易日", "Date": "1150211"},
+            {"Name": "市場無交易，僅辦理結算交割作業", "Date": "1150212"},
+            {"Name": "國慶日", "Date": "20261010"},
+        ]
+        self.assertEqual(
+            parse_holidays(items),
+            {date(2026, 1, 1), date(2026, 2, 12), date(2026, 10, 10)},
+        )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Refresh Taiwan stock prices in column J every 10 minutes during trading hours."""
+"""Refresh Taiwan stock prices in column J every 10 minutes, 08:30-14:30 on trading days."""
 from __future__ import annotations
 
 import argparse
@@ -15,9 +15,10 @@ SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
 SHEET_IDS = (0, 1591931043)
 START_ROW = 7
 TIMESTAMP_CELL = "A2"
-# cron-job.org fires every 10 minutes from 07:00 to 14:50; only 07:30-14:30
-# runs. The end allows up to 9 minutes of runner delay for the 14:30 trigger.
-WINDOW_START = time(7, 30)
+# cron-job.org fires every 10 minutes from 08:00 to 14:50 on weekdays; only
+# 08:30-14:30 on TWSE trading days runs. The end allows up to 9 minutes of
+# runner delay for the 14:30 trigger.
+WINDOW_START = time(8, 30)
 WINDOW_END = time(14, 40)
 MIS_BATCH = 20
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -54,7 +55,43 @@ def plan_rows(column, start_row=START_ROW):
 
 
 def in_update_window(now):
-    return WINDOW_START <= now.time() < WINDOW_END
+    return now.weekday() < 5 and WINDOW_START <= now.time() < WINDOW_END
+
+
+def parse_holidays(items):
+    """Market-closed dates from the TWSE holiday schedule (ROC or AD dates).
+
+    The schedule also lists first/last trading days around long holidays;
+    those are trading days and are excluded.
+    """
+    closed = set()
+    for item in items or []:
+        text = f"{item.get('Name', '')}{item.get('Description', '')}"
+        if "開始交易" in text or "最後交易" in text:
+            continue
+        digits = re.sub(r"\D", "", str(item.get("Date", "")))
+        if len(digits) == 7:
+            digits = f"{int(digits[:3]) + 1911}{digits[3:]}"
+        try:
+            closed.add(datetime.strptime(digits, "%Y%m%d").date())
+        except ValueError:
+            continue
+    return closed
+
+
+def is_market_holiday(today):
+    """True when TWSE lists today as closed; unknown (lookup failed) counts as open."""
+    import requests
+    try:
+        response = requests.get(
+            "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule",
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=20,
+        )
+        response.raise_for_status()
+        return today in parse_holidays(response.json())
+    except Exception as exc:
+        print(f"TWSE holiday schedule unavailable ({type(exc).__name__}); assuming open")
+        return False
 
 
 def valid_price(value):
@@ -185,14 +222,17 @@ def main():
     parser.add_argument("--credentials-file", type=Path)
     parser.add_argument(
         "--mode", choices=("auto", "update"), default="auto",
-        help="auto only runs between 07:30 and 14:30 Asia/Taipei; update always runs",
+        help="auto only runs 08:30-14:30 Asia/Taipei on trading days; update always runs",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     now = datetime.now(TAIPEI)
     if args.mode == "auto" and not in_update_window(now):
-        print(f"{now:%H:%M} Asia/Taipei is outside 07:30-14:30; skipped")
+        print(f"{now:%a %H:%M} Asia/Taipei is outside weekday 08:30-14:30; skipped")
+        return 0
+    if args.mode == "auto" and is_market_holiday(now.date()):
+        print(f"{now:%Y/%m/%d} is a TWSE market holiday; skipped")
         return 0
 
     import gspread

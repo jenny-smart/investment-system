@@ -1,12 +1,12 @@
 name: Taiwan stock prices to Google Sheets
 
 on:
-  # cron-job.org dispatches this every 10 minutes, 07:00-14:50 Asia/Taipei;
-  # auto mode only updates between 07:30 and 14:30.
+  # cron-job.org dispatches this every 10 minutes, 08:00-14:50 Asia/Taipei on
+  # weekdays; auto mode only updates 08:30-14:30 on TWSE trading days.
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto runs only 07:30-14:30 Taipei; update always runs"
+        description: "auto runs only 08:30-14:30 Taipei on trading days; update always runs"
         type: choice
         options: [auto, update]
         default: auto

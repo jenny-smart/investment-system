@@ -1,7 +1,7 @@
 # 台股股價排程
 
 cron-job.org 依台北時間觸發 GitHub Actions **Taiwan stock prices to Google Sheets**，
-在 **07:30–14:30 每 10 分鐘**更新一次兩個分頁的 J 欄股價：
+在**開盤日 08:30–14:30 每 10 分鐘**更新一次兩個分頁的 J 欄股價：
 
 1. 讀取 A7 起 C 欄非空白的列。
 2. 每個股票代號第一次出現的列，J 欄寫入最新股價。
@@ -13,8 +13,10 @@ C 欄不是台股代號的列（例如 `AAPL`）不會變動。查不到報價�
 
 ## Cronjobs 設定
 
-建立一個工作，時區 `Asia/Taipei`，排程 `*/10 7-14 * * 1-5`，以 workflow_dispatch 傳入 `mode=auto`。
-程式只在 07:30–14:30 之間更新，07:00、07:10、07:20、14:40、14:50 觸發時會直接略過。
+建立一個工作，時區 `Asia/Taipei`，排程 `*/10 8-14 * * 1-5`，以 workflow_dispatch 傳入 `mode=auto`。
+程式只在週一至週五 08:30–14:30 之間更新，08:00、08:10、08:20、14:40、14:50 觸發時會直接略過。
+另會查詢交易所休市日（`openapi.twse.com.tw` 的 holidaySchedule），休市日整天略過；
+查詢失敗時視為開盤照常更新。颱風等臨時休市無法預知，會照常寫入最近收盤價。
 14:30 那次若 Runner 延遲，09 分鐘內開始都仍會執行。
 
 原有的排程 `8631524`（temporary）、`8631529`（restore）、`8593700`（fixed）請停用或刪除；
@@ -32,8 +34,8 @@ C 欄不是台股代號的列（例如 `AAPL`）不會變動。查不到報價�
 
 Actions → **Taiwan stock prices to Google Sheets** → **Run workflow**：
 
-- `auto`：只在 07:30–14:30 執行。
-- `update`：不論時間立即更新。
+- `auto`：只在開盤日 08:30–14:30 執行。
+- `update`：不論時間、是否開盤，立即更新。
 - `dry_run`：只預覽，不寫入。
 
 本機測試：`python3 -m unittest discover -s tests -p test_tw_stock_prices.py`。
