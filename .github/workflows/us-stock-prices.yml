@@ -1,0 +1,51 @@
+name: US stock prices to Google Sheets
+
+on:
+  schedule:
+    # Every 30 minutes 21:00-06:00 Asia/Taipei (13:00-22:00 UTC), US trading days.
+    # GitHub may delay scheduled runs.
+    - cron: "0,30 13-21 * * 1-5"
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only fetch prices and preview writes"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - sync_us_stock_prices.py
+      - .github/workflows/us-stock-prices.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: us-stock-prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'yfinance>=0.2,<2'
+      - name: Unit tests
+        run: python -m unittest tests.test_us_stock_prices
+      - name: Update G/H on 總覽 (US stocks)
+        env:
+          # Pull requests only preview; they never write to the sheet.
+          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_us_stock_prices.py --dry-run
+          else
+            python sync_us_stock_prices.py
+          fi

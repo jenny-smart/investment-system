@@ -32,7 +32,8 @@ Streamlit 主程式：`invesapp_supabase.py`（部署於 investment-system.strea
 
 - `asset_summary.py`：總帳試算表解析（非投資總覽、命令列彙總），說明見 `ASSET_SUMMARY.md`
 - `record_snapshot.py` + `.github/workflows/snapshot.yml`：每天 08:00／20:00 歷史快照
-- `sync_tw_stock_prices.py`：台股股價回填 Google Sheets，見 `TW_STOCK_PRICE_SYNC.md`
+- `sync_tw_stock_prices.py`：台股股價（開盤日 08:30–14:30 每 10 分鐘）更新 Google Sheets，見 `TW_STOCK_PRICE_SYNC.md`
+- `sync_us_stock_prices.py`：美股股價（台北 21:00–06:00 每 30 分鐘）更新 總覽 G/H 欄
 - `stock_radar/`：台股每日雷達
 - `supabase_schema.sql`：Supabase 資料表與欄位
 
