@@ -1,6 +1,8 @@
 import unittest
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from sync_us_stock_prices import find_tickers, normalize_ticker
+from sync_us_stock_prices import find_tickers, in_update_window, normalize_ticker
 
 
 class UsStockSyncTests(unittest.TestCase):
@@ -15,6 +17,18 @@ class UsStockSyncTests(unittest.TestCase):
         self.assertEqual(normalize_ticker(" brk.b "), "BRK.B")
         self.assertIsNone(normalize_ticker("富蘭克林"))
         self.assertIsNone(normalize_ticker("2330"))
+
+    def test_window_is_weekday_nights_taipei(self):
+        tz = ZoneInfo("Asia/Taipei")
+        at = lambda d, h, m: datetime(2026, 11, d, h, m, tzinfo=tz)  # 2 = Monday
+        self.assertFalse(in_update_window(at(2, 5, 0)))    # Monday early = Sunday US
+        self.assertFalse(in_update_window(at(2, 20, 30)))
+        self.assertTrue(in_update_window(at(2, 21, 0)))
+        self.assertTrue(in_update_window(at(3, 3, 0)))
+        self.assertTrue(in_update_window(at(3, 6, 5)))     # delayed 06:00 trigger
+        self.assertFalse(in_update_window(at(3, 6, 30)))
+        self.assertTrue(in_update_window(at(7, 6, 0)))     # Saturday morning = Friday US
+        self.assertFalse(in_update_window(at(7, 21, 0)))   # Saturday night
 
 
 if __name__ == "__main__":

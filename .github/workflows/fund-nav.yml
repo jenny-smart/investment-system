@@ -1,9 +1,7 @@
 name: Fund NAV to Google Sheets
 
 on:
-  schedule:
-    # Every 30 minutes, all day. GitHub may delay scheduled runs.
-    - cron: "5,35 * * * *"
+  # cron-job.org dispatches this every 30 minutes (:00/:30), all day.
   workflow_dispatch:
     inputs:
       dry_run:

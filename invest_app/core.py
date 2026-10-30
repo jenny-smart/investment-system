@@ -979,11 +979,11 @@ def fetch_fx_fallback(currency: str) -> tuple[float | None, str]:
     return None, f"備援匯率無TWD:{currency}"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def fetch_richart_fx() -> tuple[dict[str, float], str]:
     """Richart「賣外幣」匯率：讀總帳總覽 R 欄（由 Richart FX workflow 每半小時同步）。
 
     Streamlit Cloud 連不到 richart.tw，所以不直接抓網頁；失敗回空 dict 與原因。
+    不另外快取，跟著 load_sheet_grid 的 2 分鐘快取，R 欄更新後最慢 2 分鐘反映。
     """
     try:
         from invest_app.sheet_compare import sheet_fx_rates
@@ -1132,7 +1132,47 @@ def fund_dividend_original_totals(df: pd.DataFrame) -> dict[tuple[str, str, str,
     }
 
 
-def _prefetch_quotes(df: pd.DataFrame) -> None:
+def overview_sheet_quotes() -> dict[tuple[str, str], dict[str, Any]]:
+    """總覽 F/G/H 的排程寫入值：{("us", "PYPL") 或 ("fund", "acft94"): {"price", "date"}}。
+
+    美股取 F 欄「美股」標題下的代號；基金用與排程相同的名稱對照找出代碼。讀不到回空 dict。
+    """
+    try:
+        from sync_fund_nav import match_fund
+        from sync_us_stock_prices import find_tickers
+        grid = load_sheet_grid(OVERVIEW_SHEET_GID)
+    except Exception:
+        return {}
+
+    def cell(row: list[str], col: int) -> str:
+        return row[col] if len(row) > col else ""
+
+    def quote(row: list[str]) -> dict[str, Any] | None:
+        price = to_float(cell(row, 7))
+        if not price or price <= 0:
+            return None
+        return {"price": price, "date": _parse_date_str(cell(row, 6).strip())}
+
+    quotes: dict[tuple[str, str], dict[str, Any]] = {}
+    for row_number, ticker in find_tickers([[cell(row, 5)] for row in grid]):
+        if (q := quote(grid[row_number - 1])):
+            quotes[("us", ticker)] = q
+    for row in grid:
+        fund = match_fund(cell(row, 5))
+        if fund and (q := quote(row)):
+            quotes.setdefault(("fund", fund["code"].lower()), q)
+    return quotes
+
+
+def sheet_quote_keys(asset_type: str, ticker: str = "", fund_code: str = "") -> tuple[str, str] | None:
+    if asset_type == "美股":
+        return ("us", normalize_ticker(ticker))
+    if asset_type == "基金":
+        return ("fund", normalize_text(fund_code).lower())
+    return None
+
+
+def _prefetch_quotes(df: pd.DataFrame, skip: set[tuple[str, str]] | None = None) -> None:
     """平行預先抓報價、基金淨值、匯率、GAS 配息，填好快取。
 
     enrich 逐筆依序抓時，冷啟動（重開機、快取過期）要好幾十秒，超過
@@ -1152,11 +1192,13 @@ def _prefetch_quotes(df: pd.DataFrame) -> None:
                 ticker = TW_PRESETS.get(name, "")
             elif not ticker and name:
                 ticker = name.upper()
-            if not (asset_type == "台股" and is_delisted_tw_stock(ticker, name)):
+            if not (asset_type == "台股" and is_delisted_tw_stock(ticker, name)) \
+                    and sheet_quote_keys(asset_type, ticker=ticker) not in (skip or set()):
                 jobs.add((fetch_stock_price, ticker, asset_type))
         else:
             fund_code, fund_pattern = effective_fund_fields(r)
-            jobs.add((fetch_fund_quote, fund_code, fund_pattern))
+            if sheet_quote_keys("基金", fund_code=fund_code) not in (skip or set()):
+                jobs.add((fetch_fund_quote, fund_code, fund_pattern))
             fc = normalize_text(r.get("fund_code", "")) or infer_fund_fields(
                 name, normalize_text(r.get("fund_code", "")), normalize_text(r.get("fund_pattern", "")))[0]
             if fc:
@@ -1179,7 +1221,14 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = ensure_columns(df)
     if df.empty:
         return df
-    _prefetch_quotes(df)
+    # 排程確認為最新時，美股 / 基金直接用總覽的值，與總帳完全一致；太舊或無法判斷才即時抓
+    from invest_app.sync_status import fresh_keys
+    fresh = fresh_keys()
+    sheet_quotes = {
+        key: q for key, q in (overview_sheet_quotes() if fresh & {"us", "fund"} else {}).items()
+        if key[0] in fresh
+    }
+    _prefetch_quotes(df, set(sheet_quotes))
     rows = []
     dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     dividend_original_totals = fund_dividend_original_totals(df)
@@ -1194,16 +1243,23 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
                 ticker = TW_PRESETS.get(name, "")
             elif not ticker and name:
                 ticker = name.upper()
+            sheet_q = sheet_quotes.get(sheet_quote_keys(asset_type, ticker=ticker))
             if asset_type == "台股" and is_delisted_tw_stock(ticker, name):
                 price, p_status = None, "已下市"
+            elif sheet_q:
+                price, p_status, fund_nav_date = sheet_q["price"], "總覽", sheet_q["date"]
             else:
                 price, p_status = fetch_stock_price(ticker, asset_type)
         else:
             fund_code, fund_pattern = effective_fund_fields(r)
-            fund_quote = fetch_fund_quote(fund_code, fund_pattern)
-            price = to_float(fund_quote.get("nav"))
-            p_status = normalize_text(fund_quote.get("status", "所有來源失敗"))
-            fund_nav_date = normalize_text(fund_quote.get("date", "—"), "—")
+            sheet_q = sheet_quotes.get(sheet_quote_keys("基金", fund_code=fund_code))
+            if sheet_q:
+                price, p_status, fund_nav_date = sheet_q["price"], "總覽", sheet_q["date"]
+            else:
+                fund_quote = fetch_fund_quote(fund_code, fund_pattern)
+                price = to_float(fund_quote.get("nav"))
+                p_status = normalize_text(fund_quote.get("status", "所有來源失敗"))
+                fund_nav_date = normalize_text(fund_quote.get("date", "—"), "—")
         fx, fx_status = fetch_fx(currency)
         calc_row = r.copy()
         is_dividend_primary = True

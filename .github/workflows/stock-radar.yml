@@ -1,14 +1,13 @@
 name: Taiwan Stock Daily Radar
 
 on:
+  # cron-job.org 於週一至週五 14:30（Asia/Taipei）觸發
   workflow_dispatch:
   push:
     branches: [main]
     paths:
       - ".github/workflows/stock-radar.yml"
       - "stock_radar/**"
-  schedule:
-    - cron: "30 6 * * 1-5"
 
 permissions:
   contents: write

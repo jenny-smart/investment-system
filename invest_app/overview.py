@@ -9,6 +9,8 @@ from invest_app.core import (
     two_line_metric,
     TW_STOCK_SELL_COST_RATE,
     CURRENCIES,
+    OVERVIEW_SHEET_GID,
+    SHEET_FETCHED_AT,
     _get_gas_date,
     fetch_fx,
     fetch_richart_fx,
@@ -21,6 +23,7 @@ from invest_app.core import (
     to_float,
     tw_now,
 )
+from invest_app.sync_status import render_sync_status
 
 
 OVERVIEW_ORDER = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
@@ -147,7 +150,10 @@ def render_sub_group(sub_label: str, sub_rows: pd.DataFrame) -> None:
 
         # 取報價日期
         if atype in {"台股", "美股"}:
-            date_str = fmt_md(tw_now())
+            # 美股用總覽時帶回報價日期（美東）；即時抓價則顯示今天
+            date_str = normalize_text(pr.get("基金淨值日期", ""), "")
+            if not date_str or date_str == "—":
+                date_str = fmt_md(tw_now())
         else:
             fc       = normalize_text(pr.get("fund_code", ""))
             date_str = normalize_text(pr.get("基金淨值日期", ""), "")
@@ -390,6 +396,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
     source = "Richart 賣外幣，總帳 R 欄" if _richart else f'<span style="color:#dc2626">{html.escape(richart_status)}，改用 Yahoo</span>'
     st.markdown('<div style="font-size:.85rem;color:#475569;margin:4px 0 8px">💱 即時匯率　'
                 + "　·　".join(fx_parts) + f"　（{source}）</div>", unsafe_allow_html=True)
+    render_sync_status(SHEET_FETCHED_AT.get(OVERVIEW_SHEET_GID, ""))
 
     st.markdown("---")
 

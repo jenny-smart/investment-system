@@ -1,10 +1,8 @@
 name: Keep App Warm
 
 on:
-  schedule:
-    # 每 30 分鐘喚醒一次，避免 Streamlit Cloud 休眠冷啟動、也讓價格快取保持新鮮
-    - cron: "*/30 * * * *"
-  workflow_dispatch:   # 手動觸發
+  # cron-job.org 每 30 分鐘觸發，避免 Streamlit Cloud 休眠冷啟動、也讓價格快取保持新鮮
+  workflow_dispatch:
 
 permissions:
   contents: read
