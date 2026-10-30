@@ -42,7 +42,8 @@ Actions → **Taiwan stock prices to Google Sheets** → **Run workflow**：
 
 ## 美股（總覽 G/H）
 
-GitHub Actions **US stock prices to Google Sheets**（`sync_us_stock_prices.py`）使用 GitHub 原生排程，
-週一至週五台北時間 **21:00–06:00 每 30 分鐘**執行（UTC `0,30 13-21` 與 `0 22`），
+`sync_us_stock_prices.py` 由 cron-job.org 觸發，週一至週五台北時間 **21:00 至隔天 06:00 每 30 分鐘**更新，
 讀取 `總覽` F 欄「美股」標題下方到第一個空白列為止的代號（目前 `pypl`、`xyz`），
 以 Yahoo 最新價格寫入 G（報價日期，美東日期）與 H（價格）。
+
+所有排程與 cron-job.org、GitHub、Streamlit 的設定方式見 `SCHEDULES.md`。

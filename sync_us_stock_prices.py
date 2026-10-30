@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, time
 import json
 import math
 import os
@@ -15,6 +15,16 @@ SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
 SHEET_TITLE = "總覽"
 SECTION_HEADER = "美股"
 TAIPEI = ZoneInfo("Asia/Taipei")
+# cron-job.org fires at :00/:30 from 21:00 to 06:30; only Mon-Fri 21:00 to the
+# following 06:00 runs. The end allows 9 minutes of runner delay for 06:00.
+WINDOW_START = time(21, 0)
+WINDOW_END = time(6, 10)
+
+
+def in_update_window(now):
+    weekday = now.weekday()
+    return ((weekday < 5 and now.time() >= WINDOW_START)
+            or (1 <= weekday <= 5 and now.time() < WINDOW_END))
 
 
 def normalize_ticker(value):
@@ -61,8 +71,17 @@ def fetch_quote(ticker):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credentials-file", type=Path)
+    parser.add_argument(
+        "--mode", choices=("auto", "update"), default="auto",
+        help="auto only runs Mon-Fri 21:00-06:00 Asia/Taipei; update always runs",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    now = datetime.now(TAIPEI)
+    if args.mode == "auto" and not in_update_window(now):
+        print(f"{now:%a %H:%M} Asia/Taipei is outside Mon-Fri 21:00-06:00; skipped")
+        return 0
 
     import gspread
     from google.oauth2.service_account import Credentials

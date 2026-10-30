@@ -1,4 +1,6 @@
 name: Taiwan stock prices to Google Sheets
+# The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
+run-name: ${{ inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
 
 on:
   # cron-job.org dispatches this every 10 minutes, 08:00-14:50 Asia/Taipei on

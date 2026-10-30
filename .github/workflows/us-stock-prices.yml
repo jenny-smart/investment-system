@@ -1,13 +1,17 @@
 name: US stock prices to Google Sheets
+# The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
 
 on:
-  schedule:
-    # Every 30 minutes 21:00-06:00 Asia/Taipei (13:00-22:00 UTC), US trading days.
-    # GitHub may delay scheduled runs.
-    - cron: "0,30 13-21 * * 1-5"
-    - cron: "0 22 * * 1-5"
+  # cron-job.org dispatches this at :00/:30, 21:00-06:30 Asia/Taipei; auto mode
+  # only updates Mon-Fri 21:00 to the following 06:00. The app dispatches update.
   workflow_dispatch:
     inputs:
+      mode:
+        description: "auto runs only Mon-Fri 21:00-06:00 Taipei; update always runs"
+        type: choice
+        options: [auto, update]
+        default: auto
       dry_run:
         description: "Only fetch prices and preview writes"
         type: boolean
@@ -40,12 +44,16 @@ jobs:
       - name: Unit tests
         run: python -m unittest tests.test_us_stock_prices
       - name: Update G/H on 總覽 (US stocks)
+        # Fork PRs get no secrets, so there is nothing to preview against.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           # Pull requests only preview; they never write to the sheet.
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+          # Pull requests preview regardless of the time of day.
+          MODE: ${{ github.event_name == 'pull_request' && 'update' || inputs.mode || 'auto' }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            python sync_us_stock_prices.py --dry-run
+            python sync_us_stock_prices.py --mode "$MODE" --dry-run
           else
-            python sync_us_stock_prices.py
+            python sync_us_stock_prices.py --mode "$MODE"
           fi
