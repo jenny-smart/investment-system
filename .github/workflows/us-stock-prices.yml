@@ -1,4 +1,6 @@
 name: US stock prices to Google Sheets
+# The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
 
 on:
   # cron-job.org dispatches this at :00/:30, 21:00-06:30 Asia/Taipei; auto mode

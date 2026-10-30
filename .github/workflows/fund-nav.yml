@@ -1,4 +1,6 @@
 name: Fund NAV to Google Sheets
+# The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || 'update' }}
 
 on:
   # cron-job.org dispatches this every 30 minutes (:00/:30), all day.

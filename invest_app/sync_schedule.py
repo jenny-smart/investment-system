@@ -1,8 +1,11 @@
 """排程時段與資料新舊判斷、GitHub Actions 查詢與觸發（不依賴 Streamlit）。
 
-判斷方式：找出「現在往前 5 分鐘」之前最後一個排程時間點（slot），最後成功執行
-必須晚於「該 slot 再往前一個間隔」，也就是容許漏跑一次；連漏兩次才算太舊。
+判斷方式：找出「現在往前 5 分鐘」之前最後一個排程時間點（slot），最後一次有更新的執行
+必須不早於它的前一個排程時間點（同樣在時段內），也就是容許漏跑一次；連漏兩次才算太舊。
 往前 5 分鐘是留給剛觸發、還在執行中的那一次。
+
+只有真的寫入的執行才算更新：workflow 的 run-name 標成 dry-run 的不算；auto 模式在
+時段外會直接略過，所以 auto（或舊的、沒有 run-name 的執行）只有在時段內開始才算。
 """
 from __future__ import annotations
 
@@ -16,6 +19,8 @@ import requests
 TAIPEI = timezone(timedelta(hours=8))
 GITHUB_REPO = "jenny-smart/investment-system"
 RUN_GRACE = timedelta(minutes=5)
+RUNNER_DELAY = timedelta(minutes=9)
+RUNS_TO_SCAN = 30
 AUTO_DISPATCH_COOLDOWN = timedelta(minutes=15)
 
 
@@ -67,7 +72,17 @@ def is_stale(job: Job, last_ok: datetime | None, now: datetime) -> bool:
         return False
     if last_ok is None:
         return True
-    return last_ok < slot - timedelta(minutes=job.step_minutes)
+    previous = last_slot(slot - timedelta(minutes=job.step_minutes), job)
+    return last_ok < (previous or slot)
+
+
+def run_updated(job: Job, title: str, started: datetime) -> bool:
+    """這次成功執行是否真的寫入（依 run-name：dry-run / update / auto）。"""
+    if title == "dry-run":
+        return False
+    if title == "update":
+        return True
+    return job.in_window(started) or job.in_window(started - RUNNER_DELAY)
 
 
 def github_token() -> str:
@@ -88,18 +103,20 @@ def _headers(token: str) -> dict:
 
 
 def fetch_last_success(workflow: str, token: str) -> datetime | None:
-    """main 分支上該 workflow 最後一次成功執行的開始時間（台北時間）。"""
+    """main 分支上該 workflow 最後一次真的有更新的成功執行開始時間（台北時間）。"""
+    job = next(job for job in JOBS if job.workflow == workflow)
     response = requests.get(
         f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/{workflow}/runs",
-        params={"status": "success", "branch": "main", "per_page": 1},
+        params={"status": "success", "branch": "main", "per_page": RUNS_TO_SCAN},
         headers=_headers(token), timeout=10,
     )
     response.raise_for_status()
-    runs = response.json().get("workflow_runs", [])
-    if not runs:
-        return None
-    started = runs[0].get("run_started_at") or runs[0]["created_at"]
-    return datetime.fromisoformat(started.replace("Z", "+00:00")).astimezone(TAIPEI)
+    for run in response.json().get("workflow_runs", []):
+        stamp = run.get("run_started_at") or run["created_at"]
+        started = datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone(TAIPEI)
+        if run_updated(job, run.get("display_title", ""), started):
+            return started
+    return None
 
 
 def dispatch(job: Job, token: str) -> None:
