@@ -40,6 +40,8 @@ jobs:
       - name: Unit tests
         run: python -m unittest tests.test_us_stock_prices
       - name: Update G/H on 總覽 (US stocks)
+        # Fork PRs get no secrets, so there is nothing to preview against.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           # Pull requests only preview; they never write to the sheet.
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
