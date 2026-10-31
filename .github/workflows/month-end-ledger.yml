@@ -4,21 +4,22 @@ run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.t
 on:
   # cron-job.org dispatches this daily at 08:20, 15:20 and 22:20 Asia/Taipei.
   # auto: from the 30th (last day in February) to the 10th of the next month,
-  # freeze Jennyall blocks whose 總覽 price date is the month's last trading day;
-  # on the 1st, point 總覽 B2:B18 / B44:B51 at the new month.
+  # freeze Jennyall blocks whose 總覽 price date is the month's last trading day
+  # (after month end, missing ones are scaled to the looked-up month-end NAV);
+  # on the 1st, point 總覽 B2:B18 / B40:B51 at the new month.
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto decides by date; freeze / roll runs that step now"
+        description: "auto decides by date; freeze / roll runs that step now; prices only lists month-end NAVs"
         type: choice
-        options: [auto, freeze, roll]
+        options: [auto, freeze, roll, prices]
         default: auto
       month:
         description: "Month for freeze / roll, e.g. 2026/10 (blank = default)"
         type: string
         default: ""
       force:
-        description: "freeze: skip the price-date check and freeze every block"
+        description: "freeze: skip all checks and freeze every block at current values"
         type: boolean
         default: false
       dry_run:
@@ -29,6 +30,7 @@ on:
     paths:
       - month_end_ledger.py
       - asset_summary.py
+      - sync_fund_nav.py
       - .github/workflows/month-end-ledger.yml
 
 permissions:
@@ -50,9 +52,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'yfinance>=0.2,<2'
       - name: Unit tests
-        run: python -m unittest tests.test_month_end_ledger tests.test_asset_summary
+        run: python -m unittest tests.test_month_end_ledger tests.test_asset_summary tests.test_fund_nav
       - name: Freeze / roll 總帳
         # Fork PRs get no secrets, so there is nothing to preview against.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -68,3 +70,7 @@ jobs:
           [ "$FORCE" = "true" ] && args+=(--force)
           [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
           python month_end_ledger.py "${args[@]}"
+      - name: Check month-end NAV lookup (preview)
+        # Pull requests also check that last month's month-end NAVs can be looked up.
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: python month_end_ledger.py --mode prices
