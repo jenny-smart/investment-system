@@ -12,7 +12,11 @@ freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 �
 
 roll（每月 1 日）
     總覽 B2:B18 的 Jennyall!<欄> 換成當月小計欄（例：11 月 GA → GC），
-    總覽 B40:B51 的 '每月收入'!<欄> 換成當月欄（例：11 月 AH → AI）。
+    總覽 B40:B51 的 '每月收入'!<欄> 換成當月欄（例：11 月 AH → AI）；
+    Jennyall 當月兩欄與每月收入當月欄的 'YYYY細帳' 參照改成該年細帳的當月欄。
+
+newyear（每年 12 月 1 日）
+    建立下一年的 YYYY細帳 與每月收入 12 個月份欄，見 yearly_ledger.py。
 
 月份欄位都依第 1 列的日期尋找，不寫死欄位字母；區塊依 A 欄名稱尋找，中間插列也能抓到。
 """
@@ -30,6 +34,7 @@ import sys
 from zoneinfo import ZoneInfo
 
 from asset_summary import col_index, col_letters, find_month_column, parse_date, parse_month
+from yearly_ledger import retarget_month_columns, run_new_year
 
 SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"  # 2025Jenny-總帳
 LEDGER_SHEET = "Jennyall"
@@ -49,6 +54,7 @@ FREEZE_GRACE_DAYS = 10        # keep checking the previous month until this day
 LATE_AFTER_DAYS = 5           # a block still not frozen after this day is reported
 TW_CLOSE = time(14, 40)       # TWSE closes 13:30; the price sync's last run is 14:30
 TW_OPEN = time(8, 30)         # the price sync starts overwriting prices here
+NEW_YEAR_DAY = (12, 1)        # next year's 細帳 and 每月收入 columns are built on this day
 
 # Each block ends on its A-label row and starts right after the previous block,
 # except 台股, whose label sits on the first row with three more rows below it.
@@ -156,6 +162,11 @@ def to_number(value):
         return float(str(value).replace(",", ""))
     except (TypeError, ValueError):
         return None
+
+
+def new_year_due(today):
+    """Year whose 細帳 / 每月收入 columns are created today (Dec 1 builds next year)."""
+    return today.year + 1 if (today.month, today.day) == NEW_YEAR_DAY else None
 
 
 def auto_tasks(today):
@@ -662,6 +673,7 @@ def run_roll(spreadsheet, month, dry_run):
     if updates and not dry_run:
         overview.batch_update(strip_extra(updates), value_input_option="USER_ENTERED")
         print(f"  已寫入 {len(updates)} 格")
+    retarget_month_columns(spreadsheet, month, ledger_cols.get(key), income_cols.get(key), dry_run)
     return problems
 
 
@@ -695,8 +707,9 @@ def show_month_end_prices(spreadsheet, month):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credentials-file", type=Path)
-    parser.add_argument("--mode", choices=("auto", "freeze", "roll", "prices"), default="auto",
-                        help="auto 依日期決定；freeze／roll 立即執行；prices 只列出月底淨值")
+    parser.add_argument("--mode", choices=("auto", "freeze", "roll", "prices", "newyear"), default="auto",
+                        help="auto 依日期決定；freeze／roll／newyear 立即執行；prices 只列出月底淨值")
+    parser.add_argument("--year", type=int, help="newyear 要建立的年度（預設明年）")
     parser.add_argument("--month", help="月份 YYYY/M（預設：freeze 目前檢查中的月份或上個月，roll 本月，prices 上個月）")
     parser.add_argument("--force", action="store_true", help="freeze 時不檢查日期，全部用現值固定")
     parser.add_argument("--dry-run", action="store_true")
@@ -708,19 +721,25 @@ def main():
     if args.mode == "prices":
         month = parse_month(args.month) if args.month else previous
         return 1 if show_month_end_prices(open_spreadsheet(args.credentials_file), month) else 0
+    if args.mode == "newyear":
+        year = args.year or today.year + 1
+        return 1 if run_new_year(open_spreadsheet(args.credentials_file), year, args.dry_run) else 0
     freeze_month, roll_month = auto_tasks(today)
+    new_year = new_year_due(today) if args.mode == "auto" else None
     if args.mode == "freeze":
         freeze_month = parse_month(args.month) if args.month else (freeze_month or previous)
         roll_month = None
     elif args.mode == "roll":
         roll_month = parse_month(args.month) if args.month else today.replace(day=1)
         freeze_month = None
-    if not freeze_month and not roll_month:
+    if not freeze_month and not roll_month and not new_year:
         print(f"{today:%Y/%m/%d}：不在月底檢查期間（{FREEZE_START_DAY} 日起到下月 {FREEZE_GRACE_DAYS} 日），略過")
         return 0
 
     spreadsheet = open_spreadsheet(args.credentials_file)
     problems = []
+    if new_year:
+        problems += run_new_year(spreadsheet, new_year, args.dry_run)
     if roll_month:
         problems += run_roll(spreadsheet, roll_month, args.dry_run)
     if freeze_month:
