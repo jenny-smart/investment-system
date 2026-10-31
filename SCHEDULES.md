@@ -13,6 +13,7 @@ GitHub 原生排程（workflow 裡的 `schedule`）是「盡量執行」，負�
 | 基金淨值／匯率 | `fund-nav.yml` | `0,30 * * * *` | `{"ref":"main"}` | 全天 |
 | App 喚醒 | `keepalive.yml` | `*/30 * * * *` | `{"ref":"main"}` | 全天 |
 | 台股雷達 | `stock-radar.yml` | `30 14 * * 1-5` | `{"ref":"main"}` | 週一至週五 14:30 |
+| 總帳月底固定／月初切換 | `month-end-ledger.yml` | `20 8,15,22 * * *` | `{"ref":"main","inputs":{"mode":"auto"}}` | 每月 30 日起到下月 10 日；1 日切換總覽（見 `MONTH_END_LEDGER.md`） |
 | 資產快照（既有） | `snapshot.yml` | `0 8,20 * * *` | `{"ref":"main"}` | 08:00、20:00 |
 | ~~Richart 匯率~~（已停用） | `richart-fx.yml` | — | — | 匯率改由「基金淨值／匯率」每 30 分鐘一併更新；此 workflow 保留供手動執行 |
 
@@ -54,7 +55,7 @@ cron-job.org 現有的台股工作已經有一組 token；可以沿用舊的，�
 4. **Notifications**：勾選 **execution of the cronjob fails**（以及 **succeeds again after failure**），失敗會寄信。
 5. 存檔後按 **Test run**，回應碼是 **204** 就代表成功；到 GitHub → **Actions** 會看到一筆新的執行。
 
-要新增：美股價格、基金淨值／匯率、App 喚醒、台股雷達。
+要新增：美股價格、基金淨值／匯率、App 喚醒、台股雷達、總帳月底固定。
 台股價格若還沒建，照第一列設定；舊的 `8631524`、`8631529`、`8593700` 請停用或刪除。
 
 ## 三、GitHub：執行失敗通知

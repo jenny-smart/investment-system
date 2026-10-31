@@ -1,0 +1,70 @@
+name: Month-end ledger freeze and roll
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
+
+on:
+  # cron-job.org dispatches this daily at 08:20, 15:20 and 22:20 Asia/Taipei.
+  # auto: from the 30th (last day in February) to the 10th of the next month,
+  # freeze Jennyall blocks whose 總覽 price date is the month's last trading day;
+  # on the 1st, point 總覽 B2:B18 / B44:B51 at the new month.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto decides by date; freeze / roll runs that step now"
+        type: choice
+        options: [auto, freeze, roll]
+        default: auto
+      month:
+        description: "Month for freeze / roll, e.g. 2026/10 (blank = default)"
+        type: string
+        default: ""
+      force:
+        description: "freeze: skip the price-date check and freeze every block"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Only preview writes"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - month_end_ledger.py
+      - asset_summary.py
+      - .github/workflows/month-end-ledger.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: month-end-ledger
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
+      - name: Unit tests
+        run: python -m unittest tests.test_month_end_ledger tests.test_asset_summary
+      - name: Freeze / roll 總帳
+        # Fork PRs get no secrets, so there is nothing to preview against.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          # Pull requests only preview a freeze; they never write to the sheet.
+          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+          MODE: ${{ github.event_name == 'pull_request' && 'freeze' || inputs.mode || 'auto' }}
+          MONTH: ${{ inputs.month }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=(--mode "$MODE")
+          [ -n "$MONTH" ] && args+=(--month "$MONTH")
+          [ "$FORCE" = "true" ] && args+=(--force)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python month_end_ledger.py "${args[@]}"
