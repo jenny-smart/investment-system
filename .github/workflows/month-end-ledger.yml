@@ -6,21 +6,16 @@ on:
   # auto: from the 30th (last day in February) to the 10th of the next month,
   # freeze Jennyall blocks whose 總覽 price date is the month's last trading day
   # (after month end, missing ones are scaled to the looked-up month-end NAV);
-  # on the 1st, point 總覽 B2:B18 / B40:B51 at the new month; on Dec 1, build
-  # next year's YYYY細帳 and 每月收入 month columns.
+  # on the 1st, point 總覽 B2:B18 / B40:B51 at the new month.
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto decides by date; freeze / roll / newyear runs that step now; prices only lists month-end NAVs"
+        description: "auto decides by date; freeze / roll runs that step now; prices only lists month-end NAVs"
         type: choice
-        options: [auto, freeze, roll, prices, newyear]
+        options: [auto, freeze, roll, prices]
         default: auto
       month:
         description: "Month for freeze / roll, e.g. 2026/10 (blank = default)"
-        type: string
-        default: ""
-      year:
-        description: "Year for newyear, e.g. 2027 (blank = next year)"
         type: string
         default: ""
       force:
@@ -34,7 +29,6 @@ on:
   pull_request:
     paths:
       - month_end_ledger.py
-      - yearly_ledger.py
       - asset_summary.py
       - sync_fund_nav.py
       - .github/workflows/month-end-ledger.yml
@@ -60,7 +54,7 @@ jobs:
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'yfinance>=0.2,<2'
       - name: Unit tests
-        run: python -m unittest tests.test_month_end_ledger tests.test_yearly_ledger tests.test_asset_summary tests.test_fund_nav
+        run: python -m unittest tests.test_month_end_ledger tests.test_asset_summary tests.test_fund_nav
       - name: Freeze / roll 總帳
         # Fork PRs get no secrets, so there is nothing to preview against.
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -69,12 +63,10 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
           MODE: ${{ github.event_name == 'pull_request' && 'freeze' || inputs.mode || 'auto' }}
           MONTH: ${{ inputs.month }}
-          YEAR: ${{ inputs.year }}
           FORCE: ${{ inputs.force }}
         run: |
           args=(--mode "$MODE")
           [ -n "$MONTH" ] && args+=(--month "$MONTH")
-          [ -n "$YEAR" ] && args+=(--year "$YEAR")
           [ "$FORCE" = "true" ] && args+=(--force)
           [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
           python month_end_ledger.py "${args[@]}"
