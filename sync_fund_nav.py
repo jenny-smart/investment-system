@@ -14,6 +14,10 @@ from zoneinfo import ZoneInfo
 
 SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
 SHEET_TITLE = "總覽"
+# Hidden log of every NAV date seen, so the month-end freeze can find the last
+# NAV of a month after 總覽 has moved on (MoneyDJ only serves the latest NAV).
+NAV_LOG_TITLE = "淨值紀錄"
+NAV_LOG_HEADER = ["淨值日期", "基金名稱", "淨值", "來源", "記錄時間"]
 TAIPEI = ZoneInfo("Asia/Taipei")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
@@ -169,6 +173,34 @@ def plan_updates(rows, fetch):
     return updates, problems
 
 
+def new_log_rows(existing, updates, stamp):
+    """Rows to append to the NAV log: one per (fund name, NAV date) not logged yet."""
+    seen = {(str(row[1]).strip(), str(row[0]).strip()) for row in existing if len(row) > 1}
+    rows = []
+    for item in updates:
+        key = (str(item["name"]).strip(), item["date"])
+        if key not in seen:
+            seen.add(key)
+            rows.append([item["date"], key[0], item["nav"], item.get("source", ""), stamp])
+    return rows
+
+
+def append_nav_log(spreadsheet, updates):
+    """Append new NAV dates to the hidden 淨值紀錄 sheet (created on first use)."""
+    import gspread
+    try:
+        log = spreadsheet.worksheet(NAV_LOG_TITLE)
+    except gspread.WorksheetNotFound:
+        log = spreadsheet.add_worksheet(NAV_LOG_TITLE, rows=1000, cols=len(NAV_LOG_HEADER))
+        log.update([NAV_LOG_HEADER], "A1")
+        spreadsheet.batch_update({"requests": [{"updateSheetProperties": {
+            "properties": {"sheetId": log.id, "hidden": True}, "fields": "hidden"}}]})
+    rows = new_log_rows(log.get("A2:B"), updates, f"{datetime.now(TAIPEI):%Y/%m/%d %H:%M}")
+    if rows:
+        log.append_rows(rows, value_input_option="RAW")  # keep dates as text for exact matching
+    print(f"{NAV_LOG_TITLE}: {len(rows)} new NAV date(s) logged")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credentials-file", type=Path)
@@ -186,7 +218,8 @@ def main():
         if not raw:
             raise RuntimeError("Missing INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON secret")
         credentials = Credentials.from_service_account_info(json.loads(raw), scopes=scopes)
-    sheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID).worksheet(SHEET_TITLE)
+    spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
+    sheet = spreadsheet.worksheet(SHEET_TITLE)
     rows = sheet.get("F1:H200")
 
     session = requests.Session()
@@ -207,6 +240,11 @@ def main():
         value_input_option="USER_ENTERED",
     )
     print(f"Updated {len(updates)} rows at {datetime.now(TAIPEI):%Y/%m/%d %H:%M} Asia/Taipei")
+    try:
+        append_nav_log(spreadsheet, updates)
+    except Exception as exc:  # noqa: BLE001 - G/H are written; report the log failure
+        problems.append(f"{NAV_LOG_TITLE} 寫入失敗: {type(exc).__name__} {str(exc)[:120]}")
+        print(f"WARN {problems[-1]}")
     if problems:
         # Rows did get written above; this only fails the *run* so skipped/unmatched
         # funds show up as a red X instead of silently going stale (previously this

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from month_end_ledger import (
     BACKFILL, INCOME_REF, LEDGER_REF, READY, WAIT, auto_tasks, find_blocks, last_weekday,
-    in_window, month_columns, month_end_price, overview_section, parse_moneydj_bcd, parse_moneydj_history,
+    month_columns, month_end_price, overview_section, parse_nav_log,
     plan_freeze, price_status, rate_cells, retarget,
 )
 
@@ -118,20 +118,13 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(month_end_price(history, OCT), (date(2026, 10, 29), 5.46))
         self.assertIsNone(month_end_price([(date(2026, 11, 2), 5.5)], OCT))
 
-    def test_parse_sources(self):
-        bcd = "2026/10/29,2026/10/30,2026/11/02 5.46,5.47,5.5"
-        self.assertEqual(parse_moneydj_bcd(bcd),
-                         [(date(2026, 10, 29), 5.46), (date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5)])
-        self.assertEqual(parse_moneydj_bcd(""), [])
-        html = "<tr><td>2026/11/02</td><td>5.50</td></tr><tr><td>2026/10/29</td><td>5.46</td></tr>"
-        self.assertEqual(parse_moneydj_history(html),
-                         [(date(2026, 11, 2), 5.5), (date(2026, 10, 29), 5.46)])
-
-    def test_window_drops_stray_dates(self):
-        points = [(date(2026, 3, 12), 9.0), (date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5),
-                  (date(2026, 11, 30), 5.6)]
-        self.assertEqual(in_window(points, OCT, date(2026, 11, 3)),
-                         [(date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5)])
+    def test_nav_log(self):
+        rows = [["2026/10/29", "大華銀", "5.46", "MoneyDJ", "2026/10/30 08:00"],
+                ["2026/11/02", "大華銀 ", 5.5],
+                ["2026/10/29", "大華銀", "5.46"],          # duplicate
+                ["bad", "大華銀", "1"], ["2026/10/30", "", "1"]]
+        self.assertEqual(parse_nav_log(rows),
+                         {"大華銀": [(date(2026, 10, 29), 5.46), (date(2026, 11, 2), 5.5)]})
 
 
 class FreezeTests(unittest.TestCase):
@@ -200,6 +193,18 @@ class BackfillTests(unittest.TestCase):
         self.assertIn("10/30", note)
         self.assertNotIn("GA21", {u["range"] for u in plan.updates})
         self.assertTrue(any("匯率" in p for p in plan.problems))     # rate never frozen at month end
+
+    def test_implausible_month_end_nav_is_rejected(self):
+        formulas = grid({(21, 1): "='渣打-美金'!$M4*GA19"})
+        values = grid({(21, 1): 1064503})
+        overview = [list(line) for line in OVERVIEW]
+        overview[18] = ["大華銀新加坡房地產收益基金", 46328, 18.51, "", "", 1064503]
+        prices = {"大華銀新加坡房地產收益基金": [(date(2026, 11, 2), 18.51), (date(2026, 9, 30), 7.94),
+                                          (date(2026, 10, 30), 7.94)]}
+        plan = plan_freeze(COLUMN_A, formulas, values, 181, overview, OCT, self.NOW,
+                           history=self.history(prices))
+        self.assertEqual(plan.backfill, [])
+        self.assertTrue(any("相差超過" in r for _, r in plan.waiting))
 
     def test_multi_fund_block_uses_value_weights(self):
         formulas = grid({(11, 1): "='基富通-台'!$K2"})

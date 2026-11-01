@@ -6,8 +6,8 @@ freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 �
     同時把當月 64:67 列（叔叔）兩欄換成值。已經是值的格子不動，可以重複執行。
 
     月底最後一天起，各區塊的匯率格先固定成月底匯率。
-    過了月底仍未固定（遇假日沒有最後一個平日的淨值、或排程沒跑到）時，向 MoneyDJ
-    （基金）或 Yahoo（美股）查月底那天的淨值，以「現在市值 × 月底淨值 ÷ 現在淨值」
+    過了月底仍未固定（遇假日沒有最後一個平日的淨值、或排程沒跑到）時，從淨值紀錄
+    （基金，由基金淨值排程記錄）或 Yahoo（美股）查月底那天的淨值，以「現在市值 × 月底淨值 ÷ 現在淨值」
     換算月底市值後固定，不用手動處理。
 
 roll（每月 1 日）
@@ -333,6 +333,9 @@ def backfill_updates(block, source, funds, values, first_col, month, history):
             return None, "", f"F{fund.row} 月底淨值尚未確定"
         if not fund.nav:
             return None, "", f"F{fund.row} 總覽沒有現在淨值"
+        if abs(point[1] / fund.nav - 1) > MAX_NAV_MOVE:
+            return None, "", (f"F{fund.row} 月底淨值 {point[1]:g} 與現在 {fund.nav:g} 相差超過 "
+                              f"{MAX_NAV_MOVE:.0%}，不換算")
         month_end_navs[fund.row] = point
         notes.append(f"F{fund.row} {point[0]:%m/%d} {point[1]:g}（現在 {fund.date:%m/%d} {fund.nav:g}）")
 
@@ -462,55 +465,37 @@ def retarget(formulas, pattern, month_cols, new_col, first_row, column="B"):
 
 # ---------------------------------------------------------------- price history
 
-HISTORY_DAYS = 45   # history window before month end; dates outside it are page noise
+NAV_LOG_TITLE = "淨值紀錄"   # written by sync_fund_nav.py: 淨值日期, 基金名稱, 淨值, 來源, 記錄時間
+MAX_NAV_MOVE = 0.3            # a month-end NAV more than 30% from the current one is rejected
 
 
-def in_window(points, month, today):
-    """Keep points from HISTORY_DAYS before month end up to today (drops stray page dates)."""
-    first = month_end(month) - timedelta(days=HISTORY_DAYS)
-    return sorted({(d, p) for d, p in points if first <= d <= today})
-
-
-def parse_moneydj_bcd(text):
-    """MoneyDJ chart data (tBCDNavList.djbcd): 'd1,d2,... v1,v2,...' (dates, then NAVs)."""
-    from sync_fund_nav import valid_nav
-    parts = str(text or "").split()
-    if len(parts) < 2:
-        return []
-    dates, navs = parts[0].split(","), parts[1].split(",")
-    points = []
-    for day, nav in zip(dates, navs):
-        match = re.fullmatch(r"(20\d{2})[/-](\d{1,2})[/-](\d{1,2})", day.strip())
-        value = valid_nav(nav)
-        if match and value:
-            points.append((date(int(match[1]), int(match[2]), int(match[3])), value))
-    return points
-
-
-def parse_moneydj_history(html):
-    """Date / NAV pairs from a MoneyDJ NAV table page."""
-    from sync_fund_nav import valid_nav
-    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
-    text = re.sub(r"<[^>]+>", " ", text).replace(",", "").replace("&nbsp;", " ")
-    points = []
-    for y, m, d, nav in re.findall(r"(20\d{2})/(\d{1,2})/(\d{1,2})\s+([0-9]+(?:\.[0-9]+)?)", text):
-        if valid_nav(nav):
-            points.append((date(int(y), int(m), int(d)), float(nav)))
-    return points
+def parse_nav_log(rows):
+    """{fund name: [(date, nav)]} from the 淨值紀錄 sheet rows (header skipped)."""
+    history = {}
+    for row in rows:
+        if len(row) < 3:
+            continue
+        day, nav = cell_date(row[0]), to_number(row[2])
+        name = str(row[1]).strip()
+        if day and nav and name:
+            history.setdefault(name, set()).add((day, nav))
+    return {name: sorted(points) for name, points in history.items()}
 
 
 class PriceHistory:
-    """history(kind, name) for funds (MoneyDJ) and US stocks (Yahoo).
+    """history(kind, name): funds from the 淨值紀錄 sheet, US stocks from Yahoo.
 
-    鉅亨 is not used: its API returns no data from GitHub Actions (the fund NAV
-    sync also always falls back to MoneyDJ there).
+    MoneyDJ only serves a fund's latest NAV (鉅亨 returns nothing from GitHub
+    Actions), so the fund NAV sync logs every NAV date it sees and this reads
+    that log.
     """
 
-    def __init__(self, month):
+    def __init__(self, month, spreadsheet=None):
         self.month = month
+        self.spreadsheet = spreadsheet
         self.cache = {}
-        self.notes = {}   # name -> ["MoneyDJ 圖表 22 筆 09/22–10/30", ...] for diagnostics
-        self.session = None
+        self.notes = {}   # name -> ["淨值紀錄 3 筆 10/29–11/02", ...] for diagnostics
+        self.nav_log = None
 
     def note(self, name, source, points):
         days = sorted(d for d, _ in points)
@@ -527,42 +512,16 @@ class PriceHistory:
                 self.cache[key] = None
         return self.cache[key]
 
-    def get_text(self, url):
-        import requests
-        from sync_fund_nav import HEADERS
-        self.session = self.session or requests.Session()
-        response = self.session.get(url, headers={**HEADERS, "Referer": "https://www.moneydj.com/"}, timeout=20)
-        if response.status_code != 200:
-            return response.status_code, ""
-        for encoding in ("utf-8", "big5", "cp950"):
-            try:
-                return 200, response.content.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return 200, response.content.decode("utf-8", "replace")
-
     def fund(self, name):
-        from sync_fund_nav import match_fund
-        rule = match_fund(name)
-        if not rule:
-            return None
-        today = datetime.now(TAIPEI).date()
-        start = month_end(self.month) - timedelta(days=HISTORY_DAYS)
-        sources = (
-            ("MoneyDJ 圖表", f"https://www.moneydj.com/funddj/bcd/tBCDNavList.djbcd"
-                            f"?a={rule['code']}&B={start:%Y-%m-%d}&C={today:%Y-%m-%d}", parse_moneydj_bcd),
-            # yp010000 / yp010001 (latest NAV) -> yp012000 / yp012001 (NAV table)
-            ("MoneyDJ 淨值表", f"https://www.moneydj.com/funddj/yp/{rule['pattern'].replace('0100', '0120')}"
-                              f".djhtm?a={rule['code']}", parse_moneydj_history),
-        )
-        points = []
-        for label, url, parse in sources:
-            status, text = self.get_text(url)
-            found = in_window(parse(text), self.month, today) if text else []
-            self.note(name, label if status == 200 else f"{label}(HTTP {status})", found)
-            points = sorted(set(points) | set(found))
-            if month_end_price(points, self.month):
-                break
+        if self.nav_log is None:
+            import gspread
+            try:
+                rows = self.spreadsheet.worksheet(NAV_LOG_TITLE).get("A2:C") if self.spreadsheet else []
+            except gspread.WorksheetNotFound:
+                rows = []
+            self.nav_log = parse_nav_log(rows)
+        points = self.nav_log.get(str(name).strip(), [])
+        self.note(name, NAV_LOG_TITLE, points)
         return points or None
 
     def us(self, ticker):
@@ -623,7 +582,7 @@ def run_freeze(spreadsheet, month, now, dry_run, force):
     overview_rows = spreadsheet.worksheet(OVERVIEW_SHEET).get(
         OVERVIEW_RANGE, value_render_option="UNFORMATTED_VALUE")
     plan = plan_freeze(column_a, formulas, values, first_col, overview_rows, month, now,
-                       tw_closed_days(), force, PriceHistory(month))
+                       tw_closed_days(), force, PriceHistory(month, spreadsheet))
     for label in plan.done:
         print(f"  已是值：{label}")
     for label, reason in plan.waiting:
@@ -696,7 +655,7 @@ def show_month_end_prices(spreadsheet, month):
     print(f"== {month:%Y/%m} 月底淨值（只讀取） ==")
     overview_rows = spreadsheet.worksheet(OVERVIEW_SHEET).get(
         OVERVIEW_RANGE, value_render_option="UNFORMATTED_VALUE")
-    history = PriceHistory(month)
+    history = PriceHistory(month, spreadsheet)
     problems, seen = [], set()
     labels = list(SOURCES) + ["基富通-台", "基富通-日", "基富通-人民幣", "渣打-南非", "台新-美金", "台新-南非"]
     for label in labels:
@@ -735,7 +694,8 @@ def main():
         # Default to a month whose month-end price is surely final (a price after it exists).
         settled = previous if today.day > LATE_AFTER_DAYS else add_months(previous, -1)
         month = parse_month(args.month) if args.month else settled
-        return 1 if show_month_end_prices(open_spreadsheet(args.credentials_file), month) else 0
+        show_month_end_prices(open_spreadsheet(args.credentials_file), month)
+        return 0  # diagnostic only; the fund NAV log fills up as the NAV sync runs
     freeze_month, roll_month = auto_tasks(today)
     if args.mode == "freeze":
         freeze_month = parse_month(args.month) if args.month else (freeze_month or previous)
