@@ -49,6 +49,8 @@ FREEZE_GRACE_DAYS = 10        # keep checking the previous month until this day
 LATE_AFTER_DAYS = 5           # a block still not frozen after this day is reported
 TW_CLOSE = time(14, 40)       # TWSE closes 13:30; the price sync's last run is 14:30
 TW_OPEN = time(8, 30)         # the price sync starts overwriting prices here
+RATE_FREEZE_TIME = time(16, 0)  # FX cells of open blocks freeze from this time on the month's last day
+REPORT_HOUR = 8               # problems that persist across runs fail (and email) only in this hour
 
 # Each block ends on its A-label row and starts right after the previous block,
 # except 台股, whose label sits on the first row with three more rows below it.
@@ -317,7 +319,7 @@ def price_status(label, overview_rows, month, now, tw_closed=()):
     return WAIT, f"等 {expected:%m/%d} 淨值（{', '.join(behind)}）", None, funds
 
 
-def backfill_updates(block, source, funds, values, first_col, month, history):
+def backfill_updates(block, source, funds, values, first_col, month, history, formulas=None):
     """Scale the block's market-value cells to month-end prices.
 
     history(kind, name) -> [(date, price)] or None. Returns (updates, note, reason)
@@ -352,6 +354,9 @@ def backfill_updates(block, source, funds, values, first_col, month, history):
                 return None, "", f"總覽「{source.section}」找不到 {ticker}"
             ratio = month_end_navs[matched[0].row][1] / matched[0].nav
         row = base_row + offset
+        if formulas is not None and not is_formula(grid_cell(formulas, row, col)):
+            # Already scaled by an earlier (or concurrent) run: never scale twice.
+            return None, "", f"{col_letters(first_col + col)}{row} 已換算，等待固定"
         current = to_number(grid_cell(values, row, col))
         if current is None:
             return None, "", f"{col_letters(first_col + col)}{row} 不是數字"
@@ -372,7 +377,7 @@ def plan_freeze(column_a, formulas, values, first_col, overview_rows, month, now
     """
     plan = Plan()
     after_month = now.date() > month_end(month)
-    rates_due = now.date() >= month_end(month)
+    rates_due = now >= datetime.combine(month_end(month), RATE_FREEZE_TIME, TAIPEI)
     for block in find_blocks(column_a):
         rows = (block.first, block.last)
         updates, errors = freeze_updates(formulas, values, first_col, rows)
@@ -387,7 +392,7 @@ def plan_freeze(column_a, formulas, values, first_col, overview_rows, month, now
         if state == BACKFILL and not force:
             source = SOURCES.get(block.label, Source(block.label))
             scaled, note, why = backfill_updates(block, source, funds, values, first_col, month,
-                                                 history or (lambda *_: None))
+                                                 history or (lambda *_: None), formulas)
             if scaled is None:
                 state, reason = WAIT, why
             else:
@@ -600,7 +605,7 @@ def run_freeze(spreadsheet, month, now, dry_run, force):
         count = len(plan.updates) + sum(len(s) for _, s, _ in plan.backfill)
         if count:
             print(f"  預覽：會寫入 {count} 格以上")
-        return plan.problems
+        return plan.problems, 0
     updates = list(plan.updates)
     if plan.backfill:
         ledger.batch_update(strip_extra([u for _, s, _ in plan.backfill for u in s]),
@@ -617,7 +622,7 @@ def run_freeze(spreadsheet, month, now, dry_run, force):
         ledger.batch_update(strip_extra(updates), value_input_option="RAW")
         written = len(updates)
     print(f"  已寫入 {written} 格")
-    return plan.problems
+    return plan.problems, written
 
 
 def run_roll(spreadsheet, month, dry_run):
@@ -647,7 +652,8 @@ def run_roll(spreadsheet, month, dry_run):
     if updates and not dry_run:
         overview.batch_update(strip_extra(updates), value_input_option="USER_ENTERED")
         print(f"  已寫入 {len(updates)} 格")
-    return problems
+        return problems, len(updates)
+    return problems, 0
 
 
 def show_month_end_prices(spreadsheet, month):
@@ -708,14 +714,26 @@ def main():
         return 0
 
     spreadsheet = open_spreadsheet(args.credentials_file)
-    problems = []
+    problems, written = [], 0
     if roll_month:
-        problems += run_roll(spreadsheet, roll_month, args.dry_run)
+        found, count = run_roll(spreadsheet, roll_month, args.dry_run)
+        problems, written = problems + found, written + count
     if freeze_month:
-        problems += run_freeze(spreadsheet, freeze_month, now, args.dry_run, args.force)
-    if args.dry_run:
+        found, count = run_freeze(spreadsheet, freeze_month, now, args.dry_run, args.force)
+        problems, written = problems + found, written + count
+    return exit_code(problems, written, now, args.mode, args.dry_run)
+
+
+def exit_code(problems, written, now, mode, dry_run):
+    """1 marks the run failed (GitHub emails). The schedule runs every 30 minutes,
+    so in auto mode a problem fails the run only when this run wrote something or
+    in REPORT_HOUR; otherwise a lasting problem would email every half hour."""
+    if dry_run or not problems:
         return 0  # a preview only reports; WARN lines above list what a real run would flag
-    return 1 if problems else 0
+    if mode != "auto" or written or now.hour == REPORT_HOUR:
+        return 1
+    print(f"（問題只記在紀錄裡；每天 {REPORT_HOUR}:00 那次或有寫入時才標示失敗並寄信）")
+    return 0
 
 
 if __name__ == "__main__":

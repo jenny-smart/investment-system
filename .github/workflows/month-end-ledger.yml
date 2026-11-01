@@ -2,7 +2,8 @@ name: Month-end ledger freeze and roll
 run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
 
 on:
-  # cron-job.org dispatches this daily at 08:20, 15:20 and 22:20 Asia/Taipei.
+  # cron-job.org dispatches this at :10/:40 (right after the fund NAV sync at
+  # :00/:30) on days 28-31 and 1-10, Asia/Taipei: 10,40 * 1-10,28-31 * *
   # auto: from the 30th (last day in February) to the 10th of the next month,
   # freeze Jennyall blocks whose 總覽 price date is the month's last trading day
   # (after month end, missing ones are scaled to the looked-up month-end NAV);

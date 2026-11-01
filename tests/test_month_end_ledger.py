@@ -144,9 +144,9 @@ class FreezeTests(unittest.TestCase):
         now = datetime(2026, 10, 31, 9, tzinfo=TZ)
         plan = plan_freeze(COLUMN_A, formulas, values, 181, OVERVIEW, OCT, now)
         written = {u["range"]: u["values"][0][0] for u in plan.updates}
-        # 10/31 is the month's last day, so 大華's rate is frozen while its NAV waits.
+        # 10/31 09:00 is before 16:00, so 大華's rate is not frozen yet while its NAV waits.
         self.assertEqual(written, {"GA10": -375195, "FZ11": 25800000, "GA11": 28570416.7,
-                                   "GA19": 32.49, "FZ65": 6027000, "GA66": 0})
+                                   "FZ65": 6027000, "GA66": 0})
         self.assertIn("台股", plan.done)
         self.assertEqual([label for label, _ in plan.waiting], ["渣打-基金大華"])
         self.assertIn("64:67 列", plan.frozen)
@@ -248,12 +248,37 @@ class BackfillTests(unittest.TestCase):
         self.assertEqual(later.backfill, [])
         self.assertTrue(any("查不到歷史淨值" in r for _, r in later.waiting))
 
-    def test_rates_wait_for_the_last_day(self):
+    def test_rates_wait_for_the_last_day_afternoon(self):
         formulas = grid({(19, 1): "='總覽'!$R$2", (21, 1): "='渣打-美金'!$M4*GA19"})
         values = grid({(19, 1): 32.49, (21, 1): 1})
-        plan = plan_freeze(COLUMN_A, formulas, values, 181, OVERVIEW, OCT,
-                           datetime(2026, 10, 30, 22, tzinfo=TZ))
-        self.assertEqual(plan.updates, [])
+        at = lambda *a: plan_freeze(COLUMN_A, formulas, values, 181, OVERVIEW, OCT,
+                                    datetime(*a, tzinfo=TZ)).updates
+        self.assertEqual(at(2026, 10, 30, 22), [])
+        self.assertEqual(at(2026, 10, 31, 15, 59), [])
+        self.assertEqual([u["range"] for u in at(2026, 10, 31, 16)], ["GA19"])
+
+    def test_already_scaled_cell_is_not_scaled_again(self):
+        formulas = grid({(20, 1): "=GA21-FY21", (21, 1): 1037890.0})   # GA21 already a value
+        values = grid({(20, 1): 0, (21, 1): 1037890.0})
+        overview = [list(line) for line in OVERVIEW]
+        overview[18] = ["大華銀新加坡房地產收益基金", 46328, 5.6, "", "", 1037890]
+        prices = {"大華銀新加坡房地產收益基金": [(date(2026, 11, 2), 5.6), (date(2026, 10, 30), 5.46)]}
+        plan = plan_freeze(COLUMN_A, formulas, values, 181, overview, OCT, self.NOW,
+                           history=self.history(prices))
+        self.assertEqual(plan.backfill, [])
+        self.assertTrue(any("已換算" in r for _, r in plan.waiting))
+
+
+class ExitCodeTests(unittest.TestCase):
+    def test_lasting_problems_report_once_a_day(self):
+        from month_end_ledger import exit_code
+        at = lambda h: datetime(2026, 11, 6, h, 10, tzinfo=TZ)
+        self.assertEqual(exit_code(["x"], 0, at(14), "auto", False), 0)
+        self.assertEqual(exit_code(["x"], 0, at(8), "auto", False), 1)
+        self.assertEqual(exit_code(["x"], 3, at(14), "auto", False), 1)    # wrote this run
+        self.assertEqual(exit_code(["x"], 0, at(14), "freeze", False), 1)  # manual runs always report
+        self.assertEqual(exit_code(["x"], 3, at(8), "auto", True), 0)      # preview
+        self.assertEqual(exit_code([], 3, at(8), "auto", False), 0)
 
 
 class RollTests(unittest.TestCase):
