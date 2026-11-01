@@ -60,10 +60,10 @@
 
 Actions → **Month-end ledger freeze and roll** → **Run workflow**：
 
-- `mode`：`auto`（依日期）、`freeze`（立即檢查並固定）、`roll`（立即切換總覽）、`prices`（只列出上個月或 `month` 的月底淨值，不改試算表；用來確認查得到）
+- `mode`：`auto`（依日期）、`freeze`（立即檢查並固定）、`roll`（立即切換總覽）、`prices`（只列出 `month` 的月底淨值與各來源抓到的日期範圍，不改試算表；空白時取已確定的最近月份：6 日起上個月，之前上上個月）
 - `month`：例如 `2026/10`；空白時 freeze 取目前檢查中的月份（不在期間則上個月），roll 取本月
 - `force`：freeze 時不檢查日期、不查月底淨值，全部用現值固定（只在查不到歷史淨值時才需要）
-- `dry_run`：只預覽
+- `dry_run`：只預覽（警告照樣列出，但不標示失敗）
 
 本機：
 

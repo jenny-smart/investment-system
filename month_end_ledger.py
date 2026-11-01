@@ -492,7 +492,13 @@ class PriceHistory:
     def __init__(self, month):
         self.month = month
         self.cache = {}
+        self.notes = {}   # name -> ["鉅亨 5 筆 10/24–10/30", ...] for diagnostics
         self.session = None
+
+    def note(self, name, source, points):
+        days = sorted(d for d, _ in points)
+        span = f"{days[0]:%m/%d}–{days[-1]:%m/%d}" if days else "無資料"
+        self.notes.setdefault(name, []).append(f"{source} {len(points)} 筆 {span}")
 
     def __call__(self, kind, name):
         key = (kind, name)
@@ -521,24 +527,29 @@ class PriceHistory:
                 f"https://fund.api.cnyes.com/fund/api/v1/funds/{encoded}/nav?format=table&page={page}",
                 headers=headers, timeout=15)
             if response.status_code != 200:
+                self.notes.setdefault(name, []).append(f"鉅亨第 {page} 頁 HTTP {response.status_code}")
                 break
             found = parse_cnyes_history(response.json())
             points += found
             if not found or min(d for d, _ in found) <= end:
                 break
+        self.note(name, "鉅亨", points)
         if month_end_price(points, self.month):
             return points
         history_page = rule["pattern"].replace("0100", "0110")  # yp010000 -> yp011000 (淨值走勢)
         response = self.session.get(
             f"https://www.moneydj.com/funddj/yp/{history_page}.djhtm?a={rule['code']}",
             headers={**HEADERS, "Referer": "https://www.moneydj.com/"}, timeout=15)
+        found = []
         if response.status_code == 200:
             for encoding in ("big5", "cp950", "utf-8"):
                 try:
-                    points += parse_moneydj_history(response.content.decode(encoding))
+                    found = parse_moneydj_history(response.content.decode(encoding))
                     break
                 except UnicodeDecodeError:
                     continue
+        self.note(name, f"MoneyDJ(HTTP {response.status_code})", found)
+        points += found
         return points or None
 
     def us(self, ticker):
@@ -547,7 +558,9 @@ class PriceHistory:
         closes = yf.Ticker(ticker.strip().upper()).history(
             start=start.isoformat(), end=(datetime.now(TAIPEI).date() + timedelta(days=1)).isoformat(),
             auto_adjust=False)["Close"].dropna()
-        return [(index.date(), float(price)) for index, price in closes.items()] or None
+        points = [(index.date(), float(price)) for index, price in closes.items()]
+        self.note(ticker, "Yahoo", points)
+        return points or None
 
 
 # ---------------------------------------------------------------- I/O
@@ -683,11 +696,11 @@ def show_month_end_prices(spreadsheet, month):
             seen.add(fund.row)
             found = history(source.kind, fund.name)
             point = month_end_price(found or [], month)
+            sources = "；".join(history.notes.get(fund.name, [])) or "沒有對照代碼"
             if point:
-                print(f"  F{fund.row} {fund.name}: {point[0]:%Y/%m/%d} {point[1]:g}（共 {len(found)} 筆）")
+                print(f"  F{fund.row} {fund.name}: {point[0]:%Y/%m/%d} {point[1]:g}（{sources}）")
             else:
-                problems.append(f"F{fund.row} {fund.name}: 查不到 {month:%Y/%m} 月底淨值"
-                                f"（{len(found or [])} 筆）")
+                problems.append(f"F{fund.row} {fund.name}: 查不到 {month:%Y/%m} 月底淨值（{sources}）")
                 print(f"WARN {problems[-1]}")
     return problems
 
@@ -697,7 +710,7 @@ def main():
     parser.add_argument("--credentials-file", type=Path)
     parser.add_argument("--mode", choices=("auto", "freeze", "roll", "prices"), default="auto",
                         help="auto 依日期決定；freeze／roll 立即執行；prices 只列出月底淨值")
-    parser.add_argument("--month", help="月份 YYYY/M（預設：freeze 目前檢查中的月份或上個月，roll 本月，prices 上個月）")
+    parser.add_argument("--month", help="月份 YYYY/M（預設：freeze 目前檢查中的月份或上個月，roll 本月，prices 已確定的最近月份：6 日起上個月，之前上上個月）")
     parser.add_argument("--force", action="store_true", help="freeze 時不檢查日期，全部用現值固定")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -706,7 +719,9 @@ def main():
     today = now.date()
     previous = add_months(today.replace(day=1), -1)
     if args.mode == "prices":
-        month = parse_month(args.month) if args.month else previous
+        # Default to a month whose month-end price is surely final (a price after it exists).
+        settled = previous if today.day > LATE_AFTER_DAYS else add_months(previous, -1)
+        month = parse_month(args.month) if args.month else settled
         return 1 if show_month_end_prices(open_spreadsheet(args.credentials_file), month) else 0
     freeze_month, roll_month = auto_tasks(today)
     if args.mode == "freeze":
@@ -725,6 +740,8 @@ def main():
         problems += run_roll(spreadsheet, roll_month, args.dry_run)
     if freeze_month:
         problems += run_freeze(spreadsheet, freeze_month, now, args.dry_run, args.force)
+    if args.dry_run:
+        return 0  # a preview only reports; WARN lines above list what a real run would flag
     return 1 if problems else 0
 
 
