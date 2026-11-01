@@ -6,7 +6,7 @@ freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 �
     同時把當月 64:67 列（叔叔）兩欄換成值。已經是值的格子不動，可以重複執行。
 
     月底最後一天起，各區塊的匯率格先固定成月底匯率。
-    過了月底仍未固定（遇假日沒有最後一個平日的淨值、或排程沒跑到）時，向鉅亨／MoneyDJ
+    過了月底仍未固定（遇假日沒有最後一個平日的淨值、或排程沒跑到）時，向 MoneyDJ
     （基金）或 Yahoo（美股）查月底那天的淨值，以「現在市值 × 月底淨值 ÷ 現在淨值」
     換算月底市值後固定，不用手動處理。
 
@@ -462,20 +462,33 @@ def retarget(formulas, pattern, month_cols, new_col, first_row, column="B"):
 
 # ---------------------------------------------------------------- price history
 
-def parse_cnyes_history(payload):
-    from sync_fund_nav import parse_date as nav_date, valid_nav
+HISTORY_DAYS = 45   # history window before month end; dates outside it are page noise
+
+
+def in_window(points, month, today):
+    """Keep points from HISTORY_DAYS before month end up to today (drops stray page dates)."""
+    first = month_end(month) - timedelta(days=HISTORY_DAYS)
+    return sorted({(d, p) for d, p in points if first <= d <= today})
+
+
+def parse_moneydj_bcd(text):
+    """MoneyDJ chart data (tBCDNavList.djbcd): 'd1,d2,... v1,v2,...' (dates, then NAVs)."""
+    from sync_fund_nav import valid_nav
+    parts = str(text or "").split()
+    if len(parts) < 2:
+        return []
+    dates, navs = parts[0].split(","), parts[1].split(",")
     points = []
-    for item in ((payload or {}).get("data") or {}).get("items") or []:
-        nav = next((valid_nav(item.get(k)) for k in ("nav", "NAV", "navPrice", "net", "unitNav")
-                    if valid_nav(item.get(k))), None)
-        day = next((nav_date(item.get(k)) for k in ("tradeDate", "navDate", "date", "priceDate")
-                    if nav_date(item.get(k))), None)
-        if nav and day:
-            points.append((datetime.strptime(day, "%Y/%m/%d").date(), nav))
+    for day, nav in zip(dates, navs):
+        match = re.fullmatch(r"(20\d{2})[/-](\d{1,2})[/-](\d{1,2})", day.strip())
+        value = valid_nav(nav)
+        if match and value:
+            points.append((date(int(match[1]), int(match[2]), int(match[3])), value))
     return points
 
 
 def parse_moneydj_history(html):
+    """Date / NAV pairs from a MoneyDJ NAV table page."""
     from sync_fund_nav import valid_nav
     text = re.sub(r"<script\b[^>]*>.*?</script>", " ", html, flags=re.I | re.S)
     text = re.sub(r"<[^>]+>", " ", text).replace(",", "").replace("&nbsp;", " ")
@@ -487,12 +500,16 @@ def parse_moneydj_history(html):
 
 
 class PriceHistory:
-    """history(kind, name) for funds (鉅亨, then MoneyDJ) and US stocks (Yahoo)."""
+    """history(kind, name) for funds (MoneyDJ) and US stocks (Yahoo).
+
+    鉅亨 is not used: its API returns no data from GitHub Actions (the fund NAV
+    sync also always falls back to MoneyDJ there).
+    """
 
     def __init__(self, month):
         self.month = month
         self.cache = {}
-        self.notes = {}   # name -> ["鉅亨 5 筆 10/24–10/30", ...] for diagnostics
+        self.notes = {}   # name -> ["MoneyDJ 圖表 22 筆 09/22–10/30", ...] for diagnostics
         self.session = None
 
     def note(self, name, source, points):
@@ -510,46 +527,42 @@ class PriceHistory:
                 self.cache[key] = None
         return self.cache[key]
 
-    def fund(self, name):
+    def get_text(self, url):
         import requests
-        from sync_fund_nav import HEADERS, match_fund
-        import urllib.parse
+        from sync_fund_nav import HEADERS
+        self.session = self.session or requests.Session()
+        response = self.session.get(url, headers={**HEADERS, "Referer": "https://www.moneydj.com/"}, timeout=20)
+        if response.status_code != 200:
+            return response.status_code, ""
+        for encoding in ("utf-8", "big5", "cp950"):
+            try:
+                return 200, response.content.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return 200, response.content.decode("utf-8", "replace")
+
+    def fund(self, name):
+        from sync_fund_nav import match_fund
         rule = match_fund(name)
         if not rule:
             return None
-        self.session = self.session or requests.Session()
-        end = month_end(self.month)
+        today = datetime.now(TAIPEI).date()
+        start = month_end(self.month) - timedelta(days=HISTORY_DAYS)
+        sources = (
+            ("MoneyDJ 圖表", f"https://www.moneydj.com/funddj/bcd/tBCDNavList.djbcd"
+                            f"?a={rule['code']}&B={start:%Y-%m-%d}&C={today:%Y-%m-%d}", parse_moneydj_bcd),
+            # yp010000 / yp010001 (latest NAV) -> yp012000 / yp012001 (NAV table)
+            ("MoneyDJ 淨值表", f"https://www.moneydj.com/funddj/yp/{rule['pattern'].replace('0100', '0120')}"
+                              f".djhtm?a={rule['code']}", parse_moneydj_history),
+        )
         points = []
-        headers = {**HEADERS, "Referer": "https://fund.cnyes.com/", "Origin": "https://fund.cnyes.com"}
-        encoded = urllib.parse.quote(rule["cnyes_id"], safe="")
-        for page in range(1, 4):  # newest first; stop once month end is covered
-            response = self.session.get(
-                f"https://fund.api.cnyes.com/fund/api/v1/funds/{encoded}/nav?format=table&page={page}",
-                headers=headers, timeout=15)
-            if response.status_code != 200:
-                self.notes.setdefault(name, []).append(f"鉅亨第 {page} 頁 HTTP {response.status_code}")
+        for label, url, parse in sources:
+            status, text = self.get_text(url)
+            found = in_window(parse(text), self.month, today) if text else []
+            self.note(name, label if status == 200 else f"{label}(HTTP {status})", found)
+            points = sorted(set(points) | set(found))
+            if month_end_price(points, self.month):
                 break
-            found = parse_cnyes_history(response.json())
-            points += found
-            if not found or min(d for d, _ in found) <= end:
-                break
-        self.note(name, "鉅亨", points)
-        if month_end_price(points, self.month):
-            return points
-        history_page = rule["pattern"].replace("0100", "0110")  # yp010000 -> yp011000 (淨值走勢)
-        response = self.session.get(
-            f"https://www.moneydj.com/funddj/yp/{history_page}.djhtm?a={rule['code']}",
-            headers={**HEADERS, "Referer": "https://www.moneydj.com/"}, timeout=15)
-        found = []
-        if response.status_code == 200:
-            for encoding in ("big5", "cp950", "utf-8"):
-                try:
-                    found = parse_moneydj_history(response.content.decode(encoding))
-                    break
-                except UnicodeDecodeError:
-                    continue
-        self.note(name, f"MoneyDJ(HTTP {response.status_code})", found)
-        points += found
         return points or None
 
     def us(self, ticker):

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from month_end_ledger import (
     BACKFILL, INCOME_REF, LEDGER_REF, READY, WAIT, auto_tasks, find_blocks, last_weekday,
-    month_columns, month_end_price, overview_section, parse_cnyes_history, parse_moneydj_history,
+    in_window, month_columns, month_end_price, overview_section, parse_moneydj_bcd, parse_moneydj_history,
     plan_freeze, price_status, rate_cells, retarget,
 )
 
@@ -119,13 +119,19 @@ class HistoryTests(unittest.TestCase):
         self.assertIsNone(month_end_price([(date(2026, 11, 2), 5.5)], OCT))
 
     def test_parse_sources(self):
-        payload = {"data": {"items": [{"tradeDate": 1793548800, "nav": "5.50"},
-                                      {"tradeDate": 1793289600, "nav": "5.46"}]}}
-        self.assertEqual(parse_cnyes_history(payload),
-                         [(date(2026, 11, 2), 5.5), (date(2026, 10, 30), 5.46)])
+        bcd = "2026/10/29,2026/10/30,2026/11/02 5.46,5.47,5.5"
+        self.assertEqual(parse_moneydj_bcd(bcd),
+                         [(date(2026, 10, 29), 5.46), (date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5)])
+        self.assertEqual(parse_moneydj_bcd(""), [])
         html = "<tr><td>2026/11/02</td><td>5.50</td></tr><tr><td>2026/10/29</td><td>5.46</td></tr>"
         self.assertEqual(parse_moneydj_history(html),
                          [(date(2026, 11, 2), 5.5), (date(2026, 10, 29), 5.46)])
+
+    def test_window_drops_stray_dates(self):
+        points = [(date(2026, 3, 12), 9.0), (date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5),
+                  (date(2026, 11, 30), 5.6)]
+        self.assertEqual(in_window(points, OCT, date(2026, 11, 3)),
+                         [(date(2026, 10, 30), 5.47), (date(2026, 11, 2), 5.5)])
 
 
 class FreezeTests(unittest.TestCase):
