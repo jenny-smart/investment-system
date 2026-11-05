@@ -26,14 +26,16 @@ cron-job.org 上 investment-system 的工作都可以停用。
 
 ## 更新記錄
 
-每個排程 workflow 最後一步執行 `run_log.py`，把結果寫進「更新記錄」試算表
-（`1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw` 的 gid `613651036` 分頁）：
+每個排程 workflow 最後一步執行 `run_log.py`，把結果寫進 investment-system-log 試算表
+（`1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw`）的「**investment-system執行Log**」分頁。
+所有排程都寫在這一張，不分年度；分頁不存在時自動建立。欄位跟 tool-system執行Log 相同：
+執行時間、系統（價格同步／總帳／App）、功能、執行方式（排程／手動／App）、區域、期別/日期、
+目標位置、來源檔案、結果、訊息（後面附這次 GitHub 執行的連結）、執行者。
 
 - 有寫入資料的成功執行（台股／美股／基金／匯率有變、月底固定、換欄）、快照、雷達 → 寫一筆「成功」
 - 失敗或取消 → 寫一筆；同一功能同一天同樣的錯誤只寫一次
 - 時段外略過、資料沒變、App 喚醒成功 → 不寫
-- 欄位依分頁第 1 列標題對應（執行時間、系統、功能、執行方式、期別/日期、目標位置、結果、訊息…）；
-  第 1 列空白時寫入各系統統一的執行 Log 標題。訊息後面附這次 GitHub 執行的連結。
+- 分頁標題沒有「時間、功能、結果」就不寫，只在執行紀錄印 WARN（避免寫進其他資料分頁）
 
 服務帳號（`INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON` 的 client_email）要設成這個試算表的**編輯者**。
 寫入失敗只會在執行紀錄印 WARN，不會讓排程失敗。

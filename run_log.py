@@ -1,11 +1,12 @@
-"""把排程執行結果寫進「更新記錄」試算表（每個 workflow 最後一步呼叫，永遠不讓執行失敗）。
+"""把排程執行結果寫進 investment-system-log 試算表的「investment-system執行Log」分頁
+（每個 workflow 最後一步呼叫，永遠不讓執行失敗）。
 
-位置：試算表 1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw 的 gid 613651036 分頁
-（可用環境變數 INVESTMENT_LOG_SPREADSHEET_ID、INVESTMENT_LOG_SHEET_GID 改）。
+investment-system 所有排程（台股、美股、基金／匯率、月底固定、App 喚醒、快照、雷達）都寫在
+這一張，不分年度；欄位跟 tool-system執行Log 相同。分頁不存在就自動建立並寫標題。
+（可用環境變數 INVESTMENT_LOG_SPREADSHEET_ID、INVESTMENT_LOG_SHEET_TITLE 改）
 服務帳號（INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON）要是這個試算表的編輯者。
 
-欄位依分頁第 1 列標題對應（執行時間、系統、功能、執行方式、期別/日期、目標位置、結果、訊息…，
-常見同義字也認得）；第 1 列空白時寫入各系統統一的執行 Log 標題。都對不上就不寫，只印警告。
+欄位依分頁第 1 列標題對應；標題裡沒有「時間、功能、結果」就不寫（避免寫進資料分頁），只印警告。
 
 寫哪些：
 - 有寫入資料的成功執行（輸出裡有 Updated／已寫入）、或加 --always 的功能 → 成功
@@ -28,9 +29,16 @@ from zoneinfo import ZoneInfo
 TAIPEI = ZoneInfo("Asia/Taipei")
 SYSTEM = "investment-system"
 LOG_SPREADSHEET_ID = os.environ.get("INVESTMENT_LOG_SPREADSHEET_ID", "1oCblr-zksaLsmK10i20PLMeDZtzk22N8QyyMuivwPOw")
-LOG_SHEET_GID = int(os.environ.get("INVESTMENT_LOG_SHEET_GID", "613651036"))
+LOG_SHEET_TITLE = os.environ.get("INVESTMENT_LOG_SHEET_TITLE", "investment-system執行Log")
 # 與 tool-system／orders-system 等系統的執行 Log 相同欄位
 HEADERS = ["執行時間", "系統", "功能", "執行方式", "區域", "期別/日期", "目標位置", "來源檔案", "結果", "訊息", "執行者"]
+# 「系統」欄填子系統（同 tool-system執行Log 的「日排程系統」「財務管理」）
+SUBSYSTEMS = {"台股價格": "價格同步", "美股價格": "價格同步", "基金淨值／匯率": "價格同步",
+              "App 喚醒": "App", "資產快照": "App", "台股雷達": "App"}
+
+
+def subsystem(function):
+    return SUBSYSTEMS.get(function, "總帳" if function.startswith("月底") else SYSTEM)
 ALIASES = {
     "time": ("執行時間", "時間", "更新時間", "記錄時間", "日期時間"),
     "system": ("系統", "系統名稱"),
@@ -122,7 +130,16 @@ def open_log_sheet():
     credentials = Credentials.from_service_account_info(
         json.loads(raw), scopes=["https://www.googleapis.com/auth/spreadsheets"])
     book = gspread.authorize(credentials).open_by_key(LOG_SPREADSHEET_ID)
-    return book.get_worksheet_by_id(LOG_SHEET_GID)
+    try:
+        return book.worksheet(LOG_SHEET_TITLE)
+    except gspread.WorksheetNotFound:
+        sheet = book.add_worksheet(LOG_SHEET_TITLE, rows=1000, cols=len(HEADERS))
+        sheet.update([HEADERS], "A1")
+        book.batch_update({"requests": [{"updateSheetProperties": {
+            "properties": {"sheetId": sheet.id, "gridProperties": {"frozenRowCount": 1}},
+            "fields": "gridProperties.frozenRowCount"}}]})
+        print(f"已建立「{LOG_SHEET_TITLE}」分頁")
+        return sheet
 
 
 def write(fields, sheet=None):
@@ -168,7 +185,7 @@ def main(argv=None):
             run_type += "（預覽）"
         server, repo, run_id = (os.environ.get(k, "") for k in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
         fields = {
-            "time": f"{now:%Y-%m-%d %H:%M:%S}", "system": SYSTEM, "function": args.function,
+            "time": f"{now:%Y-%m-%d %H:%M:%S}", "system": subsystem(args.function), "function": args.function,
             "run_type": run_type, "period": args.period or f"{now:%Y-%m-%d}", "target": args.target,
             "result": result_of(args.status), "message": summarize(output), "operator": "GitHub Actions",
             "link": f"{server}/{repo}/actions/runs/{run_id}" if run_id else "",
