@@ -86,7 +86,8 @@ def should_log(status, output, always=False):
 
 def build_row(header, fields):
     cols = column_map(header)
-    if not cols:
+    # 一定要有時間、功能、結果三欄才算執行記錄分頁（避免寫進股票明細之類的資料分頁）
+    if not {"time", "function", "result"} <= set(cols):
         return None
     row = [""] * len(header)
     for field, col in cols.items():
