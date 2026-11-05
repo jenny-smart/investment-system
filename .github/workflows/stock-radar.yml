@@ -1,8 +1,14 @@
 name: Taiwan Stock Daily Radar
+run-name: ${{ github.event_name == 'push' && github.event.head_commit.message || inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || 'Taiwan Stock Daily Radar' }}
 
 on:
-  # cron-job.org 於週一至週五 14:30（Asia/Taipei）觸發
+  # tool-system 主控表「排程設定」（invest_stock_radar）週一至五 14:30 派送
   workflow_dispatch:
+    inputs:
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
   push:
     branches: [main]
     paths:
@@ -30,7 +36,8 @@ jobs:
       - name: Run radar tests
         run: python -m pytest -q stock_radar/test_pipeline.py
       - name: Build daily radar
-        run: python -m stock_radar.pipeline
+        shell: bash
+        run: python -m stock_radar.pipeline 2>&1 | tee -a run.out
       - name: Commit generated data
         run: |
           if git diff --quiet -- data/stock_radar; then
@@ -42,3 +49,14 @@ jobs:
           git add data/stock_radar
           git commit -m "data: update Taiwan stock daily radar"
           git push
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python -c "import gspread" 2>/dev/null || pip install -q 'gspread>=6,<7' 'google-auth>=2,<3'
+          args=(--function "台股雷達" --target "data/stock_radar" --status "$JOB_STATUS" --output run.out --always)
+          python run_log.py "${args[@]}"

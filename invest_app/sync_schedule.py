@@ -5,7 +5,7 @@
 往前 5 分鐘是留給剛觸發、還在執行中的那一次。
 
 只有真的寫入的執行才算更新：workflow 的 run-name 標成 dry-run 的不算；auto 模式在
-時段外會直接略過，所以 auto（或舊的、沒有 run-name 的執行）只有在時段內開始才算。
+時段外會直接略過，所以 auto（或排程派送的 cloud-…、舊的沒有 run-name 的執行）只有在時段內開始才算。
 """
 from __future__ import annotations
 
@@ -50,8 +50,9 @@ class Job:
 
 JOBS = (
     Job("tw", "台股價格", "tw-stock-prices.yml", 10, tw_window, {"mode": "update"}),
-    Job("us", "美股價格", "us-stock-prices.yml", 30, us_window, {"mode": "update"}),
-    Job("fund", "基金淨值／匯率", "fund-nav.yml", 30, always),
+    # 2026-11 起由 tool-system「排程設定」每 10 分鐘派送（原本 cron-job.org 每 30 分鐘）
+    Job("us", "美股價格", "us-stock-prices.yml", 10, us_window, {"mode": "update"}),
+    Job("fund", "基金淨值／匯率", "fund-nav.yml", 10, always),
 )
 
 

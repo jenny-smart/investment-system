@@ -51,6 +51,9 @@ class RichartFxTests(unittest.TestCase):
         self.assertEqual(rows, {"USD": 2, "ZAR": 3, "CNY": 4, "JPY": 5})
         updates = build_updates("總覽", rows, {"USD": 31.9, "ZAR": 1.93, "CNY": 4.77, "JPY": 0.2})
         self.assertEqual([u["range"] for u in updates], ["'總覽'!R2", "'總覽'!R3", "'總覽'!R4", "'總覽'!R5"])
+        same = build_updates("總覽", rows, {"USD": 31.9, "ZAR": 1.93, "CNY": 4.77, "JPY": 0.2},
+                             {2: 31.9, 3: "1.93", 4: 4.8, 5: ""})
+        self.assertEqual([u["range"] for u in same], ["'總覽'!R4", "'總覽'!R5"])
 
 
 if __name__ == "__main__":

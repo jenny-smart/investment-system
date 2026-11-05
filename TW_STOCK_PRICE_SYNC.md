@@ -1,6 +1,6 @@
 # 台股股價排程
 
-cron-job.org 依台北時間觸發 GitHub Actions **Taiwan stock prices to Google Sheets**，
+tool-system 主控表「排程設定」依台北時間派送 GitHub Actions **Taiwan stock prices to Google Sheets**，
 在**開盤日 08:30–14:30 每 10 分鐘**更新一次兩個分頁的 J 欄股價：
 
 1. 讀取 A7 起 C 欄非空白的列。
@@ -42,8 +42,8 @@ Actions → **Taiwan stock prices to Google Sheets** → **Run workflow**：
 
 ## 美股（總覽 G/H）
 
-`sync_us_stock_prices.py` 由 cron-job.org 觸發，週一至週五台北時間 **21:00 至隔天 06:00 每 30 分鐘**更新，
+`sync_us_stock_prices.py` 由主控表「排程設定」派送，週一至週五台北時間 **21:00 至隔天 06:00 每 10 分鐘**更新，
 讀取 `總覽` F 欄「美股」標題下方到第一個空白列為止的代號（目前 `pypl`、`xyz`），
 以 Yahoo 最新價格寫入 G（報價日期，美東日期）與 H（價格）。
 
-所有排程與 cron-job.org、GitHub、Streamlit 的設定方式見 `SCHEDULES.md`。
+所有排程、GitHub、Streamlit 的設定方式見 `SCHEDULES.md`。

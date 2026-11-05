@@ -15,7 +15,7 @@ SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
 SHEET_IDS = (0, 1591931043)
 START_ROW = 7
 TIMESTAMP_CELL = "A2"
-# cron-job.org fires every 10 minutes from 08:00 to 14:50 on weekdays; only
+# tool-system 排程設定 dispatches every 10 minutes 08:30-14:30 on weekdays; only
 # 08:30-14:30 on TWSE trading days runs. The end allows up to 9 minutes of
 # runner delay for the 14:30 trigger.
 WINDOW_START = time(8, 30)

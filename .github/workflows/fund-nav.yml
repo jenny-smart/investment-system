@@ -1,15 +1,19 @@
 name: Fund NAV to Google Sheets
 # The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
-run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && 'dry-run' || 'update' }}
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || inputs.dry_run && 'dry-run' || 'update' }}
 
 on:
-  # cron-job.org dispatches this every 30 minutes (:00/:30), all day.
+  # tool-system 主控表「排程設定」（invest_fund_nav）全天每 10 分鐘派送；只寫有變的列。
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Only fetch NAVs and preview writes"
         type: boolean
         default: false
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
   pull_request:
     paths:
       - sync_fund_nav.py
@@ -38,22 +42,37 @@ jobs:
       - name: Unit tests
         run: python -m unittest tests.test_fund_nav tests.test_richart_fx
       - name: Update G/H on 總覽 (fund NAV)
+        shell: bash
         env:
           # Pull requests only preview; they never write to the sheet.
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            python sync_fund_nav.py --dry-run
+            python sync_fund_nav.py --dry-run 2>&1 | tee -a run.out
           else
-            python sync_fund_nav.py
+            python sync_fund_nav.py 2>&1 | tee -a run.out
           fi
       - name: Update R on 總覽 (FX rates)
         if: always()
+        shell: bash
         env:
           DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            python sync_richart_fx.py --dry-run
+            python sync_richart_fx.py --dry-run 2>&1 | tee -a run.out
           else
-            python sync_richart_fx.py
+            python sync_richart_fx.py 2>&1 | tee -a run.out
           fi
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          python -c "import gspread" 2>/dev/null || pip install -q 'gspread>=6,<7' 'google-auth>=2,<3'
+          args=(--function "基金淨值／匯率" --target "總覽 G/H（基金）、R（匯率）" --status "$JOB_STATUS" --output run.out)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python run_log.py "${args[@]}"

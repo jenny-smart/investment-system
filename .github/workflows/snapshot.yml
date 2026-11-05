@@ -1,8 +1,14 @@
 name: Portfolio Snapshot
+run-name: ${{ inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || 'Portfolio Snapshot' }}
 
 on:
-  # 由 cron-job.org 依 Asia/Taipei 08:00 / 20:00 觸發，避免 Runner 排程延遲。
+  # 由 tool-system 主控表「排程設定」（invest_snapshot）08:00 / 20:00 派送，避免 Runner 排程延遲。
   workflow_dispatch:
+    inputs:
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -29,7 +35,20 @@ jobs:
           playwright install --with-deps chromium
 
       - name: Wake up Streamlit app（強制重新計算，避免抓到舊資料）
-        run: python wake_app.py
+        shell: bash
+        run: python wake_app.py 2>&1 | tee -a run.out
 
       - name: Run snapshot
-        run: python record_snapshot.py
+        shell: bash
+        run: python record_snapshot.py 2>&1 | tee -a run.out
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python -c "import gspread" 2>/dev/null || pip install -q 'gspread>=6,<7' 'google-auth>=2,<3'
+          args=(--function "資產快照" --target "Supabase portfolio_snapshots" --status "$JOB_STATUS" --output run.out --always)
+          python run_log.py "${args[@]}"

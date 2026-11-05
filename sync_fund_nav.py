@@ -173,6 +173,14 @@ def plan_updates(rows, fetch):
     return updates, problems
 
 
+def unchanged(rows, item):
+    """Whether 總覽 G/H for this row already hold the fetched NAV date and value."""
+    row = (rows[item["row"] - 1] if item["row"] - 1 < len(rows) else []) + ["", "", ""]
+    sheet_nav = valid_nav(row[2])
+    return (parse_date(row[1]) == item["date"] and sheet_nav is not None
+            and abs(sheet_nav - float(item["nav"])) < 1e-9)
+
+
 def new_log_rows(existing, updates, stamp):
     """Rows to append to the NAV log: one per (fund name, NAV date) not logged yet."""
     seen = {(str(row[1]).strip(), str(row[0]).strip()) for row in existing if len(row) > 1}
@@ -223,14 +231,20 @@ def main():
     rows = sheet.get("F1:H200")
 
     session = requests.Session()
-    updates, problems = plan_updates(rows, lambda fund: fetch_quote(session, fund))
-    for item in updates:
-        print(f"F{item['row']} {item['name']} -> {item['date']} {item['nav']} ({item['source']})")
+    fetched, problems = plan_updates(rows, lambda fund: fetch_quote(session, fund))
+    # Every 10 minutes most NAVs are the same as last time: only write rows that changed.
+    updates = [item for item in fetched if not unchanged(rows, item)]
+    for item in fetched:
+        same = "（不變）" if item not in updates else ""
+        print(f"F{item['row']} {item['name']} -> {item['date']} {item['nav']} ({item['source']}){same}")
     for problem in problems:
         print(f"WARN {problem}")
-    if not updates:
+    if not fetched:
         print("No NAV fetched; no cells changed")
         return 1
+    if not updates:
+        print(f"All {len(fetched)} NAVs unchanged; no cells changed")
+        return 1 if problems else 0
     if args.dry_run:
         print(f"Dry run: {len(updates)} rows would be written")
         return 1 if problems else 0

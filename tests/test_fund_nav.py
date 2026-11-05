@@ -55,6 +55,15 @@ class FundNavTest(unittest.TestCase):
 
 
 class NavLogTest(unittest.TestCase):
+    def test_unchanged_rows_are_not_rewritten(self):
+        from sync_fund_nav import unchanged
+        rows = [["基金", "日期", "淨值"], ["A", "2026/10/30", "10.12"], ["B", "2026/10/29", "1,234.5"]]
+        self.assertTrue(unchanged(rows, {"row": 2, "date": "2026/10/30", "nav": 10.12}))
+        self.assertFalse(unchanged(rows, {"row": 2, "date": "2026/10/31", "nav": 10.12}))
+        self.assertFalse(unchanged(rows, {"row": 2, "date": "2026/10/30", "nav": 10.13}))
+        self.assertTrue(unchanged(rows, {"row": 3, "date": "2026/10/29", "nav": 1234.5}))
+        self.assertFalse(unchanged(rows, {"row": 9, "date": "2026/10/29", "nav": 1}))  # blank row
+
     def test_only_new_dates_are_logged(self):
         existing = [["2026/10/29", "大華銀"], ["2026/10/30", "東方匯理A美元"]]
         updates = [{"name": "大華銀", "date": "2026/10/29", "nav": 5.46, "source": "MoneyDJ"},

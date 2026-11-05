@@ -24,10 +24,21 @@ def find_rate_rows(q_column: list[list[str]]) -> dict[str, int]:
     return rows
 
 
-def build_updates(title: str, rows: dict[str, int], rates: dict[str, float]) -> list[dict]:
+def same_rate(current, rate) -> bool:
+    try:
+        return abs(float(str(current).replace(",", "")) - float(rate)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def build_updates(title: str, rows: dict[str, int], rates: dict[str, float],
+                  current: dict[int, object] | None = None) -> list[dict]:
+    """R-cell writes; with `current` (row -> R value now), rates already there are skipped."""
     quoted = "'" + title.replace("'", "''") + "'"
+    current = current or {}
     return [{"range": f"{quoted}!R{row}", "values": [[rates[code]]]}
-            for code, row in sorted(rows.items(), key=lambda item: item[1]) if code in rates]
+            for code, row in sorted(rows.items(), key=lambda item: item[1])
+            if code in rates and not same_rate(current.get(row), rates[code])]
 
 
 def main() -> int:
@@ -51,16 +62,20 @@ def main() -> int:
     print("Service account:", credentials.service_account_email)
     spreadsheet = gspread.authorize(credentials).open_by_key(SPREADSHEET_ID)
     sheet = next(s for s in spreadsheet.worksheets() if s.id == OVERVIEW_SHEET_ID)
-    rows = find_rate_rows(sheet.get(f"Q1:Q{min(sheet.row_count, 80)}"))
+    grid = sheet.get(f"Q1:R{min(sheet.row_count, 80)}", value_render_option="UNFORMATTED_VALUE")
+    rows = find_rate_rows([line[:1] for line in grid])
+    current = {i: (line + ["", ""])[1] for i, line in enumerate(grid, 1)}
     missing = set(SHEET_LABELS.values()) - set(rows)
     if missing:
         raise RuntimeError(f"總覽 Q 欄找不到 {sorted(missing)}；未寫入")
-    updates = build_updates(sheet.title, rows, rates)
+    updates = build_updates(sheet.title, rows, rates, current)
     print(json.dumps({"dry_run": args.dry_run, "updates": updates}, ensure_ascii=False))
     if updates and not args.dry_run:
         spreadsheet.values_batch_update({"valueInputOption": "RAW", "data": updates})
         print(f"Updated {len(updates)} R cells")
-    return 0 if len(updates) == len(SHEET_LABELS) else 1
+    if not updates:
+        print("All rates unchanged; no cells changed")
+    return 0 if set(SHEET_LABELS.values()) <= set(rates) else 1
 
 
 if __name__ == "__main__":
