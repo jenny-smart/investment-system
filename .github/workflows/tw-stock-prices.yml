@@ -1,10 +1,10 @@
 name: Taiwan stock prices to Google Sheets
 # The app reads this to tell real updates from previews (see invest_app/sync_schedule.py).
-run-name: ${{ inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
+run-name: ${{ inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || inputs.dry_run && 'dry-run' || inputs.mode || 'auto' }}
 
 on:
-  # cron-job.org dispatches this every 10 minutes, 08:00-14:50 Asia/Taipei on
-  # weekdays; auto mode only updates 08:30-14:30 on TWSE trading days.
+  # tool-system 主控表「排程設定」（invest_tw_prices）週一至五 08:30-14:30 每 10 分鐘派送；
+  # auto mode only updates 08:30-14:30 on TWSE trading days.
   workflow_dispatch:
     inputs:
       mode:
@@ -16,6 +16,10 @@ on:
         description: "Only look up prices and preview writes"
         type: boolean
         default: false
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -38,12 +42,26 @@ jobs:
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'yfinance>=0.2,<2'
       - name: Update J prices and A2 timestamp
+        shell: bash
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           MODE: ${{ inputs.mode || 'auto' }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            python sync_tw_stock_prices.py --mode "$MODE" --dry-run
+            python sync_tw_stock_prices.py --mode "$MODE" --dry-run 2>&1 | tee -a run.out
           else
-            python sync_tw_stock_prices.py --mode "$MODE"
+            python sync_tw_stock_prices.py --mode "$MODE" 2>&1 | tee -a run.out
           fi
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          python -c "import gspread" 2>/dev/null || pip install -q 'gspread>=6,<7' 'google-auth>=2,<3'
+          args=(--function "台股價格" --target "台股 J 欄、A2" --status "$JOB_STATUS" --output run.out)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python run_log.py "${args[@]}"

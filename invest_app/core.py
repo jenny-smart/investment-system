@@ -980,7 +980,7 @@ def fetch_fx_fallback(currency: str) -> tuple[float | None, str]:
 
 
 def fetch_richart_fx() -> tuple[dict[str, float], str]:
-    """Richart「賣外幣」匯率：讀總帳總覽 R 欄（由 Richart FX workflow 每半小時同步）。
+    """Richart「賣外幣」匯率：讀總帳總覽 R 欄（由基金淨值／匯率 workflow 每 10 分鐘同步）。
 
     Streamlit Cloud 連不到 richart.tw，所以不直接抓網頁；失敗回空 dict 與原因。
     不另外快取，跟著 load_sheet_grid 的 2 分鐘快取，R 欄更新後最慢 2 分鐘反映。

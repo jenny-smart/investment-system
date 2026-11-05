@@ -15,7 +15,7 @@ SPREADSHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"
 SHEET_TITLE = "總覽"
 SECTION_HEADER = "美股"
 TAIPEI = ZoneInfo("Asia/Taipei")
-# cron-job.org fires at :00/:30 from 21:00 to 06:30; only Mon-Fri 21:00 to the
+# tool-system 排程設定 dispatches every 10 minutes 21:00-06:00; only Mon-Fri 21:00 to the
 # following 06:00 runs. The end allows 9 minutes of runner delay for 06:00.
 WINDOW_START = time(21, 0)
 WINDOW_END = time(6, 10)

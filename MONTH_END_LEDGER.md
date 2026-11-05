@@ -1,6 +1,6 @@
 # 總帳月底固定與月初切換
 
-`month_end_ledger.py` + `.github/workflows/month-end-ledger.yml`，由 cron-job.org 在每月 28 日到下個月 10 日**每 30 分鐘**觸發（每小時 :10、:40，緊接在基金淨值排程 :00、:30 之後），auto 模式依日期決定要做什麼；總覽一出現月底淨值，約 40 分鐘內就會換成值。
+`month_end_ledger.py` + `.github/workflows/month-end-ledger.yml`，由 tool-system 主控表「排程設定」（功能代號 `invest_month_end_ledger`）在每月 1–10、28–31 日**每 10 分鐘**派送（與基金淨值同一時段），auto 模式依日期決定要做什麼；總覽一出現月底淨值，約 20 分鐘內就會換成值。
 
 ## 何時換成值
 
@@ -63,13 +63,10 @@
 
 月份欄位都依各分頁第 1 列的日期尋找，不寫死字母。已指向當月就不改。
 
-## cron-job.org 設定
+## 排程
 
-| 工作 | Workflow 檔 | Cron | Body |
-|---|---|---|---|
-| 總帳月底固定 | `month-end-ledger.yml` | `10,40 * 1-10,28-31 * *` | `{"ref":"main","inputs":{"mode":"auto"}}` |
-
-其餘設定（Header、通知）同 `SCHEDULES.md`。
+時間在 tool-system 主控表「排程設定」的 `invest_month_end_ledger` 那一列改（派送 `{"mode":"auto"}`）；
+原本 cron-job.org 的「總帳月底固定」工作可以停用。設定方式見 `SCHEDULES.md`。
 
 ## 手動執行
 
