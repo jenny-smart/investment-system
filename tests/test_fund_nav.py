@@ -54,5 +54,19 @@ class FundNavTest(unittest.TestCase):
         self.assertFalse(any("富蘭克林坦伯頓" in p for p in problems))
 
 
+class NavLogTest(unittest.TestCase):
+    def test_only_new_dates_are_logged(self):
+        existing = [["2026/10/29", "大華銀"], ["2026/10/30", "東方匯理A美元"]]
+        updates = [{"name": "大華銀", "date": "2026/10/29", "nav": 5.46, "source": "MoneyDJ"},
+                   {"name": "大華銀", "date": "2026/11/02", "nav": 5.5, "source": "MoneyDJ"},
+                   {"name": "東方匯理A美元", "date": "2026/10/30", "nav": 18.51},
+                   {"name": "東方匯理A美元 ", "date": "2026/11/02", "nav": 18.6},
+                   {"name": "東方匯理A美元", "date": "2026/11/02", "nav": 18.6}]   # F20 / F21 twins
+        self.assertEqual(nav.new_log_rows(existing, updates, "t"), [
+            ["2026/11/02", "大華銀", 5.5, "MoneyDJ", "t"],
+            ["2026/11/02", "東方匯理A美元", 18.6, "", "t"],
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()
