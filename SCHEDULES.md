@@ -14,7 +14,6 @@ GitHub 原生排程（workflow 裡的 `schedule`）是「盡量執行」，負�
 | App 喚醒 | `keepalive.yml` | `*/30 * * * *` | `{"ref":"main"}` | 全天 |
 | 台股雷達 | `stock-radar.yml` | `30 14 * * 1-5` | `{"ref":"main"}` | 週一至週五 14:30 |
 | 資產快照（既有） | `snapshot.yml` | `0 8,20 * * *` | `{"ref":"main"}` | 08:00、20:00 |
-| 月底轉值／月初換欄 | `monthly-roll.yml` | `10,50 0,8,12,16,20,23 * * *` | `{"ref":"main","inputs":{"job":"auto"}}` | 月底 23:50 股票轉值；每月 1～7 日基金淨值到月底後轉值、1 日換欄（見 `MONTHLY_ROLL.md`） |
 | ~~Richart 匯率~~（已停用） | `richart-fx.yml` | — | — | 匯率改由「基金淨值／匯率」每 30 分鐘一併更新；此 workflow 保留供手動執行 |
 
 時段外的觸發由程式自己略過（`auto` 模式），所以 cron 可以寫得比較寬。
@@ -55,7 +54,7 @@ cron-job.org 現有的台股工作已經有一組 token；可以沿用舊的，�
 4. **Notifications**：勾選 **execution of the cronjob fails**（以及 **succeeds again after failure**），失敗會寄信。
 5. 存檔後按 **Test run**，回應碼是 **204** 就代表成功；到 GitHub → **Actions** 會看到一筆新的執行。
 
-要新增：美股價格、基金淨值／匯率、App 喚醒、台股雷達、月底轉值／月初換欄。
+要新增：美股價格、基金淨值／匯率、App 喚醒、台股雷達。
 台股價格若還沒建，照第一列設定；舊的 `8631524`、`8631529`、`8593700` 請停用或刪除。
 
 ## 三、GitHub：執行失敗通知
@@ -85,3 +84,7 @@ app 用 token 讀取各 workflow 最後成功時間、顯示「資料更新狀�
   太舊或無法判斷時改為 app 即時抓價，畫面標示「總覽未更新，使用即時價」。
 - 太舊時 app 會自動觸發一次更新（同一項 15 分鐘內只觸發一次），也可以按「立即更新」。
 - 匯率一律讀總覽 R 欄，最慢 2 分鐘反映。台股價格 app 仍用交易所即時報價（比 10 分鐘排程更即時）。
+
+## 月底轉值／月初換欄（不走 cron-job.org）
+
+`monthly-roll.yml` 由 tool-system 主控表「排程設定」分頁派送（系統名稱 `investment-system`，功能代號 `invest_month_end`、`invest_fund_freeze`、`invest_month_roll`），時間在那張表改。詳見 `MONTHLY_ROLL.md`。

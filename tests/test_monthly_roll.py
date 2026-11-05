@@ -1,33 +1,45 @@
 import unittest
 from datetime import datetime
 
-from monthly_roll import (TAIPEI, auto_jobs, find_layout, find_refs, fund_deadline, fund_navs_ready,
-                          is_live, last_business_day, month_key, parse_header_month, plan_freeze,
-                          plan_roll, row_kind)
+from monthly_roll import (TAIPEI, auto_jobs, default_month, find_layout, find_refs, fund_deadline,
+                          fund_navs_ready, last_business_day, ledger_layout, month_key, parse_header_month,
+                          parse_rows, plan_freeze, plan_roll, row_kind, slot_time)
 
 SEP, OCT, NOV, DEC, JAN = (month_key(2026, 9), month_key(2026, 10), month_key(2026, 11),
                            month_key(2026, 12), month_key(2027, 1))
+INVEST, EXTRA = [4, 5, 6, 7], [9, 10]
 
 
 def ledger():
-    """Jennyall: A labels; pairs (detail, subtotal-with-date) B/C=9月, D/E=10月, F/G=11月."""
+    """Jennyall like the real sheet: pairs (detail, subtotal) B/C=9月, D/E=10月, F/G=11月.
+    Row 1 dates on the subtotal column, row 3 dates on the detail column (must not be
+    taken as the date row). Invest rows 4–7 (台股, 基富通-台, 渣打-美股), extra rows 9–10."""
     values = [
         ["", "", "2026/9/1", "", "2026/10/1", "", "2026/11/1"],
-        ["加總", "", 100, "", 200, "", 300],
-        ["台股", 10, "", 20, "", 30, ""],
-        ["基金", 11, "", 21, "", 31, ""],
-        ["小計", "", 21, "", 41, "", 61],
-        ["零用金-淨值", 5, "", 5, "", 5, ""],
-        ["台新銀行", 6, 11, 6, 11, 6, 11],
+        ["", "", 100, "", 200, "", 300],
+        ["", "2026/9/1", -1, "2026/10/1", -2, "2026/11/1", -3],
+        ["台股", 10, 11, 20, 21, 30, 31],
+        ["", 1, 2, 3, 4, 5, 6],
+        ["基富通-台", 12, 13, 22, 23, 32, 33],
+        ["渣打-美股", 14, 15, 24, 25, 34, 35],
+        ["零用金-淨值", 0, 0, 0, 0, 0, 0],
+        ["匯率", 7, 8, 9, 10, 11, 12],
+        ["", 1, 1, 2, 2, 3, 3],
     ]
     formulas = [row[:] for row in values]
-    formulas[2][3] = "=總覽!H12"                 # 10月 台股: live
-    formulas[3][3] = "=GOOGLEFINANCE(\"0050\")"  # 10月 基金: live
-    formulas[4][4] = "=SUM(D3:D4)"              # same-sheet sum stays
-    formulas[2][1] = 10                         # 9月 already frozen
-    formulas[5][3] = "='2026細帳'!C5"           # bank row: out of scope
-    formulas[2][5] = "=總覽!H12"                 # 11月 (carried forward)
+    for r in (4, 5, 6, 7, 9, 10):          # every month cell in those rows is a formula
+        for c in range(1, 7):
+            formulas[r - 1][c] = f"=X{r}C{c}"
+    formulas[5][2] = 13                    # 9月 基富通-台 already a value
+    formulas[7][4] = "='2026細帳'!C5"      # row 8: outside both ranges
     return values, formulas
+
+
+def frozen(kinds, month=OCT, values=None, formulas=None):
+    v, f = ledger()
+    v, f = values or v, formulas or f
+    changes, problems = plan_freeze(v, f, ledger_layout(v), month, kinds, INVEST, EXTRA)
+    return [(c["cell"], c["kind"]) for c in changes], problems
 
 
 class LayoutTests(unittest.TestCase):
@@ -40,11 +52,16 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(parse_header_month(46327), NOV)  # 2026/11/1 serial
         self.assertIsNone(parse_header_month("台股"))
 
-    def test_right_anchored_pairs(self):
-        lay = find_layout(ledger()[0], "right")
+    def test_ledger_date_row_is_row_one(self):
+        lay = ledger_layout(ledger()[0])
         self.assertEqual(lay.header_row, 1)
         self.assertEqual([lay.month_of(c) for c in range(8)], [None, SEP, SEP, OCT, OCT, NOV, NOV, None])
         self.assertEqual(lay.offset(3), -1)
+
+    def test_parse_rows(self):
+        self.assertEqual(parse_rows("4:36")[:2], [4, 5])
+        self.assertEqual(len(parse_rows("4:36")), 33)
+        self.assertEqual(parse_rows("64-67,70"), [64, 65, 66, 67, 70])
 
     def test_left_anchored_blocks(self):
         rows = [["項目", "9月", "", "", "10月", "", "", "11月", "", ""]]
@@ -58,54 +75,52 @@ class RefTests(unittest.TestCase):
         f = "=SUM('2026細帳'!$D3:D9)+Jennyall!GA5&\"Jennyall!A1\""
         self.assertEqual([n for _, n in find_refs(f)], ["2026細帳", "Jennyall"])
 
-    def test_live(self):
-        self.assertTrue(is_live("=總覽!H3", "Jennyall"))
-        self.assertTrue(is_live("=googlefinance(\"AAPL\")", "Jennyall"))
-        self.assertFalse(is_live("=SUM(B3:B4)", "Jennyall"))
-        self.assertFalse(is_live("=Jennyall!B3", "Jennyall"))
-        self.assertFalse(is_live(123, "Jennyall"))
-
 
 class FreezeTests(unittest.TestCase):
-    def test_freezes_only_live_investment_cells_of_the_month(self):
-        values, formulas = ledger()
-        changes, problems = plan_freeze(values, formulas, find_layout(values, "right"), OCT)
-        self.assertEqual([(c["cell"], c["kind"], c["value"]) for c in changes],
-                         [("D3", "stock", 20), ("D4", "fund", 21)])
+    def test_month_end_freezes_stock_blocks_and_extra_rows(self):
+        cells, problems = frozen(("stock", "extra"))
+        self.assertEqual(cells, [("D4", "stock"), ("E4", "stock"), ("D5", "stock"), ("E5", "stock"),
+                                 ("D7", "stock"), ("E7", "stock"),
+                                 ("D9", "extra"), ("E9", "extra"), ("D10", "extra"), ("E10", "extra")])
         self.assertEqual(problems, [])
 
-    def test_stock_and_fund_rows_separately(self):
-        values, formulas = ledger()
-        lay = find_layout(values, "right")
-        self.assertEqual([c["cell"] for c in plan_freeze(values, formulas, lay, OCT, ("stock",))[0]], ["D3"])
-        self.assertEqual([c["cell"] for c in plan_freeze(values, formulas, lay, OCT, ("fund",))[0]], ["D4"])
+    def test_fund_blocks_only(self):
+        self.assertEqual(frozen(("fund",))[0], [("D6", "fund"), ("E6", "fund")])
+
+    def test_values_are_the_current_results(self):
+        v, f = ledger()
+        changes, _ = plan_freeze(v, f, ledger_layout(v), OCT, ("fund",), INVEST, EXTRA)
+        self.assertEqual([c["value"] for c in changes], [22, 23])
+
+    def test_already_frozen_cells_are_skipped(self):
+        self.assertEqual(frozen(("fund",), SEP)[0], [("B6", "fund")])
+
+    def test_rows_outside_ranges_untouched(self):
+        cells = [c for c, _ in frozen(("stock", "fund", "extra"))[0]]
+        self.assertFalse(any(c.endswith("8") for c in cells))
 
     def test_row_kind(self):
         self.assertEqual(row_kind("台股"), "stock")
-        self.assertEqual(row_kind("美股-渣打"), "stock")
-        self.assertEqual(row_kind("基富通"), "fund")
-        self.assertEqual(row_kind("渣打基金"), "fund")
-
-    def test_already_frozen_month_is_noop(self):
-        values, formulas = ledger()
-        self.assertEqual(plan_freeze(values, formulas, find_layout(values, "right"), SEP), ([], []))
+        self.assertEqual(row_kind("渣打-美股"), "stock")
+        self.assertEqual(row_kind("基富通-台"), "fund")
+        self.assertEqual(row_kind("渣打-基金大華"), "fund")
+        self.assertEqual(row_kind("富邦奈米投"), "fund")
 
     def test_error_values_are_kept_and_reported(self):
-        values, formulas = ledger()
-        values[2][3] = "#N/A"
-        changes, problems = plan_freeze(values, formulas, find_layout(values, "right"), OCT)
-        self.assertEqual([c["cell"] for c in changes], ["D4"])
+        v, f = ledger()
+        v[5][3] = "#N/A"
+        cells, problems = frozen(("fund",), values=v)
+        self.assertEqual(cells, [("E6", "fund")])
         self.assertEqual(len(problems), 1)
 
     def test_missing_month_raises(self):
-        values, formulas = ledger()
         with self.assertRaises(RuntimeError):
-            plan_freeze(values, formulas, find_layout(values, "right"), DEC)
+            frozen(("fund",), DEC)
 
 
 def detail_layouts():
     return {
-        "Jennyall": find_layout(ledger()[0], "right"),
+        "Jennyall": ledger_layout(ledger()[0]),
         "2026細帳": find_layout([["", "10月", "", "11月", "", "12月", ""]], "left", 2026),
         "2027細帳": find_layout([["", "1月", "", "2月", ""]], "left", 2027),
     }
@@ -189,27 +204,41 @@ class FundNavTests(unittest.TestCase):
         self.assertFalse(fund_navs_ready([["", "", "", "", "", "x", "", ""]], OCT)[0])
 
 
-class AutoTests(unittest.TestCase):
+class ScheduleTests(unittest.TestCase):
     def at(self, *args):
         return auto_jobs(datetime(*args, tzinfo=TAIPEI))
 
-    def test_month_end_freezes_stocks_late_evening_only(self):
-        self.assertEqual(self.at(2026, 10, 31, 23, 50), [("freeze-stock", OCT)])
+    def test_auto_month_end_late_evening_only(self):
+        self.assertEqual(self.at(2026, 10, 31, 23, 50), [("month-end", OCT)])
         self.assertEqual(self.at(2026, 10, 31, 23, 10), [])
         self.assertEqual(self.at(2026, 10, 30, 23, 50), [])
 
-    def test_first_week_checks_funds_then_rolls(self):
+    def test_auto_first_week(self):
         self.assertEqual(self.at(2026, 11, 1, 0, 10),
-                         [("freeze-stock", OCT), ("freeze-fund", OCT), ("roll", NOV)])
+                         [("month-end", OCT), ("fund", OCT), ("roll", NOV)])
         self.assertEqual(self.at(2027, 1, 1, 0, 10),
-                         [("freeze-stock", DEC), ("freeze-fund", DEC), ("roll", JAN)])
-        self.assertEqual(self.at(2026, 11, 3, 16, 10), [("freeze-fund", OCT), ("roll", NOV)])
+                         [("month-end", DEC), ("fund", DEC), ("roll", JAN)])
+        self.assertEqual(self.at(2026, 11, 3, 16, 10), [("fund", OCT), ("roll", NOV)])
         self.assertEqual(self.at(2026, 11, 8, 0, 10), [])
 
-    def test_fund_deadline_is_last_run_of_the_7th(self):
-        self.assertTrue(fund_deadline(datetime(2026, 11, 7, 23, 50, tzinfo=TAIPEI)))
-        self.assertFalse(fund_deadline(datetime(2026, 11, 7, 20, 10, tzinfo=TAIPEI)))
-        self.assertFalse(fund_deadline(datetime(2026, 11, 6, 23, 50, tzinfo=TAIPEI)))
+    def test_default_month(self):
+        t = lambda *a: datetime(*a, tzinfo=TAIPEI)
+        self.assertEqual(default_month("month-end", t(2026, 10, 31, 23, 50)), OCT)
+        self.assertEqual(default_month("month-end", t(2026, 11, 1, 0, 30)), OCT)
+        self.assertEqual(default_month("fund", t(2026, 11, 3, 9, 30)), OCT)
+        self.assertEqual(default_month("fund", t(2027, 1, 4, 9, 30)), DEC)
+        self.assertEqual(default_month("roll", t(2026, 11, 1, 0, 10)), NOV)
+
+    def test_fund_deadline_from_the_7th_23_00(self):
+        t = lambda *a: datetime(*a, tzinfo=TAIPEI)
+        self.assertTrue(fund_deadline(t(2026, 11, 7, 23, 30)))
+        self.assertFalse(fund_deadline(t(2026, 11, 7, 22, 30)))
+        self.assertFalse(fund_deadline(t(2026, 11, 6, 23, 30)))
+
+    def test_slot_time(self):
+        self.assertEqual(slot_time("20261031T2350-invest_month_end"),
+                         datetime(2026, 10, 31, 23, 50, tzinfo=TAIPEI))
+        self.assertIsNone(slot_time(""))
 
 
 if __name__ == "__main__":

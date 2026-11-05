@@ -1,21 +1,21 @@
 """Month-end / month-start upkeep of the 總帳 workbook.
 
-freeze  轉值：Jennyall 該月欄裡投資列（日期列以下、「零用金-淨值」以上）
-        還連到其他分頁的公式（例如 =總覽!H12、GOOGLEFINANCE）改成當下的數值，
-        這個月的投資市值就固定下來，不會再跟著之後的價格變。
-        股票列（A 欄含 台股／美股／股票）月底最後一天晚上轉值；
-        其他投資列（基金）等總覽 G 欄每檔基金的淨值日期都到了該月最後一個工作天
-        （通常是下一個工作天才公布）才轉值。
+轉值：Jennyall 該月的欄（例如 10 月 FZ、GA）把指定列的公式全部改成當下的數值，
+這個月的數字就固定下來，不會再跟著之後的價格變。
+  month-end  月底最後一天：第 4～36 列裡的股票（A 欄含 台股／美股／股票 的區塊）＋第 64～67 列
+  fund       每月 1～7 日：第 4～36 列裡其餘的基金區塊，等總覽 G 欄每檔基金的淨值日期
+             都到了上個月最後一個工作天（通常隔一個工作天才公布）才轉值；
+             7 日 23:00 以後仍沒到齊就用當下的值轉值並讓執行失敗提醒
 roll    月初：「總覽」裡參照 Jennyall、YYYY細帳 月份欄的公式，從上個月的欄改到本月的欄
         （同一月份區塊內相同位置；12 月→1 月時 2026細帳 換成 2027細帳）。
 
-Nothing depends on fixed addresses: month columns are found from the dated row of
-each referenced sheet, the same way asset_summary.py does. Every planned change is
-printed first; --dry-run stops there.
+排程由 tool-system 主控表「排程設定」派送（job＝month-end／fund／roll，帶 scheduled_slot）；
+也可用 auto 讓程式依日期自己判斷。月份欄依各分頁的日期列找，列號可用環境變數調整。
+每一格「原本 → 改成」都會先印出；--dry-run 只印不寫。
 
-  python monthly_roll.py auto                 # what the schedule runs
-  python monthly_roll.py freeze --month 2026/10 --dry-run
-  python monthly_roll.py freeze --month 2026/10 --only fund --wait-nav
+  python monthly_roll.py month-end --dry-run          # 1～15 日執行＝上個月，16 日以後＝本月
+  python monthly_roll.py fund --month 2026/10 --dry-run
+  python monthly_roll.py freeze --month 2026/10 --only stock,fund,extra --dry-run
   python monthly_roll.py roll --month 2026/11 --dry-run
 """
 from __future__ import annotations
@@ -31,25 +31,39 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
-from asset_summary import DEFAULT_SPREADSHEET_ID, col_index, col_letters, spreadsheet_key
+from asset_summary import DEFAULT_SPREADSHEET_ID, col_index, col_letters, date_row, spreadsheet_key
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 LEDGER_SHEET = "Jennyall"
 OVERVIEW_SHEET = "總覽"
-# 投資列的範圍：日期列下一列到這個標籤的上一列（銀行等非投資資產從這裡開始）。
-INVESTMENT_STOP_LABEL = "零用金-淨值"
 DETAIL_SHEET = re.compile(r"^(\d{4})細帳$")
-# 月底最後一天這個時間之後才轉值（排程 23:50 觸發）。
+# auto：月底最後一天這個時間之後才做月底轉值（排程 23:50 觸發）。
 FREEZE_AFTER = time(23, 45)
-# 月初 1～7 日都會檢查換欄與基金轉值，錯過的排程也會補上。
+# auto：月初 1～7 日都會檢查換欄與基金轉值，錯過的排程也會補上。
 ROLL_DAYS = range(1, 8)
-# 投資列 A 欄含這些字就算股票（月底轉值），其餘投資列算基金（等月底淨值）。
-STOCK_LABELS = tuple(filter(None, os.environ.get("MONTHLY_ROLL_STOCK_LABELS", "台股,美股,股票").split(",")))
-# 7 日最後一次排程還有基金淨值沒到月底，就用當下的值轉值並讓執行失敗提醒。
-FUND_DEADLINE_DAY = 7
+# 7 日這個時間以後基金淨值還沒到齊，就用當下的值轉值並讓執行失敗提醒。
+FUND_DEADLINE_DAY, FUND_DEADLINE_TIME = 7, time(23, 0)
 NAV_NAME_COL, NAV_DATE_COL = 5, 6  # 總覽 F（基金名稱）、G（淨值日期）
-# 這些函式即使不跨分頁也會跟著外部資料變，月底一併轉值。
-LIVE_FUNCTIONS = re.compile(r"\b(GOOGLEFINANCE|IMPORTRANGE|IMPORTXML|IMPORTHTML|IMPORTDATA|IMPORTFEED)\s*\(", re.I)
+
+
+def parse_rows(text):
+    """'4:36' or '4-36' or '64:67,70' -> [4, 5, ..., 36]."""
+    rows = []
+    for part in re.split(r"[,，]", text):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d+)\s*[:\-~]\s*(\d+)", part)
+        rows.extend(range(int(m[1]), int(m[2]) + 1) if m else [int(part)])
+    return rows
+
+
+# Jennyall 投資區（股票＋基金）與月底直接轉值的列，2026-11 與 Jenny 確認。
+INVEST_ROWS = parse_rows(os.environ.get("MONTHLY_ROLL_INVEST_ROWS", "4:36"))
+MONTH_END_ROWS = parse_rows(os.environ.get("MONTHLY_ROLL_MONTH_END_ROWS", "64:67"))
+# 投資區 A 欄含這些字的區塊算股票（月底轉值），其餘區塊算基金（等月底淨值）。
+STOCK_LABELS = tuple(filter(None, os.environ.get("MONTHLY_ROLL_STOCK_LABELS", "台股,美股,股票").split(",")))
+KIND_NAMES = {"stock": "股票", "fund": "基金", "extra": "月底列"}
 
 # Sheet!A1, 'Sheet name'!$A$1:B2, Sheet!A:A, Sheet!A1:A
 SHEET_PART = r"(?P<sheet>'(?:[^']|'')+'|[^\s'!(),;:+\-*/&=<>^\"{}]+)"
@@ -126,10 +140,12 @@ class MonthLayout:
         return None if key is None else col - self.anchors[key]
 
 
-def find_layout(values, side, default_year=None, max_rows=10):
-    """Pick the header row with the most distinct months among the first rows."""
+def find_layout(values, side, default_year=None, max_rows=10, row=None):
+    """Pick the header row with the most distinct months among the first rows
+    (or use `row`, 1-based, when the sheet's date row is known)."""
     best = None
-    for r, line in enumerate(values[:max_rows]):
+    candidates = [(row - 1, values[row - 1])] if row else list(enumerate(values[:max_rows]))
+    for r, line in candidates:
         anchors = {}
         for c, v in enumerate(line):
             key = parse_header_month(v, default_year)
@@ -190,56 +206,64 @@ def shift_cell(part, new_col):
     return f"{dollar}{col_letters(new_col)}{rest}"
 
 
-def is_live(formula, own_sheet):
-    if not str(formula).startswith("="):
-        return False
-    if LIVE_FUNCTIONS.search(formula):
-        return True
-    return any(name != own_sheet for _, name in find_refs(formula))
-
-
 # ── freeze (month end) ─────────────────────────────────────────────────────────
 
 def row_kind(label, stock_labels=STOCK_LABELS):
-    """'stock' for 台股／美股／股票 rows, otherwise 'fund'."""
+    """'stock' for 台股／美股／股票 blocks, otherwise 'fund'."""
     text = str(label or "")
     return "stock" if any(word in text for word in stock_labels) else "fund"
 
 
-def plan_freeze(values, formulas, layout, month, kinds=("stock", "fund"),
-                stop_label=INVESTMENT_STOP_LABEL, sheet=LEDGER_SHEET):
-    """Cells of `month`'s block in the investment rows whose formula still pulls live data.
+def ledger_layout(values):
+    """Jennyall: dates sit in row 1 on each month's subtotal (right) column."""
+    try:
+        row = date_row(values)
+    except RuntimeError:
+        return None
+    return find_layout(values, "right", row=row)
 
-    kinds limits it to stock and/or fund rows (see row_kind; a row with a blank label
-    takes the kind of the nearest labelled row above it).
+
+def plan_freeze(values, formulas, layout, month, kinds=("stock", "fund", "extra"),
+                invest_rows=None, month_end_rows=None, sheet=LEDGER_SHEET):
+    """Formulas in `month`'s columns of the chosen rows, to be replaced by their values.
+
+    invest_rows (default 4–36) split into stock / fund blocks by the A label (a blank A
+    takes the block above); month_end_rows (default 64–67) are 'extra'.
     Returns (changes, problems); a change is {"cell", "label", "kind", "formula", "value"}.
     """
+    invest_rows = INVEST_ROWS if invest_rows is None else invest_rows
+    month_end_rows = MONTH_END_ROWS if month_end_rows is None else month_end_rows
     if month not in layout.anchors:
         raise RuntimeError(f"{sheet} 找不到 {key_label(month)} 的月份欄")
-    stop = next((r for r, line in enumerate(values, 1)
-                 if r > layout.header_row and line and str(line[0]).strip() == stop_label), None)
-    if stop is None:
-        raise RuntimeError(f"{sheet} A 欄找不到「{stop_label}」，無法判斷投資列範圍")
-    width = max(len(line) for line in formulas) if formulas else 0
+    width = max((len(line) for line in formulas), default=0)
     cols = [c for c in range(width) if layout.month_of(c) == month]
-    changes, problems = [], []
+
+    def cell(grid, r, c):
+        return grid[r - 1][c] if r - 1 < len(grid) and c < len(grid[r - 1]) else ""
+
+    plan = []  # (row, label, kind)
     label, kind = "", "fund"
-    for row in range(layout.header_row + 1, stop):
-        a = str(values[row - 1][0]).strip() if row - 1 < len(values) and values[row - 1] else ""
+    for r in invest_rows:
+        a = str(cell(values, r, 0)).strip()
         if a:
             label, kind = a, row_kind(a)
+        plan.append((r, label, kind))
+    plan += [(r, str(cell(values, r, 0)).strip(), "extra") for r in month_end_rows]
+
+    changes, problems = [], []
+    for r, label, kind in plan:
         if kind not in kinds:
             continue
-        for col in cols:
-            f = formulas[row - 1][col] if row - 1 < len(formulas) and col < len(formulas[row - 1]) else ""
-            if not is_live(str(f), sheet):
+        for c in cols:
+            f = str(cell(formulas, r, c))
+            if not f.startswith("="):
                 continue
-            v = values[row - 1][col] if row - 1 < len(values) and col < len(values[row - 1]) else ""
-            addr = f"{col_letters(col)}{row}"
+            v = cell(values, r, c)
+            addr = f"{col_letters(c)}{r}"
             if isinstance(v, str) and v.startswith("#"):
                 problems.append(f"{addr} {f} 目前是錯誤值 {v}，保留公式未轉值")
                 continue
-            changes.append({"cell": addr, "label": label, "kind": kind, "formula": str(f), "value": v})
+            changes.append({"cell": addr, "label": label, "kind": kind, "formula": f, "value": v})
     return changes, problems
 
 
@@ -379,28 +403,42 @@ def plan_roll(overview_formulas, layouts, target, shift_all=False, ledger=LEDGER
 # ── schedule ───────────────────────────────────────────────────────────────────
 
 def auto_jobs(now):
-    """Which jobs the scheduled run does at `now` (Asia/Taipei): [(job, month key)].
+    """Which jobs an `auto` run does at `now` (Asia/Taipei): [(job, month key)].
 
-    freeze-stock: month end night (and the 1st as a catch-up).
-    freeze-fund:  1st–7th, only once the month-end NAVs are in (forced on the 7th, late).
-    roll:         1st–7th; a no-op once 總覽 already points at this month.
+    month-end: month end night (and the 1st as a catch-up).
+    fund:      1st–7th, only once the month-end NAVs are in (forced on the 7th, late).
+    roll:      1st–7th; a no-op once 總覽 already points at this month.
     """
     today = now.date()
     this = month_key(today.year, today.month)
     jobs = []
     last_day = calendar.monthrange(today.year, today.month)[1]
     if today.day == last_day and now.time() >= FREEZE_AFTER:
-        jobs.append(("freeze-stock", this))
+        jobs.append(("month-end", this))
     if today.day == 1:
-        jobs.append(("freeze-stock", this - 1))  # 補做：月底那次沒跑到
+        jobs.append(("month-end", this - 1))  # 補做：月底那次沒跑到
     if today.day in ROLL_DAYS:
-        jobs.append(("freeze-fund", this - 1))
+        jobs.append(("fund", this - 1))
         jobs.append(("roll", this))
     return jobs
 
 
+def default_month(job, now):
+    """roll → this month; freezes → last month during the 1st–15th, else this month."""
+    this = month_key(now.year, now.month)
+    if job == "roll":
+        return this
+    return this - 1 if now.day <= 15 else this
+
+
 def fund_deadline(now):
-    return now.date().day == FUND_DEADLINE_DAY and now.time() >= FREEZE_AFTER
+    return now.day >= FUND_DEADLINE_DAY and now.day <= 15 and now.time() >= FUND_DEADLINE_TIME
+
+
+def slot_time(slot):
+    """scheduled_slot from the router ('20261031T2350-key') -> Taipei datetime, or None."""
+    m = re.match(r"(\d{8}T\d{4})", slot or "")
+    return datetime.strptime(m[1], "%Y%m%dT%H%M").replace(tzinfo=TAIPEI) if m else None
 
 
 # ── Google Sheets I/O ──────────────────────────────────────────────────────────
@@ -423,14 +461,11 @@ def read_values(ws):
     return ws.get_values(value_render_option="UNFORMATTED_VALUE", date_time_render_option="FORMATTED_STRING")
 
 
-KIND_NAMES = {"stock": "股票", "fund": "基金"}
-
-
-def run_freeze(book, month, dry_run, kinds=("stock", "fund"), wait_for_nav=False, force=False):
+def run_freeze(book, month, dry_run, kinds=("stock", "fund", "extra"), wait_for_nav=False, force=False):
     """wait_for_nav: only freeze fund rows once fund_navs_ready (unless force)."""
     ws = book.worksheet(LEDGER_SHEET)
     values, formulas = read_values(ws), ws.get_values(value_render_option="FORMULA")
-    layout = find_layout(values, "right")
+    layout = ledger_layout(values)
     if not layout:
         raise RuntimeError(f"{LEDGER_SHEET} 找不到月份日期列")
     changes, problems = plan_freeze(values, formulas, layout, month, kinds)
@@ -442,7 +477,8 @@ def run_freeze(book, month, dry_run, kinds=("stock", "fund"), wait_for_nav=False
         if ready:
             print(f"  總覽 {checked} 檔基金淨值都已更新到 {target:%Y/%m/%d} 以後")
         elif force:
-            problems.append(f"已到 {FUND_DEADLINE_DAY} 日，仍有基金淨值沒更新到月底，直接用目前的值轉值")
+            problems.append(f"已過 {FUND_DEADLINE_DAY} 日 {FUND_DEADLINE_TIME:%H:%M}，仍有基金淨值沒更新到月底，"
+                            "直接用目前的值轉值")
             pending_lines = pending or ["總覽 F 欄找不到要同步的基金"]
             problems.extend(pending_lines)
         else:
@@ -459,7 +495,7 @@ def run_freeze(book, month, dry_run, kinds=("stock", "fund"), wait_for_nav=False
                         value_input_option="RAW")
         print(f"  已寫入 {len(changes)} 格")
     elif not changes:
-        print("  沒有還連著即時資料的格子（可能已轉值）")
+        print("  沒有公式要轉（可能已轉值）")
     return not problems
 
 
@@ -476,8 +512,8 @@ def run_roll(book, month, dry_run, shift_all=False):
         rows = book.worksheet(name).get("1:10", value_render_option="UNFORMATTED_VALUE",
                                         date_time_render_option="FORMATTED_STRING")
         m = DETAIL_SHEET.match(name)
-        layouts[name] = find_layout(rows, "right" if name == LEDGER_SHEET else "left",
-                                    default_year=int(m[1]) if m else None)
+        layouts[name] = (ledger_layout(rows) if name == LEDGER_SHEET
+                         else find_layout(rows, "left", default_year=int(m[1]) if m else None))
         lay = layouts[name]
         print(f"  {name}: " + ("沒有月份欄" if not lay else
               f"第 {lay.header_row} 列月份 {key_label(min(lay.anchors))}～{key_label(max(lay.anchors))}"))
@@ -508,39 +544,44 @@ def parse_month_arg(text):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("job", choices=["auto", "freeze", "roll"])
+    parser.add_argument("job", choices=["auto", "month-end", "fund", "freeze", "roll"])
     parser.add_argument("--month", type=parse_month_arg,
-                        help="freeze：要轉值的月份；roll：要換到的月份。預設本月")
-    parser.add_argument("--only", choices=["stock", "fund"], help="freeze 只轉股票列或只轉基金列")
+                        help="轉值：要轉值的月份（預設 1～15 日＝上個月，之後＝本月）；roll：要換到的月份（預設本月）")
+    parser.add_argument("--only", default="stock,fund,extra",
+                        help="freeze 要轉哪幾種列：stock（股票）、fund（基金）、extra（64～67 列），逗號分隔")
     parser.add_argument("--wait-nav", action="store_true",
                         help="freeze 基金列要等總覽基金淨值都更新到月底才轉值")
     parser.add_argument("--shift-all", action="store_true", help="roll 時連較舊月份的參照也一起往後移")
+    parser.add_argument("--slot", default="", help="排程設定派送時段（scheduled_slot），用它當執行時間")
     parser.add_argument("--dry-run", action="store_true", help="只列出會改的格子，不寫入")
     parser.add_argument("--spreadsheet", default=os.environ.get("ASSET_SPREADSHEET", DEFAULT_SPREADSHEET_ID))
     parser.add_argument("--credentials-file", type=Path)
     args = parser.parse_args(argv)
+    only = tuple(k for k in ("stock", "fund", "extra") if k in args.only.split(","))
+    if not only:
+        parser.error("--only 要是 stock、fund、extra 其中幾個")
 
-    now = datetime.now(TAIPEI)
+    now = slot_time(args.slot) or datetime.now(TAIPEI)
     if args.job == "auto":
         jobs = auto_jobs(now)
         if not jobs:
             print(f"{now:%Y/%m/%d %H:%M} 不是月底轉值或月初換欄的時間，略過")
             return 0
     else:
-        jobs = [(args.job, args.month if args.month is not None else month_key(now.year, now.month))]
+        jobs = [(args.job, args.month if args.month is not None else default_month(args.job, now))]
+    print(f"執行時間 {now:%Y/%m/%d %H:%M}（台北）")
 
     book = open_workbook(spreadsheet_key(args.spreadsheet), args.credentials_file)
     ok = True
     for job, month in jobs:  # freezes always come before roll
         try:
-            if job == "freeze":
-                kinds = (args.only,) if args.only else ("stock", "fund")
-                ok &= run_freeze(book, month, args.dry_run, kinds, wait_for_nav=args.wait_nav)
-            elif job == "freeze-stock":
-                ok &= run_freeze(book, month, args.dry_run, ("stock",))
-            elif job == "freeze-fund":
+            if job == "month-end":
+                ok &= run_freeze(book, month, args.dry_run, ("stock", "extra"))
+            elif job == "fund":
                 ok &= run_freeze(book, month, args.dry_run, ("fund",), wait_for_nav=True,
                                  force=fund_deadline(now))
+            elif job == "freeze":
+                ok &= run_freeze(book, month, args.dry_run, only, wait_for_nav=args.wait_nav)
             else:
                 ok &= run_roll(book, month, args.dry_run, args.shift_all)
         except Exception as exc:
