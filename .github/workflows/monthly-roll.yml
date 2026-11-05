@@ -1,0 +1,86 @@
+name: Monthly ledger roll (月底轉值 / 月初換欄)
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || inputs.dry_run && format('dry-run {0}', inputs.job) || inputs.job }}
+
+on:
+  # 由 tool-system 的 Cloud Schedule Router 依主控表「排程設定」派送（帶 scheduled_slot）：
+  #   invest_month_end   每月月底 23:50   job=month-end（4～36 列股票區塊＋64～67 列）
+  #   invest_fund_freeze 每月 1～7 日每小時 job=fund（基金淨值到月底才轉）
+  #   invest_month_roll  每月 1～7 日 00:10 job=roll（總覽換到本月欄）
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "month-end 月底轉值；fund 基金轉值（等淨值）；roll 月初換欄；freeze 手動轉值；auto 依日期判斷"
+        type: choice
+        options: [month-end, fund, roll, freeze, auto]
+        default: roll
+      month:
+        description: "轉值：要轉值的月份；roll：要換到的月份（YYYY/M，留空＝預設）"
+        type: string
+        default: ""
+      only:
+        description: "freeze 要轉哪幾種列：stock,fund,extra（extra＝64～67 列）"
+        type: string
+        default: "stock,fund,extra"
+      wait_nav:
+        description: "freeze 基金列要等總覽基金淨值都更新到月底才轉值"
+        type: boolean
+        default: false
+      shift_all:
+        description: "roll 時連較舊月份的參照也一起往後移"
+        type: boolean
+        default: false
+      dry_run:
+        description: "只列出會改的格子，不寫入"
+        type: boolean
+        default: false
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - monthly_roll.py
+      - tests/test_monthly_roll.py
+      - .github/workflows/monthly-roll.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-roll
+  cancel-in-progress: false
+
+jobs:
+  roll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3'
+      - name: Unit tests
+        run: python -m unittest tests.test_monthly_roll tests.test_asset_summary tests.test_fund_nav
+      - name: Run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          JOB: ${{ inputs.job }}
+          MONTH: ${{ inputs.month }}
+          ONLY: ${{ inputs.only }}
+          WAIT_NAV: ${{ inputs.wait_nav }}
+          SHIFT_ALL: ${{ inputs.shift_all }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          SLOT: ${{ inputs.scheduled_slot }}
+        run: |
+          args=("$JOB")
+          [ -n "$MONTH" ] && args+=(--month "$MONTH")
+          [ -n "$ONLY" ] && args+=(--only "$ONLY")
+          [ "$WAIT_NAV" = "true" ] && args+=(--wait-nav)
+          [ "$SHIFT_ALL" = "true" ] && args+=(--shift-all)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          [ -n "$SLOT" ] && args+=(--slot "$SLOT")
+          python monthly_roll.py "${args[@]}"

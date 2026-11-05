@@ -85,3 +85,7 @@ app 用 token 讀取各 workflow 最後成功時間、顯示「資料更新狀�
   太舊或無法判斷時改為 app 即時抓價，畫面標示「總覽未更新，使用即時價」。
 - 太舊時 app 會自動觸發一次更新（同一項 15 分鐘內只觸發一次），也可以按「立即更新」。
 - 匯率一律讀總覽 R 欄，最慢 2 分鐘反映。台股價格 app 仍用交易所即時報價（比 10 分鐘排程更即時）。
+
+## 月底轉值／月初換欄（不走 cron-job.org）
+
+`monthly-roll.yml` 由 tool-system 主控表「排程設定」分頁派送（系統名稱 `investment-system`，功能代號 `invest_month_end`、`invest_fund_freeze`、`invest_month_roll`），時間在那張表改。詳見 `MONTHLY_ROLL.md`。
