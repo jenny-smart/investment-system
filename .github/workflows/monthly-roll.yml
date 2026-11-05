@@ -1,0 +1,66 @@
+name: Monthly ledger roll (月底轉值 / 月初換欄)
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && format('dry-run {0}', inputs.job) || inputs.job }}
+
+on:
+  # cron-job.org dispatches this at 23:50 and 00:10 Asia/Taipei every day;
+  # `auto` decides whether today is month end (freeze) or the first week (roll).
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "auto = 依日期自動判斷；freeze = 月底轉值；roll = 月初換欄"
+        type: choice
+        options: [auto, freeze, roll]
+        default: auto
+      month:
+        description: "freeze：要轉值的月份；roll：要換到的月份（YYYY/M，留空 = 本月）"
+        type: string
+        default: ""
+      shift_all:
+        description: "roll 時連較舊月份的參照也一起往後移"
+        type: boolean
+        default: false
+      dry_run:
+        description: "只列出會改的格子，不寫入"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - monthly_roll.py
+      - tests/test_monthly_roll.py
+      - .github/workflows/monthly-roll.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-roll
+  cancel-in-progress: false
+
+jobs:
+  roll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3'
+      - name: Unit tests
+        run: python -m unittest tests.test_monthly_roll tests.test_asset_summary
+      - name: Run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          JOB: ${{ inputs.job }}
+          MONTH: ${{ inputs.month }}
+          SHIFT_ALL: ${{ inputs.shift_all }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=("$JOB")
+          [ -n "$MONTH" ] && args+=(--month "$MONTH")
+          [ "$SHIFT_ALL" = "true" ] && args+=(--shift-all)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python monthly_roll.py "${args[@]}"
