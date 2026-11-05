@@ -13,6 +13,8 @@ freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 �
 roll（每月 1 日）
     總覽 B2:B18 的 Jennyall!<欄> 換成當月小計欄（例：11 月 GA → GC），
     總覽 B40:B51 的 '每月收入'!<欄> 換成當月欄（例：11 月 AH → AI）。
+    Jennyall 當月兩欄第 40–57 列的 'YYYY細帳'!<欄> 換成細帳的當月欄
+    （例：12 月 '2026細帳'!$M:$M → $N:$N；1 月換成 '2027細帳'!$C:$C）。
 
 月份欄位都依第 1 列的日期尋找，不寫死欄位字母；區塊依 A 欄名稱尋找，中間插列也能抓到。
 """
@@ -41,6 +43,7 @@ BLOCK_ROWS = (2, 38)          # Jennyall rows holding the fund/stock blocks
 UNCLE_ROWS = (64, 67)         # frozen together with the month
 OVERVIEW_LEDGER_CELLS = "B2:B18"
 OVERVIEW_INCOME_CELLS = "B40:B51"
+DETAIL_ROWS = (40, 57)        # Jennyall rows that sum the year's 細帳 by month
 OVERVIEW_RANGE = "F1:K200"    # name, date, NAV/price, ..., K = 台幣市值
 NAV_COL, VALUE_COL = 2, 5     # offsets inside OVERVIEW_RANGE
 
@@ -434,6 +437,8 @@ def month_columns(row1):
     return found
 
 
+# '2026細帳'!$M:$M, '2026細帳'!M5, '2026細帳'!$M$2:$M — sheet year, then each side of the range
+DETAIL_REF = re.compile(r"'(\d{4})細帳'!(\$?)([A-Z]{1,3})(\$?\d*)(?::(\$?)([A-Z]{1,3})(\$?\d*))?")
 LEDGER_REF = re.compile(r"((?:'Jennyall'|Jennyall)!\$?)([A-Z]{1,3})(\$?\d+)")
 INCOME_REF = re.compile(r"('每月收入'!\$?)([A-Z]{1,3})(\$?\d+:\$?)([A-Z]{1,3})\b")
 
@@ -466,6 +471,102 @@ def retarget(formulas, pattern, month_cols, new_col, first_row, column="B"):
             updates.append({"range": f"{column}{first_row + offset}", "values": [[changed]],
                             "old": formula})
     return updates
+
+
+def detail_first_col(formulas_by_month, before=None):
+    """細帳's January column (0-based), learned from Jennyall's earlier month columns.
+
+    formulas_by_month: {(year, month): [formula, ...]} for the 40–57 rows of each month.
+    Every month's first 細帳 reference is that month's column, so column − (month − 1)
+    is January's; the most common answer wins. Months from `before` on are ignored
+    (they may still be copies of the previous month).
+    """
+    votes = {}
+    for (year, mon), formulas in formulas_by_month.items():
+        if before and (year, mon) >= before:
+            continue
+        for formula in formulas:
+            match = DETAIL_REF.search(str(formula)) if is_formula(formula) else None
+            if match:
+                jan = col_index(match.group(3)) - (mon - 1)
+                if jan >= 0:
+                    votes[jan] = votes.get(jan, 0) + 1
+    return max(votes, key=votes.get) if votes else None
+
+
+def retarget_detail(formulas, month, first_col, detail_cols, col_letter, first_row, sheet_cols=None):
+    """Point 'YYYY細帳' month-column references in one Jennyall column at `month`.
+
+    detail_cols: 0-based 細帳 columns that are month columns (Jan..Dec); others ($A
+    criteria) stay. sheet_cols: optional {(year, month): col} read from the target
+    year's 細帳 row 1, preferred over first_col + month − 1.
+    """
+    target = (sheet_cols or {}).get((month.year, month.month), first_col + month.month - 1)
+    new_sheet = f"'{month.year}細帳'"
+    new_letters = col_letters(target)
+    updates = []
+
+    def swap(match):
+        # Every 細帳 reference moves to the month's year sheet; only month columns change
+        # letters, so the criteria range ($A) follows to the new sheet unchanged.
+        _year, d1, c1, r1, d2, c2, r2 = match.groups()
+        text = f"{new_sheet}!{d1}{new_letters if col_index(c1) in detail_cols else c1}{r1}"
+        if c2:
+            text += f":{d2}{new_letters if col_index(c2) in detail_cols else c2}{r2}"
+        return text
+
+    for offset, line in enumerate(formulas):
+        formula = str(line[0]) if line else ""
+        if not is_formula(formula):
+            continue
+        changed = DETAIL_REF.sub(swap, formula)
+        if changed != formula:
+            updates.append({"range": f"{col_letter}{first_row + offset}", "values": [[changed]], "old": formula})
+    return updates
+
+
+def roll_detail_refs(spreadsheet, month, ledger_cols, dry_run):
+    """Jennyall's month columns, rows 40–57: 'YYYY細帳' refs → the month's 細帳 column."""
+    key = (month.year, month.month)
+    ledger = spreadsheet.worksheet(LEDGER_SHEET)
+    first, last = DETAIL_ROWS
+    if key not in ledger_cols:
+        return [f"{LEDGER_SHEET} 第 1 列找不到 {month:%Y/%m}"], 0
+    subtotal = ledger_cols[key]
+    cols = [subtotal - 1, subtotal]  # detail, subtotal
+    # Earlier months teach which 細帳 column is January (one read for every month).
+    grid = ledger.get(f"A{first}:{col_letters(max(ledger_cols.values()))}{last}", value_render_option="FORMULA")
+    history = {k: [grid_cell(grid, r, c) for r in range(1, len(grid) + 1) for c in (col - 1, col)]
+               for k, col in ledger_cols.items() if col >= 1}
+    sheet_name = f"{month.year}細帳"
+    titles = {ws.title for ws in spreadsheet.worksheets()}
+    if sheet_name not in titles:
+        return [f"找不到「{sheet_name}」分頁，{LEDGER_SHEET} 第 {first}–{last} 列沒有換細帳欄"], 0
+    sheet_cols = {k: c for k, c in month_columns(spreadsheet.worksheet(sheet_name).row_values(1)).items()
+                  if k[0] == month.year}
+    first_col = detail_first_col(history, before=key)
+    if len(sheet_cols) >= 12:
+        detail_cols = set(sheet_cols.values())
+        first_col = sheet_cols[(month.year, 1)]
+    elif first_col is not None:
+        detail_cols = set(range(first_col, first_col + 12))
+        sheet_cols = {}
+    else:
+        return [f"判斷不出細帳每個月在哪一欄（細帳第 1 列沒有月份日期、Jennyall 之前的月份也沒有細帳公式）"], 0
+    updates = []
+    for col in cols:
+        formulas = [[grid_cell(grid, r, col)] for r in range(1, last - first + 2)]
+        updates += retarget_detail(formulas, month, first_col, detail_cols, col_letters(col), first, sheet_cols)
+    target = sheet_cols.get(key, first_col + month.month - 1)
+    print(f"  {LEDGER_SHEET} {col_letters(cols[0])}{first}:{col_letters(cols[1])}{last} → "
+          f"{sheet_name} {col_letters(target)} 欄：{len(updates)} 格要改")
+    for u in updates:
+        print(f"    {u['range']}: {u['old']} → {u['values'][0][0]}")
+    if updates and not dry_run:
+        ledger.batch_update(strip_extra(updates), value_input_option="USER_ENTERED")
+        print(f"  已寫入 {len(updates)} 格")
+        return [], len(updates)
+    return [], 0
 
 
 # ---------------------------------------------------------------- price history
@@ -647,13 +748,16 @@ def run_roll(spreadsheet, month, dry_run):
         for u in planned:
             print(f"    {u['range']}: {u['old']} → {u['values'][0][0]}")
         updates += planned
-    for problem in problems:
-        print(f"WARN {problem}")
+    written = 0
     if updates and not dry_run:
         overview.batch_update(strip_extra(updates), value_input_option="USER_ENTERED")
         print(f"  已寫入 {len(updates)} 格")
-        return problems, len(updates)
-    return problems, 0
+        written = len(updates)
+    detail_problems, detail_written = roll_detail_refs(spreadsheet, month, ledger_cols, dry_run)
+    problems += detail_problems
+    for problem in problems:
+        print(f"WARN {problem}")
+    return problems, written + detail_written
 
 
 def show_month_end_prices(spreadsheet, month):

@@ -303,5 +303,74 @@ class RollTests(unittest.TestCase):
                          "'每月收入'!$A$19:$A,$A44)")
 
 
+
+class DetailRefTests(unittest.TestCase):
+    """Jennyall rows 40–57: =sum(filter('2026細帳'!$M:$M, regexmatch('2026細帳'!$A:$A, $A40)))."""
+
+    @staticmethod
+    def f(col, row=40, year=2026):
+        return f"=sum(filter('{year}細帳'!${col}:${col}, regexmatch('{year}細帳'!$A:$A, $A{row})))"
+
+    def test_first_col_learned_from_earlier_months(self):
+        from month_end_ledger import detail_first_col
+        history = {(2026, 9): [self.f("K")], (2026, 10): [self.f("L"), 170644],
+                   (2026, 11): [self.f("M")], (2026, 12): [self.f("M")]}   # Dec is a copy of Nov
+        self.assertEqual(detail_first_col(history, before=(2026, 12)), 2)  # C = January
+        self.assertIsNone(detail_first_col({(2026, 10): [123]}))
+
+    def test_december_moves_to_n_and_keeps_criteria_column(self):
+        from month_end_ledger import retarget_detail
+        updates = retarget_detail([[self.f("M")], [""], [self.f("M", 42)]], date(2026, 12, 1), 2,
+                                  set(range(2, 14)), "GD", 40)
+        self.assertEqual([u["range"] for u in updates], ["GD40", "GD42"])
+        self.assertEqual(updates[0]["values"][0][0], self.f("N"))
+        self.assertIn("'2026細帳'!$A:$A", updates[1]["values"][0][0])
+
+    def test_january_switches_to_next_years_sheet(self):
+        from month_end_ledger import retarget_detail
+        updates = retarget_detail([[self.f("N")]], date(2027, 1, 1), 2, set(range(2, 14)), "GF", 40)
+        self.assertEqual(updates[0]["values"][0][0],
+                         "=sum(filter('2027細帳'!$C:$C, regexmatch('2027細帳'!$A:$A, $A40)))")
+
+    def test_already_current_is_unchanged(self):
+        from month_end_ledger import retarget_detail
+        self.assertEqual(retarget_detail([[self.f("M")], [170644]], date(2026, 11, 1), 2,
+                                         set(range(2, 14)), "GB", 40), [])
+
+    def test_header_dates_in_detail_sheet_win(self):
+        from month_end_ledger import retarget_detail
+        sheet_cols = {(2026, m): 3 + m for m in range(1, 13)}   # Jan in E
+        updates = retarget_detail([[self.f("O")]], date(2026, 12, 1), 4, set(sheet_cols.values()), "GD", 40,
+                                  sheet_cols)
+        self.assertEqual(updates[0]["values"][0][0], self.f("P"))
+
+    def test_roll_detail_refs_end_to_end(self):
+        from month_end_ledger import roll_detail_refs
+
+        class WS:
+            def __init__(self, title, grid=None, row1=None):
+                self.title, self.grid, self.row1, self.writes = title, grid or [], row1 or [], []
+            def get(self, rng, value_render_option=None):
+                return self.grid
+            def row_values(self, n):
+                return self.row1
+            def batch_update(self, data, **kw):
+                self.writes += data
+
+        # columns: A label, B/C = 2026/10 (detail, subtotal), D/E = 2026/11, F/G = 2026/12 (copy of Nov)
+        grid = [["零用金-淨值", self.f("L"), "", self.f("M"), "", self.f("M"), ""],
+                ["台新銀行", self.f("L", 41), "", self.f("M", 41), "", self.f("M", 41), ""]]
+        ledger = WS("Jennyall", grid)
+        detail = WS("2026細帳", row1=["項目", "合計"])
+        book = type("Book", (), {"worksheet": lambda self, n: ledger if n == "Jennyall" else detail,
+                                 "worksheets": lambda self: [ledger, detail]})()
+        cols = {(2026, 10): 2, (2026, 11): 4, (2026, 12): 6}
+        problems, written = roll_detail_refs(book, date(2026, 12, 1), cols, dry_run=False)
+        self.assertEqual((problems, written), ([], 2))
+        self.assertEqual([w["range"] for w in ledger.writes], ["F40", "F41"])
+        self.assertIn("'2026細帳'!$N:$N", ledger.writes[0]["values"][0][0])
+        problems, written = roll_detail_refs(book, date(2027, 1, 1), {**cols, (2027, 1): 8}, dry_run=True)
+        self.assertIn("2027細帳", problems[0])
+
 if __name__ == "__main__":
     unittest.main()
