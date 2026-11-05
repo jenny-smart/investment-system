@@ -1,8 +1,9 @@
 import unittest
 from datetime import datetime
 
-from monthly_roll import (TAIPEI, auto_jobs, find_layout, find_refs, is_live, month_key,
-                          parse_header_month, plan_freeze, plan_roll)
+from monthly_roll import (TAIPEI, auto_jobs, find_layout, find_refs, fund_deadline, fund_navs_ready,
+                          is_live, last_business_day, month_key, parse_header_month, plan_freeze,
+                          plan_roll, row_kind)
 
 SEP, OCT, NOV, DEC, JAN = (month_key(2026, 9), month_key(2026, 10), month_key(2026, 11),
                            month_key(2026, 12), month_key(2027, 1))
@@ -69,8 +70,21 @@ class FreezeTests(unittest.TestCase):
     def test_freezes_only_live_investment_cells_of_the_month(self):
         values, formulas = ledger()
         changes, problems = plan_freeze(values, formulas, find_layout(values, "right"), OCT)
-        self.assertEqual([(c["cell"], c["value"]) for c in changes], [("D3", 20), ("D4", 21)])
+        self.assertEqual([(c["cell"], c["kind"], c["value"]) for c in changes],
+                         [("D3", "stock", 20), ("D4", "fund", 21)])
         self.assertEqual(problems, [])
+
+    def test_stock_and_fund_rows_separately(self):
+        values, formulas = ledger()
+        lay = find_layout(values, "right")
+        self.assertEqual([c["cell"] for c in plan_freeze(values, formulas, lay, OCT, ("stock",))[0]], ["D3"])
+        self.assertEqual([c["cell"] for c in plan_freeze(values, formulas, lay, OCT, ("fund",))[0]], ["D4"])
+
+    def test_row_kind(self):
+        self.assertEqual(row_kind("台股"), "stock")
+        self.assertEqual(row_kind("美股-渣打"), "stock")
+        self.assertEqual(row_kind("基富通"), "fund")
+        self.assertEqual(row_kind("渣打基金"), "fund")
 
     def test_already_frozen_month_is_noop(self):
         values, formulas = ledger()
@@ -144,22 +158,58 @@ class RollTests(unittest.TestCase):
         self.assertEqual(changes[0]["new"], "=Jennyall!G2")
 
 
+class FundNavTests(unittest.TestCase):
+    NAME_A = "富蘭克林華美新興國家 新臺幣"
+    NAME_B = "柏瑞新興邊境"
+
+    def overview(self, date_a, date_b):
+        return [
+            ["", "", "", "", "", "基金", "日期", "淨值"],
+            ["", "", "", "", "", self.NAME_A, date_a, 10.1],
+            ["", "", "", "", "", self.NAME_B, date_b, 8.2],
+            ["", "", "", "", "", "美股", "", ""],
+            ["", "", "", "", "", "pypl", "2026/10/29", 70],  # not a fund, ignored
+        ]
+
+    def test_last_business_day_skips_weekend(self):
+        self.assertEqual(str(last_business_day(OCT)), "2026-10-30")  # 10/31 is a Saturday
+        self.assertEqual(str(last_business_day(NOV)), "2026-11-30")
+
+    def test_waits_until_every_fund_has_month_end_nav(self):
+        ready, pending, checked = fund_navs_ready(self.overview("2026/10/30", "2026/10/29"), OCT)
+        self.assertFalse(ready)
+        self.assertEqual(checked, 2)
+        self.assertEqual(len(pending), 1)
+        self.assertIn("F3", pending[0])
+
+    def test_ready_when_on_or_after_month_end(self):
+        self.assertTrue(fund_navs_ready(self.overview("2026/10/30", "2026/11/2"), OCT)[0])
+
+    def test_no_funds_found_is_not_ready(self):
+        self.assertFalse(fund_navs_ready([["", "", "", "", "", "x", "", ""]], OCT)[0])
+
+
 class AutoTests(unittest.TestCase):
     def at(self, *args):
         return auto_jobs(datetime(*args, tzinfo=TAIPEI))
 
-    def test_month_end_freezes_late_evening_only(self):
-        self.assertEqual(self.at(2026, 10, 31, 23, 50), [("freeze", OCT)])
+    def test_month_end_freezes_stocks_late_evening_only(self):
+        self.assertEqual(self.at(2026, 10, 31, 23, 50), [("freeze-stock", OCT)])
         self.assertEqual(self.at(2026, 10, 31, 23, 10), [])
         self.assertEqual(self.at(2026, 10, 30, 23, 50), [])
 
-    def test_first_day_catches_up_freeze_then_rolls(self):
-        self.assertEqual(self.at(2026, 11, 1, 0, 10), [("freeze", OCT), ("roll", NOV)])
-        self.assertEqual(self.at(2027, 1, 1, 0, 10), [("freeze", DEC), ("roll", JAN)])
-
-    def test_roll_retried_first_week(self):
-        self.assertEqual(self.at(2026, 11, 5, 0, 10), [("roll", NOV)])
+    def test_first_week_checks_funds_then_rolls(self):
+        self.assertEqual(self.at(2026, 11, 1, 0, 10),
+                         [("freeze-stock", OCT), ("freeze-fund", OCT), ("roll", NOV)])
+        self.assertEqual(self.at(2027, 1, 1, 0, 10),
+                         [("freeze-stock", DEC), ("freeze-fund", DEC), ("roll", JAN)])
+        self.assertEqual(self.at(2026, 11, 3, 16, 10), [("freeze-fund", OCT), ("roll", NOV)])
         self.assertEqual(self.at(2026, 11, 8, 0, 10), [])
+
+    def test_fund_deadline_is_last_run_of_the_7th(self):
+        self.assertTrue(fund_deadline(datetime(2026, 11, 7, 23, 50, tzinfo=TAIPEI)))
+        self.assertFalse(fund_deadline(datetime(2026, 11, 7, 20, 10, tzinfo=TAIPEI)))
+        self.assertFalse(fund_deadline(datetime(2026, 11, 6, 23, 50, tzinfo=TAIPEI)))
 
 
 if __name__ == "__main__":

@@ -2,8 +2,9 @@ name: Monthly ledger roll (月底轉值 / 月初換欄)
 run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.dry_run && format('dry-run {0}', inputs.job) || inputs.job }}
 
 on:
-  # cron-job.org dispatches this at 23:50 and 00:10 Asia/Taipei every day;
-  # `auto` decides whether today is month end (freeze) or the first week (roll).
+  # cron-job.org dispatches this at :10/:50 of 00, 08, 12, 16, 20, 23 Asia/Taipei;
+  # `auto` decides: month-end night freezes stocks, the 1st-7th freezes funds once
+  # their month-end NAVs are in and moves 總覽 to the new month.
   workflow_dispatch:
     inputs:
       job:
@@ -15,6 +16,15 @@ on:
         description: "freeze：要轉值的月份；roll：要換到的月份（YYYY/M，留空 = 本月）"
         type: string
         default: ""
+      only:
+        description: "freeze 只轉股票列或基金列（留空 = 兩種都轉）"
+        type: choice
+        options: ["", stock, fund]
+        default: ""
+      wait_nav:
+        description: "freeze 基金列要等總覽基金淨值都更新到月底才轉值"
+        type: boolean
+        default: false
       shift_all:
         description: "roll 時連較舊月份的參照也一起往後移"
         type: boolean
@@ -50,17 +60,21 @@ jobs:
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3'
       - name: Unit tests
-        run: python -m unittest tests.test_monthly_roll tests.test_asset_summary
+        run: python -m unittest tests.test_monthly_roll tests.test_asset_summary tests.test_fund_nav
       - name: Run
         if: github.event_name == 'workflow_dispatch'
         env:
           JOB: ${{ inputs.job }}
           MONTH: ${{ inputs.month }}
+          ONLY: ${{ inputs.only }}
+          WAIT_NAV: ${{ inputs.wait_nav }}
           SHIFT_ALL: ${{ inputs.shift_all }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           args=("$JOB")
           [ -n "$MONTH" ] && args+=(--month "$MONTH")
+          [ -n "$ONLY" ] && args+=(--only "$ONLY")
+          [ "$WAIT_NAV" = "true" ] && args+=(--wait-nav)
           [ "$SHIFT_ALL" = "true" ] && args+=(--shift-all)
           [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
           python monthly_roll.py "${args[@]}"
