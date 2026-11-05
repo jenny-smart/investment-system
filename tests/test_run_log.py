@@ -1,6 +1,6 @@
 import unittest
 
-from run_log import HEADERS, build_row, column_map, is_repeat, should_log, summarize, write
+from run_log import HEADERS, build_row, column_map, is_repeat, should_log, subsystem, summarize, write
 
 
 def fields(**kw):
@@ -65,6 +65,13 @@ class RunLogTests(unittest.TestCase):
         self.assertEqual(row, ["基金淨值／匯率", "2026-11-06 09:30:05", "成功",
                                "Updated 3 rows｜https://github.com/x/runs/1"])
         self.assertIsNone(build_row(["x", "y"], fields()))
+        stock_sheet = ["部位ID", "資料日期", "本人/媽媽", "券商", "市場", "股票代碼", "股票名稱", "幣別"]
+        self.assertIsNone(build_row(stock_sheet, fields()))
+
+    def test_subsystem(self):
+        self.assertEqual(subsystem("美股價格"), "價格同步")
+        self.assertEqual(subsystem("台股雷達"), "App")
+        self.assertEqual(subsystem("月底固定／月初切換總覽（auto）"), "總帳")
 
     def test_empty_sheet_gets_standard_headers(self):
         sheet = FakeSheet([])
