@@ -351,11 +351,8 @@ UNDO_MARK = "累計已回沖"
 
 
 def was_added_by_apply(record):
-    """那次 apply 有加到持倉累計股利的記錄：補登（source=ledger_note）＋確認入帳（備註「細帳備註確認」）。"""
-    note = str(record.get("note") or "")
-    if UNDO_MARK in note:
-        return False
-    return record.get("source") == SOURCE or "細帳備註確認" in note
+    """那次 apply 有加到持倉累計股利的記錄：只有補登（source=ledger_note）；已回沖過的不再扣。"""
+    return record.get("source") == SOURCE and UNDO_MARK not in str(record.get("note") or "")
 
 
 def undo_position_totals(sb, apply_changes):

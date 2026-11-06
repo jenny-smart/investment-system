@@ -76,9 +76,9 @@ class LedgerTests(unittest.TestCase):
 
 
 class YearTests(unittest.TestCase):
-    def test_undo_covers_confirmed_and_backfilled(self):
+    def test_undo_only_backfilled_once(self):
         self.assertTrue(was_added_by_apply({"source": "ledger_note", "note": "依 2026細帳備註補登"}))
-        self.assertTrue(was_added_by_apply({"source": "TWSE", "note": "TWSE 除權息預告｜2026細帳備註確認"}))
+        self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "TWSE 除權息預告｜2026細帳備註確認"}))
         self.assertFalse(was_added_by_apply({"source": "ledger_note", "note": "依 2026細帳備註補登｜累計已回沖"}))
         self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "自動掃描候選"}))
 
