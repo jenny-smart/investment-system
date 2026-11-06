@@ -23,7 +23,7 @@ from invest_app.core import (
     to_float,
     tw_now,
 )
-from invest_app.sync_status import render_sync_status
+from invest_app.sync_status import render_app_reads, render_sync_status
 
 
 OVERVIEW_ORDER = ["台股", "美股", "基富通", "渣打基金", "台新基金"]
@@ -397,6 +397,7 @@ def render_channel_overview_cards(enriched: pd.DataFrame, positions: pd.DataFram
     st.markdown('<div style="font-size:.85rem;color:#475569;margin:4px 0 8px">💱 即時匯率　'
                 + "　·　".join(fx_parts) + f"　（{source}）</div>", unsafe_allow_html=True)
     render_sync_status(SHEET_FETCHED_AT.get(OVERVIEW_SHEET_GID, ""))
+    render_app_reads()
 
     st.markdown("---")
 

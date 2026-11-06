@@ -1337,6 +1337,8 @@ def online_sheet_url(gid: str) -> str:
 
 # 各分頁實際下載的時間（只在快取過期重新下載時更新），顯示給使用者確認資料新舊
 SHEET_FETCHED_AT: dict[str, str] = {}
+# 其他外部資料實際下載的時間（"gas_dividend" 基金配息資料、"stock_dividend" 台股除權息公告）
+DATA_FETCHED_AT: dict[str, str] = {}
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -1439,6 +1441,7 @@ def _get_gas_data(fund_code: str) -> dict:
         return empty
 
     candidates = gas_fund_code_candidates(fund_code)
+    DATA_FETCHED_AT["gas_dividend"] = tw_now().strftime("%m/%d %H:%M:%S")
     result = empty
     for query_code in candidates:
         try:

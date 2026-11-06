@@ -9,6 +9,7 @@ import pandas as pd
 import requests
 import streamlit as st
 from invest_app.core import (
+    DATA_FETCHED_AT,
     PRICE_REQUEST_TIMEOUT_SECONDS,
     TW_PRESETS,
     TW_STOCK_EXCHANGES,
@@ -182,6 +183,7 @@ def stock_cash_dividend_total_for_year(year: int | None = None) -> float:
 def fetch_twse_stock_dividend_announcements() -> list[dict[str, Any]]:
     url = "https://openapi.twse.com.tw/v1/opendata/t187ap45_L"
     try:
+        DATA_FETCHED_AT["stock_dividend"] = tw_now().strftime("%m/%d %H:%M:%S")
         response = requests.get(url, timeout=PRICE_REQUEST_TIMEOUT_SECONDS, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         data = response.json()
@@ -223,6 +225,7 @@ def fetch_twse_stock_dividend_announcements() -> list[dict[str, Any]]:
 def fetch_tpex_stock_dividend_announcements() -> list[dict[str, Any]]:
     url = "https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost"
     try:
+        DATA_FETCHED_AT["stock_dividend"] = tw_now().strftime("%m/%d %H:%M:%S")
         response = requests.get(url, timeout=PRICE_REQUEST_TIMEOUT_SECONDS, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         data = response.json()
