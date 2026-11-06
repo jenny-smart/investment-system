@@ -1,0 +1,62 @@
+name: Stock dividends from ledger notes (台股股利對細帳備註)
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || inputs.apply && format('apply {0}', inputs.year) || format('report {0}', inputs.year) }}
+
+on:
+  # 手動：先跑報告（apply 不勾），確認後再勾 apply 寫入。
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "年度（讀 YYYY細帳）"
+        type: string
+        default: "2026"
+      apply:
+        description: "寫入資料庫（不勾＝只產生報告）"
+        type: boolean
+        default: false
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
+  pull_request:
+    paths:
+      - sync_stock_dividends_from_ledger.py
+      - tests/test_stock_dividends_from_ledger.py
+      - .github/workflows/stock-dividends-from-ledger.yml
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt 'gspread>=6,<7' 'google-auth>=2,<3'
+      - name: Unit tests
+        run: python -m unittest tests.test_stock_dividends_from_ledger
+      - name: Report / apply
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          YEAR: ${{ inputs.year }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          args=(--year "$YEAR")
+          [ "$APPLY" = "true" ] && args+=(--apply)
+          python sync_stock_dividends_from_ledger.py "${args[@]}" 2>&1 | tee -a run.out
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+        run: python run_log.py --function "台股股利對細帳備註" --target "stock_dividend_log" --status "$JOB_STATUS" --output run.out
