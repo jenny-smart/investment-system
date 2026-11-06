@@ -398,7 +398,7 @@ def add_zero_cost_stock_dividend_position(ticker: str, platform: str, shares: fl
 
 def build_stock_dividend_table() -> pd.DataFrame:
     df = load_stock_dividend_log()
-    internal_cols = ["_id", "_ticker", "_platform", "_cash_before", "_stock_before"]
+    internal_cols = ["_id", "_ticker", "_platform", "_cash_before", "_stock_before", "_year", "_not_in_ledger"]
     if df.empty:
         return pd.DataFrame(columns=STOCK_DIVIDEND_COLUMNS + internal_cols)
     rows = []
@@ -434,6 +434,9 @@ def build_stock_dividend_table() -> pd.DataFrame:
             "_platform": normalize_text(row.get("platform", "台股"), "台股"),
             "_cash_before": normalize_bool(row.get("is_cash_received", False), False),
             "_stock_before": normalize_bool(row.get("is_stock_received", False), False),
+            "_year": _stock_year_from_record(row),
+            # 細帳對齊時退回的（細帳沒有這筆）：不算預估，另外列出待核
+            "_not_in_ledger": "細帳沒有這筆" in normalize_text(row.get("note", "")),
         })
     out = pd.DataFrame(rows)
     out["_sort_date"] = out["除權息日"].apply(lambda value: _parse_dividend_date(value) or datetime.min.date())
@@ -714,15 +717,25 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
         render_stock_dividend_upload_section(current_positions)
         render_manual_stock_dividend_form(current_positions)
         return
+    this_year = tw_now().year
     received = table_df["確認現金入帳"].astype(bool) | table_df["確認股票入帳"].astype(bool)
-    pending_df, received_df = table_df[~received], table_df[received]
-    received_cash_this_year = stock_cash_dividend_total_for_year(tw_now().year)
-    estimated_cash = pending_df["預估現金股利"].fillna(0).sum()
-    estimated_stock = pending_df["預估股票股數"].fillna(0).sum()
+    not_in_ledger = table_df["_not_in_ledger"].astype(bool)
+    pending_df = table_df[~received & ~not_in_ledger]
+    review_df = table_df[~received & not_in_ledger]
+    received_df = table_df[received]
+    in_year = table_df["_year"] == this_year
+    # 今年預估＝今年每筆股利各算一次（已入帳用預估，沒有預估用實際）；細帳沒有、待核的不算
+    year_df = table_df[in_year & ~(~received & not_in_ledger)]
+    year_estimate = sum(
+        (normalize_number(r.get("預估現金股利"), 0) or normalize_number(r.get("實際現金股利"), 0))
+        for _, r in year_df.iterrows()
+    )
+    received_cash_this_year = stock_cash_dividend_total_for_year(this_year)
+    pending_cash = pending_df["預估現金股利"].fillna(0).sum()
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("預估現金股利（待入帳）", money(estimated_cash))
-    c2.metric("今年已入帳現金股利", money(received_cash_this_year))
-    c3.metric("預估股票股利股數（待入帳）", money(estimated_stock, 4))
+    c1.metric(f"{this_year} 預估現金股利", money(year_estimate))
+    c2.metric(f"{this_year} 已入帳現金股利", money(received_cash_this_year))
+    c3.metric("待入帳現金股利", money(pending_cash))
     c4.metric("待入帳／記錄筆數", f"{len(pending_df):,}／{len(table_df):,}")
     col_cfg = {
         "股票名稱": st.column_config.TextColumn("股票名稱", width="large"),
@@ -752,6 +765,12 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
     st.markdown("#### 預估股利表（待入帳）")
     st.caption("證交所／櫃買除權息公告 × 除權息股數＝預估。細帳「股利-台股」備註有這筆，排程（每 10 分鐘）會自動勾確認入帳、移到下方。")
     edited_pending = _editor(pending_df, "stock_dividend_pending_editor")
+    if not review_df.empty:
+        with st.expander(f"⚠ 細帳沒有這筆、待核（{len(review_df)} 筆，不算預估）"):
+            st.caption("以前在 App 勾過入帳、但細帳「股利-台股」備註沒有的記錄。真的有領到：在細帳補備註，下一輪會自動確認；重複的可以不理。")
+            edited_review = _editor(review_df, "stock_dividend_review_editor")
+    else:
+        edited_review = review_df[STOCK_DIVIDEND_COLUMNS]
     st.markdown("#### 實際入帳表")
     st.caption("已確認入帳的股利（含細帳備註補登）；取消勾選並儲存會退回上方。")
     edited_received = _editor(received_df.sort_values("現金發放日", ascending=False), "stock_dividend_received_editor")
@@ -759,7 +778,7 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
         sb = supabase_client()
         updated = 0
         warnings: list[str] = []
-        for idx, row in pd.concat([edited_pending, edited_received]).iterrows():
+        for idx, row in pd.concat([edited_pending, edited_review, edited_received]).iterrows():
             source = table_df.loc[idx]
             row_id = source.get("_id")
             if row_id is None or normalize_text(row_id, "") in {"", "nan", "None"}:
