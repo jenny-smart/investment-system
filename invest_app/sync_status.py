@@ -96,3 +96,56 @@ def render_sync_status(sheet_fetched_at: str = "") -> None:
                 _cached_last_success.clear()
     with cols[-1]:
         st.caption(f"App 讀取總覽：{sheet_fetched_at or '—'}")
+
+
+def _refresh_non_investment() -> None:
+    from invest_app.core import load_sheet_grid
+    load_sheet_grid.clear()
+
+
+def _refresh_fund_dividends() -> None:
+    from invest_app.core import _fetch_gas_div_for_enrich, _get_gas_data, load_sheet_raw_grid
+    _get_gas_data.clear()
+    _fetch_gas_div_for_enrich.clear()
+    load_sheet_raw_grid.clear()
+
+
+def _refresh_stock_dividends() -> None:
+    from invest_app.stock_dividends import (
+        fetch_tpex_stock_dividend_announcements,
+        fetch_twse_stock_dividend_announcements,
+        load_stock_dividend_log,
+    )
+    fetch_twse_stock_dividend_announcements.clear()
+    fetch_tpex_stock_dividend_announcements.clear()
+    load_stock_dividend_log.clear()
+
+
+# (key, 標題, 讀取時間來源說明, 自動重讀間隔, 清快取函式)
+APP_READS = (
+    ("non_investment", "非投資金額", "總帳「資產總覽」", "每 2 分鐘", _refresh_non_investment),
+    ("fund_dividend", "基金配息資料", "基金公司配息／除息日", "每 6 小時", _refresh_fund_dividends),
+    ("stock_dividend", "台股除權息公告", "證交所／櫃買", "每天", _refresh_stock_dividends),
+)
+
+
+def _read_time(key: str) -> str:
+    from invest_app.core import DATA_FETCHED_AT, ONLINE_SHEET_SOURCES, SHEET_FETCHED_AT
+    if key == "non_investment":
+        return SHEET_FETCHED_AT.get(ONLINE_SHEET_SOURCES["資產總覽"], "")
+    return DATA_FETCHED_AT.get({"fund_dividend": "gas_dividend", "stock_dividend": "stock_dividend"}[key], "")
+
+
+def render_app_reads() -> None:
+    """App 自己讀的資料（不是排程寫入的）：最後讀取時間＋立即重讀按鈕。"""
+    st.markdown("**📥 App 讀取資料**")
+    cols = st.columns(len(APP_READS) + 1)
+    for col, (key, label, source, interval, refresh) in zip(cols, APP_READS):
+        with col:
+            fetched = _read_time(key)
+            st.caption(f"{label}：{fetched or '—（本次開啟尚未讀取）'}　｜{source}，{interval}自動重讀")
+            if st.button("立即重讀", key=f"reread_{key}"):
+                refresh()
+                st.rerun()
+    with cols[-1]:
+        st.caption("配息記錄、台股股利記錄存在資料庫，每次開啟都是最新。")
