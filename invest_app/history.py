@@ -64,7 +64,8 @@ def render_history_tab(enriched: pd.DataFrame) -> None:
     if columns_missing or st.session_state.get("snapshot_columns_missing"):
         st.warning("Supabase 的 portfolio_snapshots 還沒有其他資產欄位，新快照不會存這幾欄。"
                    "請到 Supabase → SQL Editor 執行 supabase_schema.sql 裡 portfolio_snapshots / latest_portfolio_values 的 alter table。")
-    st.caption("非投資資產（銀行、保險…總資產）自 2026/10/11 起記錄，之前的快照這幾欄空白。")
+    st.caption("非投資資產（銀行、保險…總資產）自 2026/10/11 起記錄；基金分平台幣別、基金配息與台股股利自 2026/11/07 起記錄，之前的快照這幾欄空白。"
+               "累計配息、股利是原幣 × 當下匯率的台幣，匯率下跌時新配息入帳也可能看起來變少。")
 
     # ── 明細表（愈新愈上）──
     # 欄位順序：總資產 / 非投資小計 / 投資小計，再來各項明細
@@ -72,8 +73,12 @@ def render_history_tab(enriched: pd.DataFrame) -> None:
         "時間": "時間", "grand_total": "總資產", "other_assets_total": "非投資小計", "total_twd": "投資小計",
         "bank_total": "銀行", "insurance_total": "保險", "huaisi_total": "懷思投資", "uncle_total": "uncle待還",
         "fx_cash_total": "外幣", "deposits_total": "扣除待還",
-        "tw_stock": "台股", "us_stock": "美股", "kifutong": "基富通", "scb": "渣打", "taishin": "台新",
-        "total_cost": "投資總成本", "total_pnl": "投資市值損益", "cumulative_dividend": "基金累計配息",
+        "tw_stock": "台股", "us_stock": "美股",
+        "kft_twd": "基富通\n台幣", "kft_jpy": "基富通\n日幣", "kft_cny": "基富通\n人民幣",
+        "scb_usd": "渣打\n美金", "scb_zar": "渣打\n南非",
+        "taishin_usd": "台新\n美金", "taishin_zar": "台新\n南非",
+        "total_cost": "投資總成本", "total_pnl": "投資市值損益",
+        "fund_dividend": "基金\n累計配息", "tw_stock_dividend": "台股\n累計股利",
         "trigger": "觸發方式", "note": "備註",
     }
     df_show = df[list(columns)].copy()

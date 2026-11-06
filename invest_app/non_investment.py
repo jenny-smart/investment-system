@@ -39,7 +39,15 @@ OTHER_ASSET_ICONS = {"銀行total": "🏦", "保險total": "🛡️", "懷思投
 
 
 # 新增在 portfolio_snapshots / latest_portfolio_values 的欄位；資料表還沒加欄位時自動略過。
-OTHER_SNAPSHOT_KEYS = [*OTHER_ASSET_FIELDS.values(), "deposits_total", "other_assets_total", "grand_total"]
+# 基金依平台＋幣別拆開的市值、基金配息與台股股利（累計已領，台幣）
+FUND_BREAKDOWN = {  # (platform, currency) → 欄位
+    ("基富通", "TWD"): "kft_twd", ("基富通", "JPY"): "kft_jpy", ("基富通", "CNY"): "kft_cny",
+    ("渣打基金", "USD"): "scb_usd", ("渣打基金", "ZAR"): "scb_zar",
+    ("台新基金", "USD"): "taishin_usd", ("台新基金", "ZAR"): "taishin_zar",
+}
+BREAKDOWN_KEYS = [*FUND_BREAKDOWN.values(), "fund_dividend", "tw_stock_dividend"]
+OTHER_SNAPSHOT_KEYS = [*OTHER_ASSET_FIELDS.values(), "deposits_total", "other_assets_total", "grand_total",
+                       *BREAKDOWN_KEYS]
 
 
 def other_asset_snapshot_fields(total_investment: float) -> dict[str, float]:
@@ -58,19 +66,24 @@ def other_asset_fields(other: dict[str, Any] | None, total_investment: float) ->
 
 def write_with_optional_columns(table: str, data: dict[str, Any], upsert_on: str = "") -> bool:
     """寫入 Supabase；若新欄位尚未建立，退回只寫原有欄位。回傳是否含新欄位。"""
-    query = supabase_client().table(table)
-    try:
-        (query.upsert(data, on_conflict=upsert_on) if upsert_on else query.insert(data)).execute()
-        return True
-    except Exception as exc:
-        extra = [k for k in OTHER_SNAPSHOT_KEYS if k in data]
-        if not extra or not any(k in str(exc) for k in extra):
-            raise
-        base = {k: v for k, v in data.items() if k not in extra}
+    data = dict(data)
+    dropped = False
+    for _ in range(len(OTHER_SNAPSHOT_KEYS) + 1):
         query = supabase_client().table(table)
-        (query.upsert(base, on_conflict=upsert_on) if upsert_on else query.insert(base)).execute()
+        try:
+            (query.upsert(data, on_conflict=upsert_on) if upsert_on else query.insert(data)).execute()
+            break
+        except Exception as exc:
+            # 只拿掉錯誤訊息提到、資料表還沒有的選用欄位，其他照寫
+            missing = [k for k in OTHER_SNAPSHOT_KEYS if k in data and k in str(exc)]
+            if not missing:
+                raise
+            for k in missing:
+                data.pop(k)
+            dropped = True
+    if dropped:
         st.session_state["snapshot_columns_missing"] = True
-        return False
+    return not dropped
 
 
 def _group_header_html(title: str, fields: list[tuple[str, str, str]]) -> str:
@@ -244,6 +257,7 @@ def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:
     platform_val: dict[str, float] = {
         "台股": 0, "美股": 0, "基富通": 0, "渣打基金": 0, "台新基金": 0
     }
+    breakdown = {key: 0.0 for key in BREAKDOWN_KEYS}
     total_cost_sum = 0.0
     total_div_sum  = 0.0
     sell_cost_sum  = 0.0
@@ -256,6 +270,14 @@ def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:
         sell_cost_sum += to_float(r.get("賣出稅費")) or 0
         if plt in platform_val and val:
             platform_val[plt] += val
+        fund_key = FUND_BREAKDOWN.get((plt, normalize_text(r.get("currency", "")).upper()))
+        if fund_key and val:
+            breakdown[fund_key] += val
+        asset = normalize_text(r.get("asset_type", ""))
+        if div and asset == "基金":
+            breakdown["fund_dividend"] += div
+        elif div and asset == "台股":
+            breakdown["tw_stock_dividend"] += div
         if cost: total_cost_sum += cost
         if div:  total_div_sum  += div
 
@@ -271,6 +293,7 @@ def _take_snapshot_now(enriched: pd.DataFrame, trigger: str = "manual") -> dict:
         "total_cost":          round(total_cost_sum, 0),
         "total_pnl":           round(total - total_cost_sum - sell_cost_sum, 0),
         "cumulative_dividend": round(total_div_sum, 0),
+        **{k: round(v, 0) for k, v in breakdown.items()},
         "trigger":             trigger,
         "note":                f"手動快照 {tw_now().strftime('%Y-%m-%d %H:%M')}",
         **other_asset_snapshot_fields(total),

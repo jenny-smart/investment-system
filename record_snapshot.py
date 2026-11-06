@@ -16,6 +16,9 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 OTHER_ASSET_KEYS = [
     "bank_total", "insurance_total", "huaisi_total", "uncle_total", "fx_cash_total",
     "deposits_total", "other_assets_total", "grand_total",
+    # 基金分平台幣別、基金配息、台股股利
+    "kft_twd", "kft_jpy", "kft_cny", "scb_usd", "scb_zar", "taishin_usd", "taishin_zar",
+    "fund_dividend", "tw_stock_dividend",
 ]
 
 TW_NOW     = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
@@ -128,14 +131,18 @@ def main():
 
     if "grand_total" in data:
         print(f"  其他資產小計：{data['other_assets_total']:,.0f}  總資產：{data['grand_total']:,.0f}")
-    try:
-        sb().table("portfolio_snapshots").insert(data).execute()
-    except Exception as e:
-        extra = [k for k in OTHER_ASSET_KEYS if k in data]
-        if not extra or not any(k in str(e) for k in extra):
-            raise
-        print("  ⚠️ portfolio_snapshots 尚未新增其他資產欄位，只寫入投資市值")
-        sb().table("portfolio_snapshots").insert({k: v for k, v in data.items() if k not in extra}).execute()
+    data = dict(data)
+    for _ in range(len(OTHER_ASSET_KEYS) + 1):
+        try:
+            sb().table("portfolio_snapshots").insert(data).execute()
+            break
+        except Exception as e:
+            missing = [k for k in OTHER_ASSET_KEYS if k in data and k in str(e)]
+            if not missing:
+                raise
+            print(f"  ⚠️ portfolio_snapshots 尚未新增欄位 {missing}，這幾欄略過")
+            for k in missing:
+                data.pop(k)
     print("  ✅ portfolio_snapshots 已寫入")
 
     if IS_EVENING:

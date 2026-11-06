@@ -1510,7 +1510,7 @@ def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), 
         text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else html_lib.escape(str(value))
         return f"<td>{text}</td>"
 
-    head = "".join(f'<th style="text-align:{"right" if c in number_cols else "left"}">{html_lib.escape(str(c))}</th>'
+    head = "".join(f'<th style="text-align:{"right" if c in number_cols else "left"}">{html_lib.escape(str(c)).replace(chr(10), "<br>")}</th>'
                    for c in df.columns)
     body = "".join("<tr>" + "".join(cell(c, row[c]) for c in df.columns) + "</tr>"
                    for _, row in df.iterrows())
