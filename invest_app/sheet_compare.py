@@ -193,12 +193,41 @@ def ledger_confirm_plan(records: pd.DataFrame, ledger_rows: list[dict[str, Any]]
     ok＝最接近的組合在容許誤差內，只有 ok 的 matched 會預先選好。
     """
     plan = []
+    confirmed = _ledger_confirmed(records, ledger_rows, month)
     for label, (amount, idxs) in _ledger_candidates(records, ledger_rows, month).items():
+        # 總覽金額＝本月已入帳合計：扣掉本月已確認的，剩下的才要由待確認記錄補上
+        paid = sum(float(twd_of(i) or 0) for i in confirmed.get(label, []))
+        remaining = float(amount) - paid
+        tolerance = amount_tolerance(float(amount))
+        if remaining <= tolerance:
+            plan.append({"label": label, "amount": float(amount), "candidates": idxs, "matched": [],
+                         "matched_twd": 0.0, "paid_twd": paid, "ok": abs(remaining) <= tolerance})
+            continue
         values = {i: float(twd_of(i) or 0) for i in idxs}
-        matched, total = _best_subset(float(amount), values)
+        matched, total = _best_subset(remaining, values)
         plan.append({"label": label, "amount": float(amount), "candidates": idxs, "matched": matched,
-                     "matched_twd": total, "ok": abs(total - float(amount)) <= amount_tolerance(float(amount))})
+                     "matched_twd": total, "paid_twd": paid, "ok": abs(total - remaining) <= tolerance})
     return plan
+
+
+def _ledger_confirmed(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
+                      month: tuple[int, int]) -> dict[str, list[int]]:
+    """{每月加總列名: [本月、已確認入帳的記錄 index]}。"""
+    labels = [r["項目"] for r in ledger_rows if r.get("項目") in MONTHLY_ESTIMATE_RULES and (r.get("金額") or 0) > 0]
+    out: dict[str, list[int]] = {}
+    if not labels or records.empty:
+        return out
+    for idx, row in records.iterrows():
+        if not (bool(row.get("_確認前")) or row.get("_確認前") in ("True", "true", 1)):
+            continue
+        when = row.get("_sort_date")
+        if not when or (getattr(when, "year", None), getattr(when, "month", None)) != month:
+            continue
+        for label in labels:
+            if _matches_rule(row.get("平台"), row.get("幣別"), row.get("基金名稱"), MONTHLY_ESTIMATE_RULES[label]):
+                out.setdefault(label, []).append(int(idx))
+                break
+    return out
 
 
 def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
