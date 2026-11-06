@@ -280,19 +280,34 @@ def apply(sb, steps, stocks):
     return done, warnings
 
 
+def default_years(today):
+    """今年；1 月時連去年（12 月入帳的股利、去年細帳最後一欄）。"""
+    return [today.year - 1, today.year] if today.month == 1 else [today.year]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--year", type=int, default=date.today().year)
+    parser.add_argument("--year", type=int, help="讀哪一年的細帳；不填＝今年，1 月時連去年一起（12 月的股利常在 1 月才記）")
     parser.add_argument("--apply", action="store_true", help="寫入資料庫（預設只產生報告）")
     args = parser.parse_args(argv)
 
     sb = supabase()
     stocks, records = load_stocks_and_records(sb)
-    values, notes = read_ledger(args.year)
-    items, problems = ledger_items(values, notes, args.year, build_stock_index(stocks))
+    years = [args.year] if args.year else default_years(date.today())
+    index = build_stock_index(stocks)
+    items, problems = [], []
+    for year in years:
+        try:
+            values, notes = read_ledger(year)
+        except Exception as exc:
+            problems.append(f"讀不到 {year}細帳：{exc}")
+            continue
+        found, issues = ledger_items(values, notes, year, index)
+        items += found
+        problems += issues
     steps = plan(items, [r for r in records if str(r.get("currency", "TWD")).upper() == "TWD"])
 
-    print(f"== {args.year}細帳「{ROW_LABEL}」備註：{len(items)} 筆入帳 ==")
+    print(f"== {'、'.join(f'{y}細帳' for y in years)}「{ROW_LABEL}」備註：{len(items)} 筆入帳 ==")
     for action in ("確認入帳", "補登", "金額不同", "無法對應", "已一致"):
         group = [s for s in steps if s["action"] == action]
         if not group:

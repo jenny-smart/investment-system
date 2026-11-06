@@ -1,7 +1,9 @@
 import unittest
 
+from datetime import date
+
 from sync_stock_dividends_from_ledger import (
-    NoteItem, build_stock_index, ledger_items, parse_note, plan, resolve,
+    NoteItem, build_stock_index, default_years, ledger_items, parse_note, plan, resolve,
 )
 
 STOCKS = [
@@ -47,6 +49,13 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual({i.code for i in items if i.month == (2026, 10)} - {""},
                          {"2464", "5608", "00900", "00740B", "9802", "00919"})
         self.assertEqual(problems, ["2026/11 備註加總 90 ≠ 儲存格 100"])
+
+
+class YearTests(unittest.TestCase):
+    def test_default_years(self):
+        self.assertEqual(default_years(date(2026, 11, 7)), [2026])
+        self.assertEqual(default_years(date(2027, 1, 12)), [2026, 2027])
+        self.assertEqual(default_years(date(2027, 2, 1)), [2027])
 
 
 class PlanTests(unittest.TestCase):
