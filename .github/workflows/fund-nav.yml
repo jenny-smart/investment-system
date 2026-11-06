@@ -38,9 +38,9 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3'
+        run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'supabase>=2,<3'
       - name: Unit tests
-        run: python -m unittest tests.test_fund_nav tests.test_richart_fx
+        run: python -m unittest tests.test_fund_nav tests.test_richart_fx tests.test_dividend_months
       - name: Update G/H on 總覽 (fund NAV)
         shell: bash
         env:
@@ -62,6 +62,19 @@ jobs:
             python sync_richart_fx.py --dry-run 2>&1 | tee -a run.out
           else
             python sync_richart_fx.py 2>&1 | tee -a run.out
+          fi
+      - name: Sync 配息月份 checkboxes (confirmed dividends)
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_dividend_months.py --dry-run 2>&1 | tee -a run.out
+          else
+            python sync_dividend_months.py 2>&1 | tee -a run.out
           fi
       - name: Write update log（更新記錄）
         if: always() && github.event_name == 'workflow_dispatch'

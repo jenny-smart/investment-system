@@ -1229,6 +1229,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 
     # 總帳「總覽」每月加總已填本月金額的基金類別 → 對應的本月待確認記錄預先選好（仍需按套用）
     suggested: list[str] = []
+    matched_ok: set[int] = set()   # 總帳金額對得上的記錄，才能直接確認（也才會勾配息月份）
     try:
         from asset_summary import monthly_income_block
         from invest_app.sheet_compare import ledger_confirm_plan, sheet_fx_rates
@@ -1246,7 +1247,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 
         plan = ledger_confirm_plan(df, ledger_rows, (now.year, now.month), twd_of)
         index_to_label = {v: k for k, v in pending_options.items()}
-        suggested = [index_to_label[i] for p in plan if p["ok"] for i in p["matched"] if i in index_to_label]
+        matched_ok = {i for p in plan if p["ok"] for i in p["matched"]}
+        suggested = [index_to_label[i] for i in matched_ok if i in index_to_label]
         if plan:
             lines = []
             for p in plan:
@@ -1267,11 +1269,19 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     with st.form("actual_dividend_confirm_form"):
         confirm_labels = st.multiselect("確認入帳", list(pending_options.keys()), default=suggested)
         cancel_labels = st.multiselect("取消確認", list(confirmed_options.keys()))
+        manual_ok = st.checkbox("金額已人工核對（總帳本月還沒填、或對不上也照樣確認）", value=False)
+        st.caption("確認後約 10 分鐘內，股票總帳「配息月份」分頁會同步勾選該基金當月。")
         submitted = st.form_submit_button("💾 套用確認狀態")
         recompute_submitted = st.form_submit_button("重算已確認累計")
 
     if submitted or recompute_submitted:
         changes = {pending_options[label]: True for label in confirm_labels}
+        blocked = [label for label in confirm_labels if pending_options[label] not in matched_ok and not manual_ok]
+        for label in blocked:
+            changes.pop(pending_options[label])
+        if blocked:
+            st.warning("以下記錄跟總帳本月金額對不上（或總帳還沒填），沒有確認；核對無誤後勾「金額已人工核對」再套用：\n\n"
+                       + "\n".join(f"- {label}" for label in blocked))
         changes.update({confirmed_options[label]: False for label in cancel_labels})
         if not changes and not recompute_submitted:
             st.info("沒有選擇需要更新的記錄。")
