@@ -144,6 +144,25 @@ alter table if exists public.latest_portfolio_values add column if not exists fx
 alter table if exists public.latest_portfolio_values add column if not exists deposits_total numeric;
 alter table if exists public.latest_portfolio_values add column if not exists other_assets_total numeric;
 alter table if exists public.latest_portfolio_values add column if not exists grand_total numeric;
+-- 基金分平台幣別、基金配息、台股股利（2026/11/07）
+alter table public.portfolio_snapshots add column if not exists kft_twd numeric;
+alter table if exists public.latest_portfolio_values add column if not exists kft_twd numeric;
+alter table public.portfolio_snapshots add column if not exists kft_jpy numeric;
+alter table if exists public.latest_portfolio_values add column if not exists kft_jpy numeric;
+alter table public.portfolio_snapshots add column if not exists kft_cny numeric;
+alter table if exists public.latest_portfolio_values add column if not exists kft_cny numeric;
+alter table public.portfolio_snapshots add column if not exists scb_usd numeric;
+alter table if exists public.latest_portfolio_values add column if not exists scb_usd numeric;
+alter table public.portfolio_snapshots add column if not exists scb_zar numeric;
+alter table if exists public.latest_portfolio_values add column if not exists scb_zar numeric;
+alter table public.portfolio_snapshots add column if not exists taishin_usd numeric;
+alter table if exists public.latest_portfolio_values add column if not exists taishin_usd numeric;
+alter table public.portfolio_snapshots add column if not exists taishin_zar numeric;
+alter table if exists public.latest_portfolio_values add column if not exists taishin_zar numeric;
+alter table public.portfolio_snapshots add column if not exists fund_dividend numeric;
+alter table if exists public.latest_portfolio_values add column if not exists fund_dividend numeric;
+alter table public.portfolio_snapshots add column if not exists tw_stock_dividend numeric;
+alter table if exists public.latest_portfolio_values add column if not exists tw_stock_dividend numeric;
 
 alter table public.fund_dividends enable row level security;
 alter table public.dividend_log enable row level security;
