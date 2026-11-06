@@ -48,7 +48,8 @@ class DateTests(unittest.TestCase):
         self.assertEqual(auto_tasks(date(2026, 10, 30)), (OCT, None))
         self.assertEqual(auto_tasks(date(2026, 10, 31)), (OCT, None))
         self.assertEqual(auto_tasks(date(2026, 11, 1)), (OCT, date(2026, 11, 1)))
-        self.assertEqual(auto_tasks(date(2026, 11, 10)), (OCT, None))
+        self.assertEqual(auto_tasks(date(2026, 11, 7)), (OCT, date(2026, 11, 1)))   # 1 日漏跑也會補
+        self.assertEqual(auto_tasks(date(2026, 11, 10)), (OCT, date(2026, 11, 1)))
         self.assertEqual(auto_tasks(date(2026, 11, 11)), (None, None))
         self.assertEqual(auto_tasks(date(2027, 2, 28)), (date(2027, 2, 1), None))
 
@@ -365,11 +366,14 @@ class DetailRefTests(unittest.TestCase):
         book = type("Book", (), {"worksheet": lambda self, n: ledger if n == "Jennyall" else detail,
                                  "worksheets": lambda self: [ledger, detail]})()
         cols = {(2026, 10): 2, (2026, 11): 4, (2026, 12): 6}
-        problems, written = roll_detail_refs(book, date(2026, 12, 1), cols, dry_run=False)
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):   # 不要在 CI 紀錄印出假的「已寫入」
+            problems, written = roll_detail_refs(book, date(2026, 12, 1), cols, dry_run=False)
         self.assertEqual((problems, written), ([], 2))
         self.assertEqual([w["range"] for w in ledger.writes], ["F40", "F41"])
         self.assertIn("'2026細帳'!$N:$N", ledger.writes[0]["values"][0][0])
-        problems, written = roll_detail_refs(book, date(2027, 1, 1), {**cols, (2027, 1): 8}, dry_run=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            problems, written = roll_detail_refs(book, date(2027, 1, 1), {**cols, (2027, 1): 8}, dry_run=True)
         self.assertIn("2027細帳", problems[0])
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 �
     （基金，由基金淨值排程記錄）或 Yahoo（美股）查月底那天的淨值，以「現在市值 × 月底淨值 ÷ 現在淨值」
     換算月底市值後固定，不用手動處理。
 
-roll（每月 1 日）
+roll（每月 1–10 日，已是本月欄就不改；1 日沒跑到會補上）
     總覽 B2:B18 的 Jennyall!<欄> 換成當月小計欄（例：11 月 GA → GC），
     總覽 B40:B51 的 '每月收入'!<欄> 換成當月欄（例：11 月 AH → AI）。
     Jennyall 當月兩欄第 40–57 列的 'YYYY細帳'!<欄> 換成細帳的當月欄
@@ -173,7 +173,8 @@ def auto_tasks(today):
         freeze = add_months(this_month, -1)
     else:
         freeze = None
-    roll = this_month if today.day == 1 else None
+    # 1–10 日每次都檢查：已是本月欄就不會改，1 日沒跑到（例如排程停擺）之後也會補上
+    roll = this_month if today.day <= FREEZE_GRACE_DAYS else None
     return freeze, roll
 
 
