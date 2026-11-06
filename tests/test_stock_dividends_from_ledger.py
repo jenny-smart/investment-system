@@ -3,7 +3,7 @@ import unittest
 from datetime import date
 
 from sync_stock_dividends_from_ledger import (
-    NoteItem, build_stock_index, default_years, ledger_items, parse_note, plan, resolve,
+    NoteItem, build_stock_index, default_years, was_added_by_apply, ledger_items, parse_note, plan, resolve,
 )
 
 STOCKS = [
@@ -76,8 +76,14 @@ class LedgerTests(unittest.TestCase):
 
 
 class YearTests(unittest.TestCase):
+    def test_undo_only_backfilled_once(self):
+        self.assertTrue(was_added_by_apply({"source": "ledger_note", "note": "依 2026細帳備註補登"}))
+        self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "TWSE 除權息預告｜2026細帳備註確認"}))
+        self.assertFalse(was_added_by_apply({"source": "ledger_note", "note": "依 2026細帳備註補登｜累計已回沖"}))
+        self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "自動掃描候選"}))
+
     def test_default_years(self):
-        self.assertEqual(default_years(date(2026, 11, 7)), [2025, 2026])
+        self.assertEqual(default_years(date(2026, 11, 7)), [2026])         # 不匯入 2025
         self.assertEqual(default_years(date(2027, 6, 1)), [2026, 2027])   # 2026 晚補的也抓得到
 
 

@@ -350,12 +350,17 @@ def apply(sb, steps, stocks):
 UNDO_MARK = "累計已回沖"
 
 
+def was_added_by_apply(record):
+    """那次 apply 有加到持倉累計股利的記錄：只有補登（source=ledger_note）；已回沖過的不再扣。"""
+    return record.get("source") == SOURCE and UNDO_MARK not in str(record.get("note") or "")
+
+
 def undo_position_totals(sb, apply_changes):
     """回沖 2026-11-07 那次 apply 加到持倉累計股利的金額（ledger_note 記錄，只做一次）。"""
     from invest_app.stock_dividends import update_stock_cash_dividend_total
     rows = sb.table("stock_dividend_log").select("id,ticker,platform,name,actual_cash_total,note,source") \
-        .eq("source", SOURCE).execute().data or []
-    todo = [r for r in rows if UNDO_MARK not in str(r.get("note") or "")]
+        .execute().data or []
+    todo = [r for r in rows if was_added_by_apply(r)]
     total, done, missing = 0.0, 0, []
     for r in todo:
         amount = number(r.get("actual_cash_total"))
@@ -389,9 +394,12 @@ def scan_expected(sb):
         print(f"WARN 掃描除權息公告失敗（仍繼續比對）：{exc}")
 
 
+FIRST_YEAR = 2026  # 這個流程從 2026 細帳開始；2025 以前的股利已含在持倉累計股利裡，不匯入
+
+
 def default_years(today):
-    """去年＋今年：去年的股利晚補記在去年細帳（隔年才補備註）也抓得到；已一致的不會重複寫。"""
-    return [today.year - 1, today.year]
+    """去年＋今年（最早 2026）：去年的股利晚補記在去年細帳也抓得到；已一致的不會重複寫。"""
+    return sorted({max(today.year - 1, FIRST_YEAR), today.year})
 
 
 def main(argv=None):
