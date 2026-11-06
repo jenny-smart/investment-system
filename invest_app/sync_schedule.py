@@ -53,6 +53,8 @@ JOBS = (
     # 2026-11 起由 tool-system「排程設定」每 10 分鐘派送（原本 cron-job.org 每 30 分鐘）
     Job("us", "美股價格", "us-stock-prices.yml", 10, us_window, {"mode": "update"}),
     Job("fund", "基金淨值／匯率", "fund-nav.yml", 10, always),
+    # 台股股利：掃描除權息公告建立應入帳，再用細帳「股利-台股」備註確認入帳
+    Job("stock_div", "台股股利入帳", "stock-dividends-from-ledger.yml", 10, always, {"apply": "true"}),
 )
 
 
@@ -79,8 +81,10 @@ def is_stale(job: Job, last_ok: datetime | None, now: datetime) -> bool:
 
 def run_updated(job: Job, title: str, started: datetime) -> bool:
     """這次成功執行是否真的寫入（依 run-name：dry-run / update / auto）。"""
-    if title == "dry-run":
+    if title == "dry-run" or title.startswith("report"):
         return False
+    if title.startswith("apply"):
+        return True
     if title == "update":
         return True
     return job.in_window(started) or job.in_window(started - RUNNER_DELAY)

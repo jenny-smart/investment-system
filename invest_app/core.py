@@ -956,7 +956,7 @@ def fetch_fund_quote(code: str, pattern: str) -> dict[str, Any]:
 
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_fx_fallback(currency: str) -> tuple[float | None, str]:
     currency = normalize_text(currency, "TWD").upper()
     if currency == "TWD":
@@ -1433,12 +1433,12 @@ def _parse_date_str(raw: str) -> str:
     return f"{int(parts[1])}/{int(parts[2]):02d}" if len(parts) == 3 else "—"
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _get_gas_data(fund_code: str) -> dict:
     """
     從 GAS v3 取得基金完整資料：
     {"date":"5/19","monthly_div":0.044,"ex_date":"2026/05/05","pay_date":"2026/05/13"}
-    快取 6 小時（原本是永久記憶體快取，新公布的除息資料要等重開機才看得到）。
+    快取 10 分鐘（2026-11 所有更新上限改成 10 分鐘）。
     """
     fund_code = normalize_text(fund_code)
 

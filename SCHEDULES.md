@@ -17,7 +17,8 @@ cron-job.org 上 investment-system 的工作都可以停用。
 | invest_us_prices_morning | `us-stock-prices.yml` | 週二至六 00:00–06:00 每 10 分鐘 | 美股價格（凌晨） |
 | invest_fund_nav | `fund-nav.yml` | 全天每 10 分鐘 | 基金淨值＋Richart 匯率；只寫有變的列 |
 | invest_month_end_ledger | `month-end-ledger.yml` | 每月 1–10、28–31 日每 10 分鐘 | 月底固定／月初切換總覽（程式依日期判斷，見 `month_end_ledger.py`） |
-| invest_keepalive | `keepalive.yml` | 每 30 分鐘 | App 喚醒 |
+| invest_keepalive | `keepalive.yml` | 每 10 分鐘 | App 喚醒（也觸發依總覽自動確認基金配息） |
+| invest_stock_dividends | `stock-dividends-from-ledger.yml` | 每 10 分鐘 | 台股股利：掃描除權息公告建立應入帳，再用細帳「股利-台股」備註確認入帳 |
 | invest_snapshot | `snapshot.yml` | 08:00、20:00 | 資產快照 |
 | invest_stock_radar | `stock-radar.yml` | 週一至五 14:30 | 台股雷達 |
 | ~~Richart 匯率~~（已停用） | `richart-fx.yml` | — | 匯率由「基金淨值／匯率」一併更新；此 workflow 保留供手動執行 |

@@ -82,7 +82,7 @@ def render_research_page(enriched) -> None:
             return "弱勢觀察", "價格與短均線結構偏弱", float(target) if target else None
         return "整理觀察", "趨勢尚未形成明確方向", float(target) if target else None
 
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _batch_stock_analysis(items: tuple[tuple[str, str], ...]) -> pd.DataFrame:
         rows = []
         for name, ticker in items:
@@ -107,7 +107,7 @@ def render_research_page(enriched) -> None:
             for col in df.columns if col not in text_cols
         }
 
-    @st.cache_data(ttl=3600, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _corporate_event_note(ticker: str) -> str:
         if not HAS_YF or not ticker:
             return ""
@@ -167,7 +167,7 @@ def render_research_page(enriched) -> None:
             notes.append("今日量能明顯高於 20 日均量")
         st.info("；".join(notes) + "。")
 
-    @st.cache_data(ttl=21600, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _growth_snapshot(ticker: str) -> dict[str, Any]:
         if not HAS_YF or not ticker:
             return {}
@@ -193,7 +193,7 @@ def render_research_page(enriched) -> None:
         except Exception:
             return {}
 
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _relative_strength(ticker: str) -> dict[str, Any]:
         if not HAS_YF or not ticker:
             return {}
@@ -271,7 +271,7 @@ def render_research_page(enriched) -> None:
         ("崇越","5434.TWO"),("昇陽半導體","8028.TW"),("台塑","1301.TW"),
     ]
 
-    @st.cache_data(ttl=21600, show_spinner=False)
+    @st.cache_data(ttl=600, show_spinner=False)
     def _analyst_snapshot(ticker: str) -> dict[str, Any]:
         if not HAS_YF or not ticker: return {}
         try:
@@ -366,7 +366,7 @@ def render_research_page(enriched) -> None:
                         holding_analysis[col] = pd.NA
                 holding_analysis["近期股利/資本事件"] = holding_analysis["代號"].map(_corporate_event_note)
 
-                @st.cache_data(ttl=21600, show_spinner=False)
+                @st.cache_data(ttl=600, show_spinner=False)
                 def _fundamental_snapshot(ticker: str) -> dict[str, Any]:
                     if not HAS_YF or not ticker:
                         return {}

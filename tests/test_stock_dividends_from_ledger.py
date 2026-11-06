@@ -42,6 +42,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(resolve("科技優息", INDEX), ("00929", "別名"))
         self.assertEqual(resolve("折讓", INDEX), ("", "費用"))
         self.assertEqual(resolve("手續費", INDEX), ("", "費用"))
+        self.assertEqual(resolve("0050FUND", INDEX), ("", "費用"))   # 2 月基金配息 19,990
         self.assertEqual(resolve("某某", INDEX), ("", ""))
 
 
@@ -110,6 +111,14 @@ class PlanTests(unittest.TestCase):
         rec = {"id": 5, "ticker": "2464.TW", "ex_date": "", "cash_pay_date": "2026/10/01",
                "is_cash_received": True, "actual_cash_total": 1404}
         self.assertEqual(plan([item], [rec])[0]["action"], "已一致")
+
+    def test_confirm_only_when_close_to_estimate(self):
+        item = NoteItem((2026, 10), "00919", 8790, "00919")
+        base = {"id": 7, "ticker": "00919.TW", "ex_date": "2026/09/16", "cash_pay_date": "2026/10/15",
+                "is_cash_received": False}
+        self.assertEqual(plan([item], [dict(base, estimated_cash_total=8800)])[0]["action"], "確認入帳")
+        self.assertEqual(plan([item], [dict(base, estimated_cash_total=12000)])[0]["action"], "金額待核")
+        self.assertEqual(plan([item], [dict(base, estimated_cash_total=0)])[0]["action"], "確認入帳")
 
     def test_each_record_used_once(self):
         items = [NoteItem((2026, 7), "00919", 100, "00919"), NoteItem((2026, 10), "00919", 120, "00919")]
