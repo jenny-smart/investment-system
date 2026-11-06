@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from sync_dividend_months import cell_month, match_column, month_rows, plan, sheet_columns
+from sync_dividend_months import cell_month, dividend_month, match_column, month_rows, plan, sheet_columns
 
 # 配息月份 rows 1–3 as in the sheet
 HEADER = [
@@ -58,17 +58,23 @@ class PlanTests(unittest.TestCase):
     def rec(self, name, platform, currency, pay, paid=True):
         return {"fund_name": name, "platform": platform, "currency": currency, "pay_date": pay, "is_paid": paid}
 
-    def test_ticks_confirmed_months_from_september(self):
+    def test_ticks_previous_month_of_payment(self):
         records = [
-            self.rec("東方匯理新興市場債券U南非幣（月配）", "台新基金", "ZAR", "2026/11/07"),
-            self.rec("高盛新興市場債券Y南非幣對沖（月配）", "台新基金", "ZAR", "2026/11/10", paid=False),
-            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2026-10-13"),
-            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2026/08/12"),  # 8 月不動
-            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2026/12/10"),  # 未來不動
+            self.rec("東方匯理新興市場債券U南非幣（月配）", "台新基金", "ZAR", "2026/11/01"),   # 10 月配息
+            self.rec("高盛新興市場債券Y南非幣對沖（月配）", "台新基金", "ZAR", "2026/11/06", paid=False),
+            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2026-11-10"),   # 10 月配息
+            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2026/10/12"),   # 9 月：不動
+            self.rec("富蘭克林華美新興國家固定收益B-新臺幣", "基富通", "TWD", "2027/01/10"),   # 未來不動
         ]
         updates, problems = plan(grid(), records, self.TODAY)
         self.assertEqual(problems, [])
-        self.assertEqual({u["cell"]: u["value"] for u in updates}, {"M7": True, "B6": True})
+        self.assertEqual({u["cell"]: u["value"] for u in updates}, {"M6": True, "B6": True})
+
+    def test_dividend_month(self):
+        self.assertEqual(dividend_month({"pay_date": "2026/11/10"}), (2026, 10))
+        self.assertEqual(dividend_month({"pay_date": "2027-01-08"}), (2026, 12))
+        self.assertEqual(dividend_month({"ex_date": "2026/10/31"}), (2026, 10))
+        self.assertIsNone(dividend_month({}))
 
     def test_cancelled_confirmation_unticks_but_old_months_stay(self):
         g = grid({("2026/10", 1): "TRUE", ("2026/08", 2): "TRUE"})
@@ -76,9 +82,13 @@ class PlanTests(unittest.TestCase):
         self.assertEqual({u["cell"]: u["value"] for u in updates}, {"B6": False})
 
     def test_already_in_sync_is_noop(self):
-        g = grid({("2026/11", 12): True})
-        recs = [self.rec("東方匯理新興市場債券U南非幣（月配）", "台新基金", "ZAR", "2026/11/07")]
+        g = grid({("2026/10", 12): True})
+        recs = [self.rec("東方匯理新興市場債券U南非幣（月配）", "台新基金", "ZAR", "2026/11/01")]
         self.assertEqual(plan(g, recs, self.TODAY), ([], []))
+
+    def test_unmatched_fund_reported(self):
+        _, problems = plan(grid(), [self.rec("某歐元基金", "基富通", "EUR", "2026/11/01")], self.TODAY)
+        self.assertEqual(len(problems), 1)
 
     def test_date_serial_months(self):
         # Google 試算表的日期格用 UNFORMATTED_VALUE 讀到的是序號
@@ -88,10 +98,6 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(cell_month(""))
         g = [list(r) for r in HEADER] + [[46266] + ["FALSE"] * 12, [46296] + ["FALSE"] * 12]
         self.assertEqual(month_rows(g), {(2026, 9): 4, (2026, 10): 5})
-
-    def test_unmatched_fund_reported(self):
-        _, problems = plan(grid(), [self.rec("某歐元基金", "基富通", "EUR", "2026/11/01")], self.TODAY)
-        self.assertEqual(len(problems), 1)
 
 
 if __name__ == "__main__":
