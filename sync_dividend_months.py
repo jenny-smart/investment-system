@@ -13,7 +13,7 @@ App 配息記錄頁按「💾 套用確認狀態」只寫進 Supabase；這支�
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import difflib
 import json
 import os
@@ -93,10 +93,19 @@ def month_rows(grid):
     rows = {}
     for r in range(FIRST_MONTH_ROW, len(grid) + 1):
         line = grid[r - 1]
-        m = re.fullmatch(r"\s*(\d{4})\s*[/\-]\s*(\d{1,2})\s*", str(line[0] if line else ""))
-        if m:
-            rows[(int(m[1]), int(m[2]))] = r
+        month = cell_month(line[0] if line else "")
+        if month:
+            rows[month] = r
     return rows
+
+
+def cell_month(value):
+    """A 欄的月份：文字 2026/09、2026-09-01，或日期格的序號（UNFORMATTED_VALUE 讀出來是 46266 這種數字）。"""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 20000 < value < 80000:
+        d = date(1899, 12, 30) + timedelta(days=int(value))
+        return (d.year, d.month)
+    m = re.match(r"\s*(\d{4})\s*[/\-.]\s*(\d{1,2})", str(value or ""))
+    return (int(m[1]), int(m[2])) if m else None
 
 
 def pay_month(record):
