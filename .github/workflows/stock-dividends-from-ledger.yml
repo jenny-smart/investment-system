@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       year:
-        description: "年度（讀 YYYY細帳；留空＝今年，1 月時連去年一起）"
+        description: "只讀哪一年的細帳（留空＝去年＋今年）"
         type: string
         default: ""
       apply:

@@ -53,9 +53,8 @@ class LedgerTests(unittest.TestCase):
 
 class YearTests(unittest.TestCase):
     def test_default_years(self):
-        self.assertEqual(default_years(date(2026, 11, 7)), [2026])
-        self.assertEqual(default_years(date(2027, 1, 12)), [2026, 2027])
-        self.assertEqual(default_years(date(2027, 2, 1)), [2027])
+        self.assertEqual(default_years(date(2026, 11, 7)), [2025, 2026])
+        self.assertEqual(default_years(date(2027, 6, 1)), [2026, 2027])   # 2026 晚補的也抓得到
 
 
 class PlanTests(unittest.TestCase):
@@ -78,6 +77,14 @@ class PlanTests(unittest.TestCase):
         got = {s["item"].label: (s["action"], (s["record"] or {}).get("id")) for s in plan(items, records)}
         self.assertEqual(got, {"盟立": ("確認入帳", 1), "00919": ("已一致", 2), "鈺齊": ("金額不同", 3),
                                "世紀": ("補登", None), "折讓": ("無法對應", None)})
+
+    def test_late_note_is_found_again_without_duplicates(self):
+        # 2026/10 的股利 2027 才補備註：第一次補登，之後再跑因為已有相同金額的記錄 → 已一致
+        item = NoteItem((2026, 10), "盟立", 1404, "2464")
+        self.assertEqual(plan([item], [])[0]["action"], "補登")
+        rec = {"id": 5, "ticker": "2464.TW", "ex_date": "", "cash_pay_date": "2026/10/01",
+               "is_cash_received": True, "actual_cash_total": 1404}
+        self.assertEqual(plan([item], [rec])[0]["action"], "已一致")
 
     def test_each_record_used_once(self):
         items = [NoteItem((2026, 7), "00919", 100, "00919"), NoteItem((2026, 10), "00919", 120, "00919")]

@@ -281,13 +281,13 @@ def apply(sb, steps, stocks):
 
 
 def default_years(today):
-    """今年；1 月時連去年（12 月入帳的股利、去年細帳最後一欄）。"""
-    return [today.year - 1, today.year] if today.month == 1 else [today.year]
+    """去年＋今年：去年的股利晚補記在去年細帳（隔年才補備註）也抓得到；已一致的不會重複寫。"""
+    return [today.year - 1, today.year]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--year", type=int, help="讀哪一年的細帳；不填＝今年，1 月時連去年一起（12 月的股利常在 1 月才記）")
+    parser.add_argument("--year", type=int, help="只讀哪一年的細帳；不填＝去年＋今年（去年晚補的也抓得到）")
     parser.add_argument("--apply", action="store_true", help="寫入資料庫（預設只產生報告）")
     args = parser.parse_args(argv)
 
