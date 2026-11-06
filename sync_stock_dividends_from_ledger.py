@@ -394,6 +394,43 @@ def scan_expected(sb):
         print(f"WARN 掃描除權息公告失敗（仍繼續比對）：{exc}")
 
 
+def app_only_records(records, steps, years):
+    """App 已入帳、但沒對到任何細帳備註的記錄（App「今年台股現金股利」有算、細帳沒有）。
+
+    ledger_note 的補登若跟其中一筆同股票、同金額，標 dup_of（多半是同一筆股利記了兩次）。"""
+    from invest_app.stock_dividends import _stock_year_from_record
+    used = {s["record"].get("id") for s in steps if s.get("record")}
+    loose = [r for r in records if r.get("is_cash_received") and r.get("id") not in used
+             and _stock_year_from_record(r) in years]
+    ledger = [r for r in loose if r.get("source") == SOURCE]
+    app = [r for r in loose if r.get("source") != SOURCE]
+    out = []
+    for r in app:
+        amount = number(r.get("actual_cash_total")) or number(r.get("estimated_cash_total"))
+        dup = next((x for x in ledger if plain_code(x.get("ticker")) == plain_code(r.get("ticker"))
+                    and abs(number(x.get("actual_cash_total")) - amount) <= max(30.0, amount * 0.02)), None)
+        if dup is not None:
+            ledger.remove(dup)
+        out.append({"record": r, "amount": amount, "dup_of": dup})
+    return out
+
+
+def report_app_only(records, steps, years):
+    rows = app_only_records(records, steps, years)
+    if not rows:
+        return
+    total = sum(r["amount"] for r in rows)
+    dup_total = sum(r["amount"] for r in rows if r["dup_of"])
+    print(f"\n[App 已入帳、細帳沒有] {len(rows)} 筆，合計 {total:,.0f}"
+          f"（其中 {sum(1 for r in rows if r['dup_of'])} 筆、{dup_total:,.0f} 跟細帳補登重複）")
+    for row in rows:
+        r = row["record"]
+        dup = f"｜疑似重複：補登 #{row['dup_of'].get('id')}" if row["dup_of"] else ""
+        print(f"  #{r.get('id')} {r.get('name', '')}（{r.get('ticker', '')}）{row['amount']:,.0f}｜除息 {r.get('ex_date') or '—'} "
+              f"發放 {r.get('cash_pay_date') or '—'}｜來源 {r.get('source') or '—'}｜建立 {str(r.get('created_at') or '')[:10]}"
+              f"｜{str(r.get('note') or '')[:30]}{dup}")
+
+
 FIRST_YEAR = 2026  # 這個流程從 2026 細帳開始；2025 以前的股利已含在持倉累計股利裡，不匯入
 
 
@@ -448,6 +485,7 @@ def main(argv=None):
             print(f"  {i.month[0]}/{i.month[1]:02d} {i.label}{code} {i.amount:,.0f}{extra}")
     for p in problems:
         print(f"WARN {p}")
+    report_app_only(records, steps, years)
 
     if args.apply:
         done, warnings = apply(sb, steps, stocks)
