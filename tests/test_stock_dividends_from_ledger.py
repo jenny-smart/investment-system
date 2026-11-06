@@ -43,6 +43,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(resolve("折讓", INDEX), ("", "費用"))
         self.assertEqual(resolve("手續費", INDEX), ("", "費用"))
         self.assertEqual(resolve("0050FUND", INDEX), ("", "費用"))   # 2 月基金配息 19,990
+        self.assertNotEqual(resolve("凱基金", INDEX)[1], "費用")       # 凱基金（2883）是股票
+        self.assertNotEqual(resolve("凱基金乙", INDEX)[1], "費用")
         self.assertEqual(resolve("某某", INDEX), ("", ""))
 
 
@@ -95,10 +97,13 @@ class YearTests(unittest.TestCase):
              "note": "x｜2026細帳備註確認"},
             {"id": 8, "ticker": "2603.TW", "is_cash_received": False, "estimated_cash_total": 800, "source": "TWSE"},
         ]
+        recs += [{"id": 9, "ticker": "1560.TW", "is_cash_received": True, "actual_cash_total": 175000, "source": "TWSE"},
+                 {"id": 10, "ticker": "1560.TW", "is_cash_received": True, "actual_cash_total": 170260,
+                  "source": "ledger_note"}]   # 中砂：App 扣補充保費前，細帳實拿
         merges, returns = reconcile_plan(recs, [2026], year_of)
-        self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4)])
+        self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4), (9, 10)])
         self.assertEqual([r["id"] for r in returns], [6])
-        self.assertEqual(position_targets(recs)["00900"], 420)
+        self.assertEqual(position_targets(recs[:8])["00900"], 420)
 
     def test_default_years(self):
         self.assertEqual(default_years(date(2026, 11, 7)), [2026])         # 不匯入 2025

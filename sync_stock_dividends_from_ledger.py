@@ -47,7 +47,7 @@ def estimate_tolerance(estimate):
 
 # 備註裡不是台股股利的項目（手續費、折讓、基金配息…）：不補登，另列「費用／折讓」
 FEE_WORDS = ("折讓", "手續費", "匯費", "轉帳", "補充保費", "健保", "二代健保", "稅", "扣",
-             "FUND", "基金")   # 0050FUND 19990：基金配息記在股利-台股，不是台股股利
+             "FUND", "基金配息")   # 0050FUND 19990：基金配息記在股利-台股；「凱基金」是股票，不能只比「基金」
 # 備註常用的簡稱、打錯字 → 股票代碼（報告會標「別名」方便核對；不對就改這裡）
 ALIASES = {
     "富邦投等": "00740B",   # 富邦全球投等債
@@ -437,8 +437,11 @@ LEDGER_CONFIRMED = "細帳備註確認"
 NOT_IN_LEDGER = "細帳沒有這筆，退回待入帳"
 
 
+RECONCILE_TOLERANCE = 0.05  # App 記的多半是扣補充保費（2.11%）、匯費前的金額，細帳是實拿
+
+
 def same_amount(a, b):
-    return abs(number(a) - number(b)) <= max(30.0, abs(number(b)) * 0.02)
+    return abs(number(a) - number(b)) <= max(30.0, abs(number(b)) * RECONCILE_TOLERANCE)
 
 
 def reconcile_plan(records, years, year_of):
