@@ -136,8 +136,8 @@ def _read_time(key: str) -> str:
     return DATA_FETCHED_AT.get({"fund_dividend": "gas_dividend", "stock_dividend": "stock_dividend"}[key], "")
 
 
-def render_app_reads() -> None:
-    """App 自己讀的資料（不是排程寫入的）：最後讀取時間＋立即重讀按鈕。"""
+def render_app_reads(enriched=None) -> None:
+    """App 自己讀的資料（不是排程寫入的）：最後讀取時間＋立即重讀按鈕；再加依總覽自動確認配息入帳。"""
     st.markdown("**📥 App 讀取資料**")
     cols = st.columns(len(APP_READS) + 1)
     for col, (key, label, source, interval, refresh) in zip(cols, APP_READS):
@@ -148,4 +148,23 @@ def render_app_reads() -> None:
                 refresh()
                 st.rerun()
     with cols[-1]:
-        st.caption("配息記錄、台股股利記錄存在資料庫，每次開啟都是最新。")
+        _render_auto_confirm(enriched)
+
+
+def _render_auto_confirm(enriched) -> None:
+    """配息入帳：總覽每月加總金額對得上的待確認配息自動確認，配息月份由排程隨後勾選。"""
+    if enriched is None:
+        return
+    from invest_app.dividends import auto_confirm_from_ledger
+    force = st.button("立即比對", key="auto_confirm_now")
+    state = auto_confirm_from_ledger(enriched, force=force)
+    parts = [f"配息入帳（比對總覽）：{state.get('time', '—')}"]
+    if state.get("confirmed"):
+        parts.append("✓ 自動確認 " + "、".join(state["confirmed"]))
+    if state.get("waiting"):
+        parts.append(f"{state['waiting']} 筆本月還沒入帳")
+    if state.get("mismatch"):
+        parts.append("⚠ 金額對不上：" + "、".join(state["mismatch"]) + "（到配息記錄頁核對）")
+    if state.get("error"):
+        parts.append(f"⚠ {state['error']}")
+    st.caption("　".join(parts) + "　｜每 10 分鐘，確認後配息月份隨基金淨值排程勾選")
