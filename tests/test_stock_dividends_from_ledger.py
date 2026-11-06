@@ -95,10 +95,13 @@ class YearTests(unittest.TestCase):
              "note": "x｜2026細帳備註確認"},
             {"id": 8, "ticker": "2603.TW", "is_cash_received": False, "estimated_cash_total": 800, "source": "TWSE"},
         ]
+        recs += [{"id": 9, "ticker": "1560.TW", "is_cash_received": True, "actual_cash_total": 175000, "source": "TWSE"},
+                 {"id": 10, "ticker": "1560.TW", "is_cash_received": True, "actual_cash_total": 170260,
+                  "source": "ledger_note"}]   # 中砂：App 扣補充保費前，細帳實拿
         merges, returns = reconcile_plan(recs, [2026], year_of)
-        self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4)])
+        self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4), (9, 10)])
         self.assertEqual([r["id"] for r in returns], [6])
-        self.assertEqual(position_targets(recs)["00900"], 420)
+        self.assertEqual(position_targets(recs[:8])["00900"], 420)
 
     def test_default_years(self):
         self.assertEqual(default_years(date(2026, 11, 7)), [2026])         # 不匯入 2025

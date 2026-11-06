@@ -437,8 +437,11 @@ LEDGER_CONFIRMED = "細帳備註確認"
 NOT_IN_LEDGER = "細帳沒有這筆，退回待入帳"
 
 
+RECONCILE_TOLERANCE = 0.05  # App 記的多半是扣補充保費（2.11%）、匯費前的金額，細帳是實拿
+
+
 def same_amount(a, b):
-    return abs(number(a) - number(b)) <= max(30.0, abs(number(b)) * 0.02)
+    return abs(number(a) - number(b)) <= max(30.0, abs(number(b)) * RECONCILE_TOLERANCE)
 
 
 def reconcile_plan(records, years, year_of):
