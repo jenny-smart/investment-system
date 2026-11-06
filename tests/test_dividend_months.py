@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from sync_dividend_months import match_column, plan, sheet_columns
+from sync_dividend_months import cell_month, match_column, month_rows, plan, sheet_columns
 
 # 配息月份 rows 1–3 as in the sheet
 HEADER = [
@@ -79,6 +79,15 @@ class PlanTests(unittest.TestCase):
         g = grid({("2026/11", 12): True})
         recs = [self.rec("東方匯理新興市場債券U南非幣（月配）", "台新基金", "ZAR", "2026/11/07")]
         self.assertEqual(plan(g, recs, self.TODAY), ([], []))
+
+    def test_date_serial_months(self):
+        # Google 試算表的日期格用 UNFORMATTED_VALUE 讀到的是序號
+        self.assertEqual(cell_month(46266), (2026, 9))
+        self.assertEqual(cell_month("2026/10"), (2026, 10))
+        self.assertEqual(cell_month("2026-11-01"), (2026, 11))
+        self.assertIsNone(cell_month(""))
+        g = [list(r) for r in HEADER] + [[46266] + ["FALSE"] * 12, [46296] + ["FALSE"] * 12]
+        self.assertEqual(month_rows(g), {(2026, 9): 4, (2026, 10): 5})
 
     def test_unmatched_fund_reported(self):
         _, problems = plan(grid(), [self.rec("某歐元基金", "基富通", "EUR", "2026/11/01")], self.TODAY)
