@@ -43,6 +43,8 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(resolve("折讓", INDEX), ("", "費用"))
         self.assertEqual(resolve("手續費", INDEX), ("", "費用"))
         self.assertEqual(resolve("0050FUND", INDEX), ("", "費用"))   # 2 月基金配息 19,990
+        self.assertNotEqual(resolve("凱基金", INDEX)[1], "費用")       # 凱基金（2883）是股票
+        self.assertNotEqual(resolve("凱基金乙", INDEX)[1], "費用")
         self.assertEqual(resolve("某某", INDEX), ("", ""))
 
 
