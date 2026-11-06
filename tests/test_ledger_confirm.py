@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from invest_app.sheet_compare import ledger_confirm_suggestions, sheet_fx_rates
+from invest_app.sheet_compare import ledger_confirm_plan, ledger_confirm_suggestions, sheet_fx_rates
 
 
 def records():
@@ -32,6 +32,27 @@ class LedgerConfirmTests(unittest.TestCase):
 
     def test_nothing_filled(self):
         self.assertEqual(ledger_confirm_suggestions(records(), [{"項目": "配息-基富通-台", "金額": 0}], (2026, 10)), {})
+
+    def test_only_the_paid_record_matches_the_ledger_amount(self):
+        # 台新-南非：兩筆待確認，總覽 43,910 只對得上其中一筆（22,423 ZAR × 1.9583）
+        df = pd.DataFrame([
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "東方匯理 U南非幣", "_確認前": False,
+             "_sort_date": pd.Timestamp("2026-11-07")},
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "高盛 Y南非幣對沖", "_確認前": False,
+             "_sort_date": pd.Timestamp("2026-11-08")},
+        ])
+        twd = {0: 22423 * 1.9583, 1: 11773 * 1.9583}
+        ledger = [{"項目": "配息-台新-南非", "金額": 43910}]
+        self.assertEqual(ledger_confirm_suggestions(df, ledger, (2026, 11), twd.get), {0: "配息-台新-南非"})
+        plan = ledger_confirm_plan(df, ledger, (2026, 11), twd.get)[0]
+        self.assertTrue(plan["ok"])
+        self.assertEqual((plan["candidates"], plan["matched"]), ([0, 1], [0]))
+        # 都對不上就不預先選
+        self.assertEqual(ledger_confirm_suggestions(df, [{"項目": "配息-台新-南非", "金額": 30000}], (2026, 11),
+                                                    twd.get), {})
+        # 兩筆都入帳
+        self.assertEqual(sorted(ledger_confirm_suggestions(df, [{"項目": "配息-台新-南非", "金額": 66966}],
+                                                           (2026, 11), twd.get)), [0, 1])
 
     def test_sheet_fx_rates_first_occurrence(self):
         pad = [""] * 16
