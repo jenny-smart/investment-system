@@ -54,6 +54,23 @@ class LedgerConfirmTests(unittest.TestCase):
         self.assertEqual(sorted(ledger_confirm_suggestions(df, [{"項目": "配息-台新-南非", "金額": 66966}],
                                                            (2026, 11), twd.get)), [0, 1])
 
+    def test_already_confirmed_amount_is_not_a_mismatch(self):
+        # 11/7：東方匯理 U南非（22,423 ZAR）已確認、總覽 43,925 就是它；高盛 Y南非還沒入帳 → 不是對不上
+        df = pd.DataFrame([
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "東方匯理 U南非幣", "_確認前": True,
+             "_sort_date": pd.Timestamp("2026-11-01")},
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "高盛 Y南非幣對沖", "_確認前": False,
+             "_sort_date": pd.Timestamp("2026-11-06")},
+        ])
+        twd = {0: 43925, 1: 23096}
+        ledger = [{"項目": "配息-台新-南非", "金額": 43925}]
+        plan = ledger_confirm_plan(df, ledger, (2026, 11), twd.get)[0]
+        self.assertTrue(plan["ok"])
+        self.assertEqual((plan["candidates"], plan["matched"]), ([1], []))
+        # 之後高盛也入帳、總覽變 67,021 → 只選高盛
+        plan = ledger_confirm_plan(df, [{"項目": "配息-台新-南非", "金額": 67021}], (2026, 11), twd.get)[0]
+        self.assertEqual((plan["matched"], plan["ok"]), ([1], True))
+
     def test_sheet_fx_rates_first_occurrence(self):
         pad = [""] * 16
         grid = [pad + ["匯率", "賣出"], pad + ["美金", "31.9614"], pad + ["南非", "1.9334"],
