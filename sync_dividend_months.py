@@ -2,7 +2,7 @@
 
 App 配息記錄頁按「💾 套用確認狀態」只寫進 Supabase；這支由 fund-nav 排程（每 10 分鐘）一起跑：
 讀 fund_dividends、dividend_log 裡 is_paid 的記錄，依發放日期的月份、基金對到「配息月份」的格子，
-從 SYNC_FROM（2026/09）起到本月：有已確認記錄就勾 TRUE，取消確認就改回 FALSE；更早的月份不動。
+從 SYNC_FROM（2026/10）起到本月：有已確認記錄就勾 TRUE，取消確認就改回 FALSE；更早的月份不動。
 
 分頁格式：第 1 列平台（基富通-台、渣打-美金…）、第 2 列基金名稱、第 3 列配息日，A 欄 YYYY/MM。
 基金對欄：幣別相同、級別（A／U／Y）相同的欄裡，名稱最像的那一欄（東方匯理＝鋒裕匯理），平台相同加分；
@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 TAIPEI = ZoneInfo("Asia/Taipei")
 SPREADSHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
 SHEET_GID = 2033264385  # 配息月份
-SYNC_FROM = (2026, 9)   # 之前的月份是手動勾的，資料庫不一定有記錄，不動
+SYNC_FROM = (2026, 10)  # 9 月以前是手動勾的，資料庫不一定每格都有記錄，不動
 LABEL_ROW, NAME_ROW, FIRST_MONTH_ROW = 1, 2, 4
 SECTION_CURRENCY = {"台": "TWD", "人民幣": "CNY", "日": "JPY", "美金": "USD", "南非": "ZAR"}
 PLATFORM_PREFIX = {"基富通": "基富通", "渣打基金": "渣打", "渣打": "渣打", "台新基金": "台新", "台新": "台新"}
