@@ -82,7 +82,8 @@ def render_sync_status(sheet_fetched_at: str = "") -> None:
             if state["error"]:
                 st.caption(f"{job.label}：{_fmt(state['last_ok'], now)}　⚠ {state['error']}")
             elif state["stale"]:
-                st.caption(f"{job.label}：{_fmt(state['last_ok'], now)}　⚠ 總覽未更新，使用即時價")
+                stale_note = "尚未比對細帳" if job.key == "stock_div" else "總覽未更新，使用即時價"
+                st.caption(f"{job.label}：{_fmt(state['last_ok'], now)}　⚠ {stale_note}")
             else:
                 st.caption(f"{job.label}：{_fmt(state['last_ok'], now)}　✓")
             triggered = log.get(job.key)
@@ -124,8 +125,8 @@ def _refresh_stock_dividends() -> None:
 # (key, 標題, 讀取時間來源說明, 自動重讀間隔, 清快取函式)
 APP_READS = (
     ("non_investment", "非投資金額", "總帳「資產總覽」", "每 2 分鐘", _refresh_non_investment),
-    ("fund_dividend", "基金配息資料", "基金公司配息／除息日", "每 6 小時", _refresh_fund_dividends),
-    ("stock_dividend", "台股除權息公告", "證交所／櫃買", "每天", _refresh_stock_dividends),
+    ("fund_dividend", "基金配息資料", "基金公司配息／除息日", "每 10 分鐘", _refresh_fund_dividends),
+    ("stock_dividend", "台股除權息公告", "證交所／櫃買", "每 10 分鐘", _refresh_stock_dividends),
 )
 
 

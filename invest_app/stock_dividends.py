@@ -179,7 +179,7 @@ def stock_cash_dividend_total_for_year(year: int | None = None) -> float:
     return total
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_twse_stock_dividend_announcements() -> list[dict[str, Any]]:
     url = "https://openapi.twse.com.tw/v1/opendata/t187ap45_L"
     try:
@@ -221,7 +221,7 @@ def fetch_twse_stock_dividend_announcements() -> list[dict[str, Any]]:
     return rows
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_tpex_stock_dividend_announcements() -> list[dict[str, Any]]:
     url = "https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost"
     try:

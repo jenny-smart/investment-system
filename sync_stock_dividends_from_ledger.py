@@ -7,14 +7,17 @@
     00919 8790
 這支逐月讀備註，對到股票（代碼或名稱），再對 App 的台股股利記錄（stock_dividend_log）：
 
-  確認入帳  該股該月附近有記錄、還沒確認 → 勾確認現金入帳、實際現金股利＝備註金額、加到持倉累計股利
+  確認入帳  該股該月附近有應入帳記錄（掃描除權息公告產生的預估）、還沒確認，且金額跟預估相差
+            在 2%（至少 30 元）內 → 勾確認現金入帳、實際現金股利＝備註金額、加到持倉累計股利
+  金額待核  有應入帳記錄但跟預估差太多 → 只列出，到 App 台股股利頁核對後手動確認
   補登      找不到記錄 → 新增一筆已入帳記錄（發放日記為該月 1 日，來源 ledger_note），加到持倉累計股利
   已一致    已確認且金額相同 → 不動
   金額不同  已確認但金額不同 → 只列出，不改
   無法對應  名稱對不到股票（例如「折讓」）→ 只列出
 另外檢查每月備註加總是否等於儲存格金額。
 
-預設只產生報告（--apply 才寫入資料庫）。
+跟基金配息同一個流程：先掃描證交所／櫃買除權息公告建立應入帳（預估）記錄，再用細帳備註確認入帳。
+預設只產生報告（--apply 才掃描公告並寫入資料庫）；排程派送時一律 apply。
 
   python sync_stock_dividends_from_ledger.py --year 2026
   python sync_stock_dividends_from_ledger.py --year 2026 --apply
@@ -36,8 +39,14 @@ SOURCE = "ledger_note"
 MATCH_WINDOW_MONTHS = 4      # 記錄的除息／發放月份與入帳月份相差在這之內才算同一筆
 AMOUNT_TOLERANCE = 1.0       # 已確認金額與備註相差超過 1 元才算不同
 
-# 備註裡不是股票的項目（手續費、折讓…）：不補登，另列「費用／折讓」
-FEE_WORDS = ("折讓", "手續費", "匯費", "轉帳", "補充保費", "健保", "二代健保", "稅", "扣")
+
+def estimate_tolerance(estimate):
+    """備註金額 vs 應入帳預估：2%，至少 30 元（股數四捨五入、零股）。"""
+    return max(30.0, abs(estimate) * 0.02)
+
+# 備註裡不是台股股利的項目（手續費、折讓、基金配息…）：不補登，另列「費用／折讓」
+FEE_WORDS = ("折讓", "手續費", "匯費", "轉帳", "補充保費", "健保", "二代健保", "稅", "扣",
+             "FUND", "基金")   # 0050FUND 19990：基金配息記在股利-台股，不是台股股利
 # 備註常用的簡稱、打錯字 → 股票代碼（報告會標「別名」方便核對；不對就改這裡）
 ALIASES = {
     "富邦投等": "00740B",   # 富邦全球投等債
@@ -249,7 +258,11 @@ def plan(items, records):
         rec = best[1]
         used.add(rec.get("id"))
         if not rec.get("is_cash_received"):
-            action = "確認入帳"
+            estimate = number(rec.get("estimated_cash_total"))
+            if estimate > 0 and abs(estimate - item.amount) > estimate_tolerance(estimate):
+                action = "金額待核"
+            else:
+                action = "確認入帳"
         elif abs(number(rec.get("actual_cash_total")) - item.amount) <= AMOUNT_TOLERANCE:
             action = "已一致"
         else:
@@ -335,6 +348,17 @@ def apply(sb, steps, stocks):
     return done, warnings
 
 
+def scan_expected(sb):
+    """先依除權息公告×目前持股建立應入帳（預估）記錄，跟 App「掃描台股股利候選」同一支。"""
+    try:
+        from invest_app.core import load_positions
+        from invest_app.stock_dividends import scan_stock_dividend_candidates
+        added = scan_stock_dividend_candidates(load_positions())
+        print(f"掃描除權息公告：新增 {added} 筆應入帳記錄")
+    except Exception as exc:
+        print(f"WARN 掃描除權息公告失敗（仍繼續比對）：{exc}")
+
+
 def default_years(today):
     """去年＋今年：去年的股利晚補記在去年細帳（隔年才補備註）也抓得到；已一致的不會重複寫。"""
     return [today.year - 1, today.year]
@@ -347,6 +371,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     sb = supabase()
+    if args.apply:
+        scan_expected(sb)
     stocks, records = load_stocks_and_records(sb)
     years = [args.year] if args.year else default_years(date.today())
     index = build_stock_index(stocks)
@@ -363,7 +389,7 @@ def main(argv=None):
     steps = plan(items, [r for r in records if str(r.get("currency", "TWD")).upper() == "TWD"])
 
     print(f"== {'、'.join(f'{y}細帳' for y in years)}「{ROW_LABEL}」備註：{len(items)} 筆入帳 ==")
-    for action in ("確認入帳", "補登", "金額不同", "無法對應", "費用／折讓", "已一致"):
+    for action in ("確認入帳", "補登", "金額待核", "金額不同", "無法對應", "費用／折讓", "已一致"):
         group = [s for s in steps if s["action"] == action]
         if not group:
             continue

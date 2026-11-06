@@ -3,6 +3,7 @@ run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.t
 
 on:
   # 手動：先跑報告（apply 不勾），確認後再勾 apply 寫入。
+  # tool-system 排程設定（invest_stock_dividends）每 10 分鐘派送：一律 apply。
   workflow_dispatch:
     inputs:
       year:
@@ -10,7 +11,7 @@ on:
         type: string
         default: ""
       apply:
-        description: "寫入資料庫（不勾＝只產生報告）"
+        description: "掃描除權息公告並寫入資料庫（不勾＝只產生報告；排程派送一律寫入）"
         type: boolean
         default: false
       scheduled_slot:
@@ -48,7 +49,7 @@ jobs:
         shell: bash
         env:
           YEAR: ${{ inputs.year }}
-          APPLY: ${{ inputs.apply }}
+          APPLY: ${{ inputs.apply || inputs.scheduled_slot != '' }}
         run: |
           args=()
           [ -n "$YEAR" ] && args+=(--year "$YEAR")
