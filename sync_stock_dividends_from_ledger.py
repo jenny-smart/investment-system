@@ -8,9 +8,10 @@
 這支逐月讀備註，對到股票（代碼或名稱），再對 App 的台股股利記錄（stock_dividend_log）：
 
   確認入帳  該股該月附近有應入帳記錄（掃描除權息公告產生的預估）、還沒確認，且金額跟預估相差
-            在 2%（至少 30 元）內 → 勾確認現金入帳、實際現金股利＝備註金額、加到持倉累計股利
+            在 2%（至少 30 元）內 → 勾確認現金入帳、實際現金股利＝備註金額
   金額待核  有應入帳記錄但跟預估差太多 → 只列出，到 App 台股股利頁核對後手動確認
-  補登      找不到記錄 → 新增一筆已入帳記錄（發放日記為該月 1 日，來源 ledger_note），加到持倉累計股利
+  補登      找不到記錄 → 新增一筆已入帳記錄（發放日記為該月 1 日，來源 ledger_note）
+只寫股利記錄，不動持倉「累計股利」（那欄原本就含今年，加上去會重複）。
   已一致    已確認且金額相同 → 不動
   金額不同  已確認但金額不同 → 只列出，不改
   無法對應  名稱對不到股票（例如「折讓」）→ 只列出
@@ -313,7 +314,7 @@ def load_stocks_and_records(sb):
 
 
 def apply(sb, steps, stocks):
-    from invest_app.stock_dividends import _format_tw_stock_ticker, update_stock_cash_dividend_total
+    from invest_app.stock_dividends import _format_tw_stock_ticker
     platform_of = {}
     for s in stocks:
         if s.get("platform"):
@@ -327,7 +328,6 @@ def apply(sb, steps, stocks):
                 "cash_pay_date": rec.get("cash_pay_date") or f"{item.month[0]}/{item.month[1]:02d}/01",
                 "note": (str(rec.get("note") or "") + f"｜{item.month[0]}細帳備註確認").strip("｜"),
             }).eq("id", rec["id"]).execute()
-            platform, ticker = rec.get("platform") or "台股", rec.get("ticker")
         elif step["action"] == "補登":
             platform = platform_of.get(item.code, "台股")
             existing = [s for s in stocks if plain_code(s["code"]) == item.code and "." in str(s["code"])]
@@ -343,9 +343,39 @@ def apply(sb, steps, stocks):
         else:
             continue
         done += 1
-        if not update_stock_cash_dividend_total(ticker, platform, item.amount):
-            warnings.append(f"{item.label} {item.amount:,.0f}：記錄已寫入，但找不到台股持倉主列可加累計股利")
+        # 不動持倉「累計股利」：那欄原本就由你維護（已含今年），這裡只寫股利記錄，避免重複加總
     return done, warnings
+
+
+UNDO_MARK = "累計已回沖"
+
+
+def undo_position_totals(sb, apply_changes):
+    """回沖 2026-11-07 那次 apply 加到持倉累計股利的金額（ledger_note 記錄，只做一次）。"""
+    from invest_app.stock_dividends import update_stock_cash_dividend_total
+    rows = sb.table("stock_dividend_log").select("id,ticker,platform,name,actual_cash_total,note,source") \
+        .eq("source", SOURCE).execute().data or []
+    todo = [r for r in rows if UNDO_MARK not in str(r.get("note") or "")]
+    total, done, missing = 0.0, 0, []
+    for r in todo:
+        amount = number(r.get("actual_cash_total"))
+        if amount <= 0:
+            continue
+        print(f"  回沖 {r.get('name')}（{r.get('ticker')}）-{amount:,.0f}")
+        if not apply_changes:
+            total += amount
+            continue
+        if update_stock_cash_dividend_total(r["ticker"], r.get("platform") or "台股", -amount):
+            total += amount
+            done += 1
+        else:
+            missing.append(f"{r.get('name')} {amount:,.0f}")  # 當初也沒加上去（找不到持倉主列）
+        sb.table("stock_dividend_log").update({"note": f"{r.get('note') or ''}｜{UNDO_MARK}".strip("｜")}) \
+            .eq("id", r["id"]).execute()
+    print(f"== 回沖持倉累計股利：{len(todo)} 筆、合計 {total:,.0f}" + ("" if apply_changes else "（預覽）"))
+    if missing:
+        print("  找不到持倉主列（當初就沒加，不用回沖）：" + "、".join(missing))
+    return done
 
 
 def scan_expected(sb):
@@ -368,9 +398,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, help="只讀哪一年的細帳；不填＝去年＋今年（去年晚補的也抓得到）")
     parser.add_argument("--apply", action="store_true", help="寫入資料庫（預設只產生報告）")
+    parser.add_argument("--undo-position-totals", action="store_true",
+                        help="回沖先前 apply 加到持倉累計股利的金額（搭配 --apply 才寫入）")
     args = parser.parse_args(argv)
 
     sb = supabase()
+    if args.undo_position_totals:
+        undo_position_totals(sb, args.apply)
+        return 0
     if args.apply:
         scan_expected(sb)
     stocks, records = load_stocks_and_records(sb)
