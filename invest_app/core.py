@@ -1336,9 +1336,16 @@ def online_sheet_url(gid: str) -> str:
 
 
 # 各分頁實際下載的時間（只在快取過期重新下載時更新），顯示給使用者確認資料新舊
-SHEET_FETCHED_AT: dict[str, str] = {}
+# 用 cache_resource 保存：部署時 Streamlit 會重新載入模組但保留資料快取，一般的 dict 會被清空，
+# 畫面就一直顯示「—」直到快取過期
+@st.cache_resource(show_spinner=False)
+def _fetched_at_store(name: str) -> dict[str, str]:
+    return {}
+
+
+SHEET_FETCHED_AT: dict[str, str] = _fetched_at_store("sheet")
 # 其他外部資料實際下載的時間（"gas_dividend" 基金配息資料、"stock_dividend" 台股除權息公告）
-DATA_FETCHED_AT: dict[str, str] = {}
+DATA_FETCHED_AT: dict[str, str] = _fetched_at_store("data")
 
 
 @st.cache_data(ttl=120, show_spinner=False)

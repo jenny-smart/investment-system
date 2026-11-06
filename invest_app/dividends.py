@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import pandas as pd
@@ -1184,6 +1184,147 @@ def render_position_dividend_total_fix_tool() -> None:
                 st.error("更新失敗。")
 
 
+def ledger_plan_for(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """配息記錄表 vs 總帳「總覽」每月加總本月金額：每一類哪幾筆對得上（見 ledger_confirm_plan）。"""
+    from asset_summary import monthly_income_block
+    from invest_app.sheet_compare import ledger_confirm_plan, sheet_fx_rates
+    now = tw_now()
+    ledger_grid = load_sheet_grid(OVERVIEW_SHEET_GID)
+    ledger_rows = monthly_income_block(ledger_grid)
+    # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
+    sheet_fx = sheet_fx_rates(ledger_grid)
+
+    def twd_of(i: int) -> float:
+        rec = df.loc[i]
+        rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
+        original = normalize_number(rec.get("實際配息原幣", 0), 0)
+        return original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
+
+    return ledger_confirm_plan(df, ledger_rows, (now.year, now.month), twd_of)
+
+
+@st.cache_resource(show_spinner=False)
+def auto_confirm_state() -> dict[str, Any]:
+    """依總覽自動確認的最後結果（跨使用者共用）：time、confirmed、waiting、mismatch、error。"""
+    return {}
+
+
+AUTO_CONFIRM_EVERY = timedelta(minutes=10)
+
+
+def auto_confirm_from_ledger(enriched_df: pd.DataFrame, force: bool = False) -> dict[str, Any]:
+    """總覽每月加總已入帳、金額對得上的待確認配息 → 直接確認（之後排程同步勾配息月份）。
+
+    投資總覽每次載入都會叫（App 喚醒每 30 分鐘一次），10 分鐘內只做一次；force＝立即比對按鈕。
+    """
+    state = auto_confirm_state()
+    now = tw_now()
+    last = state.get("_at")
+    if not force and last and now - last < AUTO_CONFIRM_EVERY:
+        return state
+    state.update({"_at": now, "time": now.strftime("%m/%d %H:%M"), "confirmed": [], "waiting": 0,
+                  "mismatch": [], "error": ""})
+    try:
+        df = build_actual_dividend_table(enriched_df)
+        if df.empty:
+            return state
+        plan = ledger_plan_for(df)
+        pending = {int(i) for i, row in df.iterrows()
+                   if not normalize_bool(row.get("_確認前", row.get("確認入帳", False)), False)}
+        changes = {i: True for p in plan if p["ok"] for i in p["matched"] if i in pending}
+        state["waiting"] = sum(len(p["candidates"]) - (len(p["matched"]) if p["ok"] else 0) for p in plan)
+        state["mismatch"] = [p["label"] for p in plan if not p["ok"]]
+        if changes:
+            updated, warnings = apply_dividend_confirmations(df, changes)
+            state["confirmed"] = [f"{normalize_text(df.loc[i].get('基金名稱', ''))[:14]}" for i in changes][:updated]
+            if warnings:
+                state["error"] = "；".join(warnings)
+            st.cache_data.clear()
+    except Exception as exc:  # 自動比對失敗不能讓總覽壞掉
+        state["error"] = str(exc)[:120]
+    return state
+
+
+def apply_dividend_confirmations(df: pd.DataFrame, changes: dict[int, bool],
+                                 recompute_all: bool = False) -> tuple[int, list[str]]:
+    """把 {記錄 index: 確認與否} 寫回資料庫並重算累計配息；回傳 (更新筆數, 警告)。
+
+    App 的「💾 套用確認狀態」和依總覽自動確認都用這支。
+    """
+    display_df = df[ACTUAL_DIVIDEND_COLUMNS].copy()
+    sb = supabase_client()
+    updated = 0
+    affected_groups: dict[tuple[str, str, str], str] = {}
+    warnings: list[str] = []
+    existing_keys = _existing_dividend_record_keys(_combined_dividend_records())
+    for idx, new_confirmed in changes.items():
+        row = display_df.iloc[idx]
+        old_confirmed = normalize_bool(df.iloc[idx].get("_確認前", False), False)
+        if old_confirmed == new_confirmed:
+            continue
+        row_id = df.iloc[idx].get("_id")
+        source_table = normalize_text(df.iloc[idx].get("_source_table", "fund_dividends"), "fund_dividends")
+        fund_code = normalize_text(df.iloc[idx].get("_fund_code", ""))
+        platform = normalize_text(df.iloc[idx].get("_platform", row.get("平台", "")))
+        currency = normalize_text(df.iloc[idx].get("_currency", row.get("幣別", "")))
+        pay_date = normalize_text(df.iloc[idx].get("_pay_date", row.get("發放日期", "")))
+        ex_date = normalize_text(df.iloc[idx].get("_ex_date", ""))
+        units = normalize_number(row.get("配息單位數", 0), 0)
+        div_amount = normalize_number(row.get("每單位配息", 0), 0)
+        total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
+        if total_amount <= 0 and units > 0 and div_amount > 0:
+            total_amount = units * div_amount
+        actual_div = total_amount / units if total_amount > 0 and units > 0 else div_amount
+        fx = normalize_number(df.iloc[idx].get("_fx_rate", 1), 1)
+        payload = {
+            "is_paid": new_confirmed,
+            "actual_div_amount": actual_div,
+            "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
+        }
+        if source_table == "dividend_log_candidate":
+            if not new_confirmed:
+                continue
+            insert_payload = {
+                "fund_code": fund_code,
+                "fund_name": normalize_text(df.iloc[idx].get("_fund_name", row.get("基金名稱", ""))),
+                "platform": platform,
+                "currency": currency,
+                "ex_date": ex_date,
+                "pay_date": pay_date,
+                "div_amount": div_amount,
+                "actual_div_amount": actual_div,
+                "units_at_ex": units,
+                "fx_rate": fx,
+                "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
+                "is_paid": True,
+                "note": f"持倉候選確認入帳 {tw_now().strftime('%Y/%m/%d')}",
+            }
+            insert_key = _dividend_record_key(insert_payload)
+            if insert_key not in existing_keys:
+                sb.table("dividend_log").insert(insert_payload).execute()
+                existing_keys.add(insert_key)
+        else:
+            if row_id is None or normalize_text(row_id, "") in {"", "nan", "None"}:
+                warnings.append(f"{row.get('基金名稱', '')} 缺少記錄 ID，略過。")
+                continue
+            if source_table == "fund_dividends":
+                payload["updated_at"] = "now()"
+            sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
+        affected_groups[(fund_code, platform, currency)] = pay_date or ex_date
+        updated += 1
+    if recompute_all:
+        for _, row in df[df["確認入帳"].apply(lambda v: normalize_bool(v, False))].iterrows():
+            affected_groups[(
+                normalize_text(row.get("_fund_code", "")),
+                normalize_text(row.get("_platform", row.get("平台", ""))),
+                normalize_text(row.get("_currency", row.get("幣別", ""))),
+            )] = normalize_text(row.get("_pay_date", row.get("發放日期", ""))) or normalize_text(row.get("_ex_date", ""))
+    for (fund_code, platform, currency), pay_date in affected_groups.items():
+        if not recompute_position_dividend_original_total(fund_code, platform, currency, pay_date):
+            warnings.append(f"{fund_code} 累計配息重算失敗，請確認持倉主列。")
+    return updated, warnings
+
+
 def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> None:
     if df.empty:
         st.info("目前沒有實際配息記錄。")
@@ -1231,21 +1372,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     suggested: list[str] = []
     matched_ok: set[int] = set()   # 總帳金額對得上的記錄，才能直接確認（也才會勾配息月份）
     try:
-        from asset_summary import monthly_income_block
-        from invest_app.sheet_compare import ledger_confirm_plan, sheet_fx_rates
-        now = tw_now()
-        ledger_grid = load_sheet_grid(OVERVIEW_SHEET_GID)
-        ledger_rows = monthly_income_block(ledger_grid)
-        # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
-        sheet_fx = sheet_fx_rates(ledger_grid)
-
-        def twd_of(i: int) -> float:
-            rec = df.loc[i]
-            rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
-            original = normalize_number(rec.get("實際配息原幣", 0), 0)
-            return original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
-
-        plan = ledger_confirm_plan(df, ledger_rows, (now.year, now.month), twd_of)
+        plan = ledger_plan_for(df)
         index_to_label = {v: k for k, v in pending_options.items()}
         matched_ok = {i for p in plan if p["ok"] for i in p["matched"]}
         suggested = [index_to_label[i] for i in matched_ok if i in index_to_label]
@@ -1261,7 +1388,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
                     lines.append(f"{p['label']}：總帳 {money(p['amount'])}，{len(p['candidates'])} 筆記錄怎麼組合都對不上"
                                  f"（最接近 {money(p['matched_twd'])}，差 {money(p['amount'] - p['matched_twd'])}）"
                                  "⚠️ 沒有預先選，請核對實際配息金額")
-            st.info("📒 總帳每月加總已有本月金額（總覽匯率換算比對），核對後按「💾 套用確認狀態」：\n\n"
+            st.info("📒 總帳每月加總已有本月金額（總覽匯率換算比對；對得上的會自動確認，也可以手動按「💾 套用確認狀態」）：\n\n"
                     + "\n".join(f"- {line}" for line in lines))
     except Exception as exc:
         st.caption(f"讀不到總帳每月加總，無法建議確認：{exc}")
@@ -1286,76 +1413,7 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         if not changes and not recompute_submitted:
             st.info("沒有選擇需要更新的記錄。")
             return
-        sb = supabase_client()
-        updated = 0
-        affected_groups: dict[tuple[str, str, str], str] = {}
-        warnings: list[str] = []
-        existing_keys = _existing_dividend_record_keys(_combined_dividend_records())
-        for idx, new_confirmed in changes.items():
-            row = display_df.iloc[idx]
-            old_confirmed = normalize_bool(df.iloc[idx].get("_確認前", False), False)
-            if old_confirmed == new_confirmed:
-                continue
-            row_id = df.iloc[idx].get("_id")
-            source_table = normalize_text(df.iloc[idx].get("_source_table", "fund_dividends"), "fund_dividends")
-            fund_code = normalize_text(df.iloc[idx].get("_fund_code", ""))
-            platform = normalize_text(df.iloc[idx].get("_platform", row.get("平台", "")))
-            currency = normalize_text(df.iloc[idx].get("_currency", row.get("幣別", "")))
-            pay_date = normalize_text(df.iloc[idx].get("_pay_date", row.get("發放日期", "")))
-            ex_date = normalize_text(df.iloc[idx].get("_ex_date", ""))
-            units = normalize_number(row.get("配息單位數", 0), 0)
-            div_amount = normalize_number(row.get("每單位配息", 0), 0)
-            total_amount = normalize_number(row.get("實際配息原幣", 0), 0)
-            if total_amount <= 0 and units > 0 and div_amount > 0:
-                total_amount = units * div_amount
-            actual_div = total_amount / units if total_amount > 0 and units > 0 else div_amount
-            fx = normalize_number(df.iloc[idx].get("_fx_rate", 1), 1)
-            payload = {
-                "is_paid": new_confirmed,
-                "actual_div_amount": actual_div,
-                "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
-            }
-            if source_table == "dividend_log_candidate":
-                if not new_confirmed:
-                    continue
-                insert_payload = {
-                    "fund_code": fund_code,
-                    "fund_name": normalize_text(df.iloc[idx].get("_fund_name", row.get("基金名稱", ""))),
-                    "platform": platform,
-                    "currency": currency,
-                    "ex_date": ex_date,
-                    "pay_date": pay_date,
-                    "div_amount": div_amount,
-                    "actual_div_amount": actual_div,
-                    "units_at_ex": units,
-                    "fx_rate": fx,
-                    "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
-                    "is_paid": True,
-                    "note": f"持倉候選確認入帳 {tw_now().strftime('%Y/%m/%d')}",
-                }
-                insert_key = _dividend_record_key(insert_payload)
-                if insert_key not in existing_keys:
-                    sb.table("dividend_log").insert(insert_payload).execute()
-                    existing_keys.add(insert_key)
-            else:
-                if row_id is None or normalize_text(row_id, "") in {"", "nan", "None"}:
-                    warnings.append(f"{row.get('基金名稱', '')} 缺少記錄 ID，略過。")
-                    continue
-                if source_table == "fund_dividends":
-                    payload["updated_at"] = "now()"
-                sb.table(source_table).update(payload).eq("id", int(float(row_id))).execute()
-            affected_groups[(fund_code, platform, currency)] = pay_date or ex_date
-            updated += 1
-        if recompute_submitted:
-            for _, row in df[df["確認入帳"].apply(lambda v: normalize_bool(v, False))].iterrows():
-                affected_groups[(
-                    normalize_text(row.get("_fund_code", "")),
-                    normalize_text(row.get("_platform", row.get("平台", ""))),
-                    normalize_text(row.get("_currency", row.get("幣別", ""))),
-                )] = normalize_text(row.get("_pay_date", row.get("發放日期", ""))) or normalize_text(row.get("_ex_date", ""))
-        for (fund_code, platform, currency), pay_date in affected_groups.items():
-            if not recompute_position_dividend_original_total(fund_code, platform, currency, pay_date):
-                warnings.append(f"{fund_code} 累計配息重算失敗，請確認持倉主列。")
+        updated, warnings = apply_dividend_confirmations(df, changes, recompute_all=recompute_submitted)
         if warnings:
             st.warning("\n".join(warnings))
         if updated or recompute_submitted:
