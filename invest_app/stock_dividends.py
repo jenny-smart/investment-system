@@ -398,7 +398,7 @@ def add_zero_cost_stock_dividend_position(ticker: str, platform: str, shares: fl
 
 def build_stock_dividend_table() -> pd.DataFrame:
     df = load_stock_dividend_log()
-    internal_cols = ["_id", "_ticker", "_platform", "_cash_before", "_stock_before"]
+    internal_cols = ["_id", "_ticker", "_platform", "_cash_before", "_stock_before", "_year", "_not_in_ledger"]
     if df.empty:
         return pd.DataFrame(columns=STOCK_DIVIDEND_COLUMNS + internal_cols)
     rows = []
@@ -434,6 +434,9 @@ def build_stock_dividend_table() -> pd.DataFrame:
             "_platform": normalize_text(row.get("platform", "台股"), "台股"),
             "_cash_before": normalize_bool(row.get("is_cash_received", False), False),
             "_stock_before": normalize_bool(row.get("is_stock_received", False), False),
+            "_year": _stock_year_from_record(row),
+            # 細帳對齊時退回的（細帳沒有這筆）：不算預估，另外列出待核
+            "_not_in_ledger": "細帳沒有這筆" in normalize_text(row.get("note", "")),
         })
     out = pd.DataFrame(rows)
     out["_sort_date"] = out["除權息日"].apply(lambda value: _parse_dividend_date(value) or datetime.min.date())
@@ -705,20 +708,35 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
         st.cache_data.clear()
         st.rerun()
     table_df = build_stock_dividend_table()
-    received_cash_this_year = stock_cash_dividend_total_for_year(tw_now().year)
-    estimated_cash = table_df["預估現金股利"].fillna(0).sum() if not table_df.empty and "預估現金股利" in table_df else 0
-    estimated_stock = table_df["預估股票股數"].fillna(0).sum() if not table_df.empty and "預估股票股數" in table_df else 0
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("今年台股現金股利", money(received_cash_this_year))
-    c2.metric("預估現金股利", money(estimated_cash))
-    c3.metric("預估股票股利股數", money(estimated_stock, 4))
-    c4.metric("台股股利記錄筆數", f"{len(table_df):,}")
     if table_df.empty:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("預估現金股利（待入帳）", money(0))
+        c2.metric("今年已入帳現金股利", money(0))
+        c3.metric("台股股利記錄筆數", "0")
         st.info("目前沒有台股股利記錄。可先按「掃描台股股利候選」或手動新增。")
         render_stock_dividend_upload_section(current_positions)
         render_manual_stock_dividend_form(current_positions)
         return
-    display_df = table_df[STOCK_DIVIDEND_COLUMNS].copy()
+    this_year = tw_now().year
+    received = table_df["確認現金入帳"].astype(bool) | table_df["確認股票入帳"].astype(bool)
+    not_in_ledger = table_df["_not_in_ledger"].astype(bool)
+    pending_df = table_df[~received & ~not_in_ledger]
+    review_df = table_df[~received & not_in_ledger]
+    received_df = table_df[received]
+    in_year = table_df["_year"] == this_year
+    # 今年預估＝今年每筆股利各算一次（已入帳用預估，沒有預估用實際）；細帳沒有、待核的不算
+    year_df = table_df[in_year & ~(~received & not_in_ledger)]
+    year_estimate = sum(
+        (normalize_number(r.get("預估現金股利"), 0) or normalize_number(r.get("實際現金股利"), 0))
+        for _, r in year_df.iterrows()
+    )
+    received_cash_this_year = stock_cash_dividend_total_for_year(this_year)
+    pending_cash = pending_df["預估現金股利"].fillna(0).sum()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(f"{this_year} 預估現金股利", money(year_estimate))
+    c2.metric(f"{this_year} 已入帳現金股利", money(received_cash_this_year))
+    c3.metric("待入帳現金股利", money(pending_cash))
+    c4.metric("待入帳／記錄筆數", f"{len(pending_df):,}／{len(table_df):,}")
     col_cfg = {
         "股票名稱": st.column_config.TextColumn("股票名稱", width="large"),
         "股票代碼": st.column_config.TextColumn("股票代碼", width="small"),
@@ -732,21 +750,36 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
         "實際股票股數": st.column_config.NumberColumn("實際股票股數", format="%.4f"),
         "確認股票入帳": st.column_config.CheckboxColumn("確認股票入帳"),
     }
-    edited = st.data_editor(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        height=min(42 * len(display_df) + 44, 620),
-        column_config=col_cfg,
-        disabled=[col for col in STOCK_DIVIDEND_COLUMNS if col not in {"實際現金股利", "確認現金入帳", "實際股票股數", "確認股票入帳", "備註"}],
-        key="stock_dividend_editor",
-    )
+    editable = {"實際現金股利", "確認現金入帳", "實際股票股數", "確認股票入帳", "備註"}
+
+    def _editor(df: pd.DataFrame, key: str) -> pd.DataFrame:
+        if df.empty:
+            st.caption("（沒有記錄）")
+            return df[STOCK_DIVIDEND_COLUMNS]
+        return st.data_editor(
+            df[STOCK_DIVIDEND_COLUMNS], use_container_width=True, hide_index=True,
+            height=min(42 * len(df) + 44, 620), column_config=col_cfg,
+            disabled=[c for c in STOCK_DIVIDEND_COLUMNS if c not in editable], key=key,
+        )
+
+    st.markdown("#### 預估股利表（待入帳）")
+    st.caption("證交所／櫃買除權息公告 × 除權息股數＝預估。細帳「股利-台股」備註有這筆，排程（每 10 分鐘）會自動勾確認入帳、移到下方。")
+    edited_pending = _editor(pending_df, "stock_dividend_pending_editor")
+    if not review_df.empty:
+        with st.expander(f"⚠ 細帳沒有這筆、待核（{len(review_df)} 筆，不算預估）"):
+            st.caption("以前在 App 勾過入帳、但細帳「股利-台股」備註沒有的記錄。真的有領到：在細帳補備註，下一輪會自動確認；重複的可以不理。")
+            edited_review = _editor(review_df, "stock_dividend_review_editor")
+    else:
+        edited_review = review_df[STOCK_DIVIDEND_COLUMNS]
+    st.markdown("#### 實際入帳表")
+    st.caption("已確認入帳的股利（含細帳備註補登）；取消勾選並儲存會退回上方。")
+    edited_received = _editor(received_df.sort_values("現金發放日", ascending=False), "stock_dividend_received_editor")
     if st.button("儲存台股股利確認", key="save_stock_dividend_confirm"):
         sb = supabase_client()
         updated = 0
         warnings: list[str] = []
-        for pos, (_, row) in enumerate(edited.iterrows()):
-            source = table_df.iloc[pos]
+        for idx, row in pd.concat([edited_pending, edited_review, edited_received]).iterrows():
+            source = table_df.loc[idx]
             row_id = source.get("_id")
             if row_id is None or normalize_text(row_id, "") in {"", "nan", "None"}:
                 continue
@@ -754,6 +787,12 @@ def render_stock_dividend_tab(enriched_df: pd.DataFrame, current_positions: pd.D
             new_cash = normalize_bool(row.get("確認現金入帳", False), False)
             old_stock = normalize_bool(source.get("_stock_before", False), False)
             new_stock = normalize_bool(row.get("確認股票入帳", False), False)
+            changed = (old_cash != new_cash or old_stock != new_stock
+                       or normalize_number(row.get("實際現金股利", 0), 0) != normalize_number(source.get("實際現金股利", 0), 0)
+                       or normalize_number(row.get("實際股票股數", 0), 0) != normalize_number(source.get("實際股票股數", 0), 0)
+                       or normalize_text(row.get("備註", "")) != normalize_text(source.get("備註", "")))
+            if not changed:
+                continue
             estimated_cash_total = normalize_number(row.get("預估現金股利", 0), 0)
             actual_cash_total = normalize_number(row.get("實際現金股利", 0), 0) or estimated_cash_total
             estimated_stock_shares = normalize_number(row.get("預估股票股數", 0), 0)

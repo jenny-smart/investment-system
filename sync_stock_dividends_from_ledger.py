@@ -394,6 +394,167 @@ def scan_expected(sb):
         print(f"WARN 掃描除權息公告失敗（仍繼續比對）：{exc}")
 
 
+def app_only_records(records, steps, years):
+    """App 已入帳、但沒對到任何細帳備註的記錄（App「今年台股現金股利」有算、細帳沒有）。
+
+    ledger_note 的補登若跟其中一筆同股票、同金額，標 dup_of（多半是同一筆股利記了兩次）。"""
+    from invest_app.stock_dividends import _stock_year_from_record
+    used = {s["record"].get("id") for s in steps if s.get("record")}
+    loose = [r for r in records if r.get("is_cash_received") and r.get("id") not in used
+             and _stock_year_from_record(r) in years]
+    ledger = [r for r in loose if r.get("source") == SOURCE]
+    app = [r for r in loose if r.get("source") != SOURCE]
+    out = []
+    for r in app:
+        amount = number(r.get("actual_cash_total")) or number(r.get("estimated_cash_total"))
+        dup = next((x for x in ledger if plain_code(x.get("ticker")) == plain_code(r.get("ticker"))
+                    and abs(number(x.get("actual_cash_total")) - amount) <= max(30.0, amount * 0.02)), None)
+        if dup is not None:
+            ledger.remove(dup)
+        out.append({"record": r, "amount": amount, "dup_of": dup})
+    return out
+
+
+def report_app_only(records, steps, years):
+    rows = app_only_records(records, steps, years)
+    if not rows:
+        return
+    total = sum(r["amount"] for r in rows)
+    dup_total = sum(r["amount"] for r in rows if r["dup_of"])
+    print(f"\n[App 已入帳、細帳沒有] {len(rows)} 筆，合計 {total:,.0f}"
+          f"（其中 {sum(1 for r in rows if r['dup_of'])} 筆、{dup_total:,.0f} 跟細帳補登重複）")
+    for row in rows:
+        r = row["record"]
+        dup = f"｜疑似重複：補登 #{row['dup_of'].get('id')}" if row["dup_of"] else ""
+        print(f"  #{r.get('id')} {r.get('name', '')}（{r.get('ticker', '')}）{row['amount']:,.0f}｜除息 {r.get('ex_date') or '—'} "
+              f"發放 {r.get('cash_pay_date') or '—'}｜來源 {r.get('source') or '—'}｜建立 {str(r.get('created_at') or '')[:10]}"
+              f"｜{str(r.get('note') or '')[:30]}{dup}")
+
+
+# ── 對齊：細帳為準，App 記錄與持倉累計股利跟著細帳 ───────────────────────────────
+
+LEDGER_CONFIRMED = "細帳備註確認"
+NOT_IN_LEDGER = "細帳沒有這筆，退回待入帳"
+
+
+def same_amount(a, b):
+    return abs(number(a) - number(b)) <= max(30.0, abs(number(b)) * 0.02)
+
+
+def reconcile_plan(records, years, year_of):
+    """細帳年度內：App 已入帳的記錄若跟細帳補登同股票、同金額（同年）→ 合併（留 App 那筆、刪補登）；
+    沒有對應細帳的 App 已入帳記錄 → 退回待入帳。回傳 (merges [(app, ledger)], returns [app])。"""
+    received = [r for r in records if r.get("is_cash_received") and year_of(r) in years]
+    ledger = [r for r in received if r.get("source") == SOURCE]
+    confirmed_ids = set()
+    merges, returns = [], []
+    for r in received:
+        if r.get("source") == SOURCE:
+            continue
+        if LEDGER_CONFIRMED in str(r.get("note") or ""):
+            confirmed_ids.add(r.get("id"))   # 細帳已確認過的那筆（確認入帳），本來就對應細帳
+            continue
+        amount = number(r.get("actual_cash_total")) or number(r.get("estimated_cash_total"))
+        dup = next((x for x in ledger if plain_code(x.get("ticker")) == plain_code(r.get("ticker"))
+                    and year_of(x) == year_of(r) and same_amount(amount, x.get("actual_cash_total"))), None)
+        if dup is not None:
+            ledger.remove(dup)
+            merges.append((r, dup))
+        else:
+            returns.append(r)
+    return merges, returns
+
+
+def position_targets(records):
+    """{股票代碼: 已入帳現金股利合計}（持倉累計股利應該等於這個）。"""
+    out = {}
+    for r in records:
+        if r.get("is_cash_received"):
+            code = plain_code(r.get("ticker"))
+            out[code] = out.get(code, 0.0) + (number(r.get("actual_cash_total")) or number(r.get("estimated_cash_total")))
+    return out
+
+
+def reconcile(sb, records, years, apply_changes):
+    """讓「台股股利記錄」與「持倉累計股利」都等於細帳。預覽時只印出會怎麼改。"""
+    from invest_app.stock_dividends import _stock_year_from_record
+    merges, returns = reconcile_plan(records, years, _stock_year_from_record)
+    tag = "" if apply_changes else "（預覽）"
+    print(f"\n== 對齊細帳{tag}：合併重複 {len(merges)} 筆（{sum(number(l.get('actual_cash_total')) for _, l in merges):,.0f}），"
+          f"細帳沒有、退回待入帳 {len(returns)} 筆（{sum(number(r.get('actual_cash_total')) for r in returns):,.0f}）")
+    for app, led in merges:
+        print(f"  合併 #{app.get('id')} {app.get('name')} {number(app.get('actual_cash_total')):,.0f} ← 補登 #{led.get('id')} "
+              f"{number(led.get('actual_cash_total')):,.0f}（刪補登，金額以細帳為準）")
+    for r in returns:
+        print(f"  退回 #{r.get('id')} {r.get('name')}（{r.get('ticker')}）{number(r.get('actual_cash_total')):,.0f}"
+              f"｜除息 {r.get('ex_date') or '—'} 發放 {r.get('cash_pay_date') or '—'}")
+    deleted = {led.get("id") for _, led in merges}
+    after = []
+    for r in records:
+        if r.get("id") in deleted:
+            continue
+        r = dict(r)
+        for app, led in merges:
+            if app.get("id") == r.get("id"):
+                r["actual_cash_total"] = number(led.get("actual_cash_total"))
+        if any(x.get("id") == r.get("id") for x in returns):
+            r["is_cash_received"] = False
+        after.append(r)
+    if apply_changes:
+        for app, led in merges:
+            sb.table("stock_dividend_log").update({
+                "actual_cash_total": number(led.get("actual_cash_total")),
+                "cash_pay_date": app.get("cash_pay_date") or led.get("cash_pay_date"),
+                "note": f"{app.get('note') or ''}｜{LEDGER_CONFIRMED}".strip("｜"),
+            }).eq("id", app["id"]).execute()
+            sb.table("stock_dividend_log").delete().eq("id", led["id"]).execute()
+        for r in returns:
+            sb.table("stock_dividend_log").update({
+                "is_cash_received": False,
+                "note": f"{r.get('note') or ''}｜{NOT_IN_LEDGER}".strip("｜"),
+            }).eq("id", r["id"]).execute()
+    set_position_totals(sb, position_targets(after), apply_changes)
+    return after
+
+
+def set_position_totals(sb, targets, apply_changes):
+    """台股持倉累計股利＝股利記錄已入帳合計（每檔寫在主列，其他列歸 0）。"""
+    from invest_app.core import TW_PRESETS
+    rows = sb.table("positions").select("id,sort_order,platform,asset_type,ticker,name,dividend_received_original_total") \
+        .execute().data or []
+    groups = {}
+    for row in rows:
+        if str(row.get("asset_type", "")).strip() != "台股":
+            continue
+        code = plain_code(row.get("ticker") or TW_PRESETS.get(str(row.get("name", "")).strip(), ""))
+        if code:
+            groups.setdefault(code, []).append(row)
+    before_total = sum(number(r.get("dividend_received_original_total")) for g in groups.values() for r in g)
+    after_total, changes, no_position = 0.0, [], []
+    for code, target in sorted(targets.items()):
+        if code not in groups:
+            no_position.append(f"{code} {target:,.0f}")
+    for code, group in groups.items():
+        group.sort(key=lambda r: (number(r.get("sort_order")) or 999999, number(r.get("id"))))
+        target = round(targets.get(code, 0.0), 0)
+        after_total += target
+        current = sum(number(r.get("dividend_received_original_total")) for r in group)
+        if abs(current - target) >= 1 or any(number(r.get("dividend_received_original_total")) for r in group[1:]):
+            changes.append((code, group[0].get("name"), current, target))
+            if apply_changes:
+                sb.table("positions").update({"dividend_received_original_total": target, "dividend_received_total": 0}) \
+                    .eq("id", group[0]["id"]).execute()
+                for r in group[1:]:
+                    sb.table("positions").update({"dividend_received_original_total": 0, "dividend_received_total": 0}) \
+                        .eq("id", r["id"]).execute()
+    tag = "" if apply_changes else "（預覽）"
+    print(f"\n== 持倉累計股利{tag}：{before_total:,.0f} → {after_total:,.0f}（{len(changes)} 檔要改）")
+    for code, name, cur, tgt in changes:
+        print(f"  {name}（{code}）{cur:,.0f} → {tgt:,.0f}")
+    if no_position:
+        print("  股利記錄有、但沒有持倉列（首頁不會算到）：" + "、".join(no_position))
+
+
 FIRST_YEAR = 2026  # 這個流程從 2026 細帳開始；2025 以前的股利已含在持倉累計股利裡，不匯入
 
 
@@ -406,6 +567,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, help="只讀哪一年的細帳；不填＝去年＋今年（去年晚補的也抓得到）")
     parser.add_argument("--apply", action="store_true", help="寫入資料庫（預設只產生報告）")
+    parser.add_argument("--reconcile", action="store_true",
+                        help="以細帳為準對齊：合併重複、退回細帳沒有的、持倉累計股利＝股利記錄（搭配 --apply 才寫入）")
     parser.add_argument("--undo-position-totals", action="store_true",
                         help="回沖先前 apply 加到持倉累計股利的金額（搭配 --apply 才寫入）")
     args = parser.parse_args(argv)
@@ -448,15 +611,20 @@ def main(argv=None):
             print(f"  {i.month[0]}/{i.month[1]:02d} {i.label}{code} {i.amount:,.0f}{extra}")
     for p in problems:
         print(f"WARN {p}")
+    report_app_only(records, steps, years)
 
     if args.apply:
         done, warnings = apply(sb, steps, stocks)
         for w in warnings:
             print(f"WARN {w}")
         print(f"\n已寫入 {done} 筆（確認入帳＋補登）")
+        if args.reconcile:
+            _stocks, records = load_stocks_and_records(sb)
     else:
         todo = sum(1 for s in steps if s["action"] in ("確認入帳", "補登"))
         print(f"\n預覽：{todo} 筆會寫入；確認無誤後用 apply 執行")
+    if args.reconcile:
+        reconcile(sb, records, years, args.apply)
     return 0
 
 

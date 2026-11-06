@@ -14,6 +14,10 @@ on:
         description: "掃描除權息公告並寫入資料庫（不勾＝只產生報告；排程派送一律寫入）"
         type: boolean
         default: false
+      reconcile:
+        description: "以細帳為準對齊：合併重複、退回細帳沒有的、持倉累計股利＝股利記錄（搭配 apply 才寫入）"
+        type: boolean
+        default: false
       undo_position_totals:
         description: "回沖先前 apply 加到持倉累計股利的金額（只要一次；搭配 apply 才寫入）"
         type: boolean
@@ -55,11 +59,13 @@ jobs:
           YEAR: ${{ inputs.year }}
           APPLY: ${{ inputs.apply || inputs.scheduled_slot != '' }}
           UNDO: ${{ inputs.undo_position_totals }}
+          RECONCILE: ${{ inputs.reconcile }}
         run: |
           args=()
           [ -n "$YEAR" ] && args+=(--year "$YEAR")
           [ "$APPLY" = "true" ] && args+=(--apply)
           [ "$UNDO" = "true" ] && args+=(--undo-position-totals)
+          [ "$RECONCILE" = "true" ] && args+=(--reconcile)
           python sync_stock_dividends_from_ledger.py "${args[@]}" 2>&1 | tee -a run.out
       - name: Write update log（更新記錄）
         if: always() && github.event_name == 'workflow_dispatch'

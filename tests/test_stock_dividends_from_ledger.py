@@ -3,7 +3,7 @@ import unittest
 from datetime import date
 
 from sync_stock_dividends_from_ledger import (
-    NoteItem, build_stock_index, default_years, was_added_by_apply, ledger_items, parse_note, plan, resolve,
+    NoteItem, build_stock_index, default_years, was_added_by_apply, reconcile_plan, position_targets, ledger_items, parse_note, plan, resolve,
 )
 
 STOCKS = [
@@ -81,6 +81,24 @@ class YearTests(unittest.TestCase):
         self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "TWSE 除權息預告｜2026細帳備註確認"}))
         self.assertFalse(was_added_by_apply({"source": "ledger_note", "note": "依 2026細帳備註補登｜累計已回沖"}))
         self.assertFalse(was_added_by_apply({"source": "TWSE", "note": "自動掃描候選"}))
+
+    def test_reconcile_merges_duplicates_and_returns_extra(self):
+        year_of = lambda r: 2026
+        recs = [
+            {"id": 1, "ticker": "2317.TW", "is_cash_received": True, "actual_cash_total": 70194, "source": "TWSE"},
+            {"id": 2, "ticker": "2317.TW", "is_cash_received": True, "actual_cash_total": 70194, "source": "ledger_note"},
+            {"id": 3, "ticker": "00900.TW", "is_cash_received": True, "actual_cash_total": 140, "source": "manual"},
+            {"id": 4, "ticker": "00900.TW", "is_cash_received": True, "actual_cash_total": 140, "source": "ledger_note"},
+            {"id": 5, "ticker": "00900.TW", "is_cash_received": True, "actual_cash_total": 140, "source": "ledger_note"},
+            {"id": 6, "ticker": "2330.TW", "is_cash_received": True, "actual_cash_total": 5000, "source": "TWSE"},
+            {"id": 7, "ticker": "2454.TW", "is_cash_received": True, "actual_cash_total": 900, "source": "TWSE",
+             "note": "x｜2026細帳備註確認"},
+            {"id": 8, "ticker": "2603.TW", "is_cash_received": False, "estimated_cash_total": 800, "source": "TWSE"},
+        ]
+        merges, returns = reconcile_plan(recs, [2026], year_of)
+        self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4)])
+        self.assertEqual([r["id"] for r in returns], [6])
+        self.assertEqual(position_targets(recs)["00900"], 420)
 
     def test_default_years(self):
         self.assertEqual(default_years(date(2026, 11, 7)), [2026])         # 不匯入 2025
