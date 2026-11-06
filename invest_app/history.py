@@ -78,7 +78,7 @@ def render_history_tab(enriched: pd.DataFrame) -> None:
         "scb": "渣打\n合計", "scb_usd": "渣打\n美金", "scb_zar": "渣打\n南非",
         "taishin": "台新\n合計", "taishin_usd": "台新\n美金", "taishin_zar": "台新\n南非",
         "total_cost": "投資總成本", "total_pnl": "投資市值損益",
-        "fund_dividend": "基金\n累計配息", "tw_stock_dividend": "台股\n累計股利",
+        "cumulative_dividend": "配息股利\n合計", "fund_dividend": "基金\n累計配息", "tw_stock_dividend": "台股\n累計股利",
         "trigger": "觸發方式", "note": "備註",
     }
     df_show = df[list(columns)].copy()
