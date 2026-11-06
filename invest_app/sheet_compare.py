@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import difflib
 import unicodedata
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -144,16 +144,12 @@ def _matches_rule(platform: Any, currency: Any, name: Any, rule: tuple[str, str,
     return name_filter in name if name_filter else True
 
 
-def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
-                               month: tuple[int, int]) -> dict[int, str]:
-    """總帳每月加總某列本月金額 > 0（已入帳），對應平台／幣別且本月、尚未確認入帳的配息記錄 → 建議確認。
-
-    records 需有 平台、幣別、基金名稱、_確認前、_sort_date（date）；回傳 {records 的 index: 每月加總列名}。
-    只是建議（預先選好），仍由人工按套用才會寫入。
-    """
+def _ledger_candidates(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
+                       month: tuple[int, int]) -> dict[str, tuple[float, list[int]]]:
+    """{每月加總列名: (總帳金額, [本月、尚未確認、平台幣別相符的記錄 index])}，只列總帳金額 > 0 的列。"""
     filled = {r["項目"]: r["金額"] for r in ledger_rows
               if r.get("項目") in MONTHLY_ESTIMATE_RULES and (r.get("金額") or 0) > 0}
-    out: dict[int, str] = {}
+    out: dict[str, tuple[float, list[int]]] = {}
     if not filled or records.empty:
         return out
     for idx, row in records.iterrows():
@@ -162,11 +158,62 @@ def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str
         when = row.get("_sort_date")
         if not when or (getattr(when, "year", None), getattr(when, "month", None)) != month:
             continue
-        for label in filled:
+        for label, amount in filled.items():
             if _matches_rule(row.get("平台"), row.get("幣別"), row.get("基金名稱"), MONTHLY_ESTIMATE_RULES[label]):
-                out[int(idx)] = label
+                out.setdefault(label, (amount, []))[1].append(int(idx))
                 break
     return out
+
+
+def amount_tolerance(amount: float) -> float:
+    """總帳台幣 vs 記錄原幣×總覽匯率：匯率小數位不同會差幾塊錢，容許 0.2%（至少 2 元）。"""
+    return max(2.0, abs(amount) * 0.002)
+
+
+def _best_subset(amount: float, values: dict[int, float]) -> tuple[list[int], float]:
+    """記錄裡加總最接近總帳金額的組合（筆數相同時取先發放的）；候選太多就全部。"""
+    idxs = list(values)
+    if len(idxs) > 12:
+        return idxs, sum(values.values())
+    best: tuple[float, list[int], float] | None = None
+    for mask in range(1, 1 << len(idxs)):
+        chosen = [i for bit, i in enumerate(idxs) if mask >> bit & 1]
+        total = sum(values[i] for i in chosen)
+        gap = abs(total - amount)
+        if best is None or gap < best[0] - 1e-9:
+            best = (gap, chosen, total)
+    return (best[1], best[2]) if best else ([], 0.0)
+
+
+def ledger_confirm_plan(records: pd.DataFrame, ledger_rows: list[dict[str, Any]], month: tuple[int, int],
+                        twd_of: Callable[[int], float]) -> list[dict[str, Any]]:
+    """每一列總帳金額 → 哪幾筆記錄加起來對得上（例：台新-南非兩筆待確認、只入帳一筆）。
+
+    回傳 [{"label", "amount", "candidates", "matched", "matched_twd", "ok"}]；
+    ok＝最接近的組合在容許誤差內，只有 ok 的 matched 會預先選好。
+    """
+    plan = []
+    for label, (amount, idxs) in _ledger_candidates(records, ledger_rows, month).items():
+        values = {i: float(twd_of(i) or 0) for i in idxs}
+        matched, total = _best_subset(float(amount), values)
+        plan.append({"label": label, "amount": float(amount), "candidates": idxs, "matched": matched,
+                     "matched_twd": total, "ok": abs(total - float(amount)) <= amount_tolerance(float(amount))})
+    return plan
+
+
+def ledger_confirm_suggestions(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
+                               month: tuple[int, int], twd_of: Callable[[int], float] | None = None) -> dict[int, str]:
+    """總帳每月加總某列本月金額 > 0（已入帳），對應平台／幣別且本月、尚未確認入帳的配息記錄 → 建議確認。
+
+    有 twd_of（記錄 index → 台幣金額）時，只選加總對得上總帳金額的那幾筆；對不上就不選。
+    records 需有 平台、幣別、基金名稱、_確認前、_sort_date（date）；回傳 {records 的 index: 每月加總列名}。
+    只是建議（預先選好），仍由人工按套用才會寫入。
+    """
+    if twd_of is None:
+        return {i: label for label, (_amt, idxs) in _ledger_candidates(records, ledger_rows, month).items()
+                for i in idxs}
+    return {i: p["label"] for p in ledger_confirm_plan(records, ledger_rows, month, twd_of) if p["ok"]
+            for i in p["matched"]}
 
 
 # 總覽 Q 欄幣別名稱 → 幣別代碼；R 欄為匯率（台幣）

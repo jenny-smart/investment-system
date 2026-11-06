@@ -1229,32 +1229,39 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
 
     # 總帳「總覽」每月加總已填本月金額的基金類別 → 對應的本月待確認記錄預先選好（仍需按套用）
     suggested: list[str] = []
+    matched_ok: set[int] = set()   # 總帳金額對得上的記錄，才能直接確認（也才會勾配息月份）
     try:
         from asset_summary import monthly_income_block
-        from invest_app.sheet_compare import ledger_confirm_suggestions, sheet_fx_rates
+        from invest_app.sheet_compare import ledger_confirm_plan, sheet_fx_rates
         now = tw_now()
         ledger_grid = load_sheet_grid(OVERVIEW_SHEET_GID)
         ledger_rows = monthly_income_block(ledger_grid)
-        hits = ledger_confirm_suggestions(df, ledger_rows, (now.year, now.month))
+        # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
+        sheet_fx = sheet_fx_rates(ledger_grid)
+
+        def twd_of(i: int) -> float:
+            rec = df.loc[i]
+            rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
+            original = normalize_number(rec.get("實際配息原幣", 0), 0)
+            return original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
+
+        plan = ledger_confirm_plan(df, ledger_rows, (now.year, now.month), twd_of)
         index_to_label = {v: k for k, v in pending_options.items()}
-        suggested = [index_to_label[i] for i in hits if i in index_to_label]
-        if suggested:
-            # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
-            amounts = {r["項目"]: r["金額"] for r in ledger_rows}
-            sheet_fx = sheet_fx_rates(ledger_grid)
+        matched_ok = {i for p in plan if p["ok"] for i in p["matched"]}
+        suggested = [index_to_label[i] for i in matched_ok if i in index_to_label]
+        if plan:
             lines = []
-            for item in dict.fromkeys(hits.values()):
-                idxs = [i for i, v in hits.items() if v == item]
-                rec_twd = 0.0
-                for i in idxs:
-                    rec = df.loc[i]
-                    rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
-                    original = normalize_number(rec.get("實際配息原幣", 0), 0)
-                    rec_twd += original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
-                diff = (amounts.get(item) or 0) - rec_twd
-                mark = "✅" if abs(diff) < 1 else f"⚠️ 差 {money(diff)}"
-                lines.append(f"{item}：總帳 {money(amounts.get(item))}／記錄 {len(idxs)} 筆 {money(rec_twd)}（總覽匯率）{mark}")
-            st.info("📒 總帳每月加總已有本月金額，已預先選好對應的待確認記錄，核對後按「💾 套用確認狀態」：\n\n"
+            for p in plan:
+                names = "、".join(normalize_text(df.loc[i].get("基金名稱", ""))[:12] for i in p["matched"])
+                rest = len(p["candidates"]) - len(p["matched"])
+                if p["ok"]:
+                    tail = f"，另 {rest} 筆還沒入帳、不選" if rest else ""
+                    lines.append(f"{p['label']}：總帳 {money(p['amount'])}／{names} {money(p['matched_twd'])} ✅{tail}")
+                else:
+                    lines.append(f"{p['label']}：總帳 {money(p['amount'])}，{len(p['candidates'])} 筆記錄怎麼組合都對不上"
+                                 f"（最接近 {money(p['matched_twd'])}，差 {money(p['amount'] - p['matched_twd'])}）"
+                                 "⚠️ 沒有預先選，請核對實際配息金額")
+            st.info("📒 總帳每月加總已有本月金額（總覽匯率換算比對），核對後按「💾 套用確認狀態」：\n\n"
                     + "\n".join(f"- {line}" for line in lines))
     except Exception as exc:
         st.caption(f"讀不到總帳每月加總，無法建議確認：{exc}")
@@ -1262,11 +1269,19 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     with st.form("actual_dividend_confirm_form"):
         confirm_labels = st.multiselect("確認入帳", list(pending_options.keys()), default=suggested)
         cancel_labels = st.multiselect("取消確認", list(confirmed_options.keys()))
+        manual_ok = st.checkbox("金額已人工核對（總帳本月還沒填、或對不上也照樣確認）", value=False)
+        st.caption("確認後約 10 分鐘內，股票總帳「配息月份」分頁會同步勾選該基金當月。")
         submitted = st.form_submit_button("💾 套用確認狀態")
         recompute_submitted = st.form_submit_button("重算已確認累計")
 
     if submitted or recompute_submitted:
         changes = {pending_options[label]: True for label in confirm_labels}
+        blocked = [label for label in confirm_labels if pending_options[label] not in matched_ok and not manual_ok]
+        for label in blocked:
+            changes.pop(pending_options[label])
+        if blocked:
+            st.warning("以下記錄跟總帳本月金額對不上（或總帳還沒填），沒有確認；核對無誤後勾「金額已人工核對」再套用：\n\n"
+                       + "\n".join(f"- {label}" for label in blocked))
         changes.update({confirmed_options[label]: False for label in cancel_labels})
         if not changes and not recompute_submitted:
             st.info("沒有選擇需要更新的記錄。")
