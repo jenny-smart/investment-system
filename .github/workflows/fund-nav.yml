@@ -37,6 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install dependencies
         run: pip install 'gspread>=6,<7' 'google-auth>=2,<3' 'requests>=2,<3' 'supabase>=2,<3'
       - name: Unit tests
@@ -75,6 +76,20 @@ jobs:
             python sync_dividend_months.py --dry-run 2>&1 | tee -a run.out
           else
             python sync_dividend_months.py 2>&1 | tee -a run.out
+          fi
+      - name: Fund cumulative dividends follow 總覽 N 欄
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          pip install -q -r requirements.txt 'gspread>=6,<7' 'google-auth>=2,<3'
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_fund_dividend_totals.py --dry-run 2>&1 | tee -a run.out
+          else
+            python sync_fund_dividend_totals.py 2>&1 | tee -a run.out
           fi
       - name: Write update log（更新記錄）
         if: always() && github.event_name == 'workflow_dispatch'
