@@ -1539,7 +1539,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
 
 
 def render_monthly_amount_alerts(actual_df: pd.DataFrame) -> None:
-    """本月、上月的配息記錄實際配息原幣 vs 總覽 O 欄「配息金額」：不同就提醒。"""
+    """本月、上月的配息記錄每單位配息 vs 總覽 O 欄「配息金額」（每單位）：不同就提醒，不改總覽。"""
     from invest_app.sheet_compare import monthly_amount_alerts, sheet_fund_dividends
     try:
         sheet_rows = sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID), value_header="配息金額")
@@ -1550,11 +1550,11 @@ def render_monthly_amount_alerts(actual_df: pd.DataFrame) -> None:
     alerts = monthly_amount_alerts(sheet_rows, actual_df, {(now.year, now.month), last})
     if not alerts:
         return
-    st.warning(f"⚠ {len(alerts)} 筆配息金額跟總覽 O 欄「配息金額」不同（原幣）：請確認是這個月實際配息變了，"
-               "還是記錄要改；確認後更新總覽 O 欄或配息記錄。")
+    st.warning(f"⚠ {len(alerts)} 筆每單位配息跟總覽 O 欄「配息金額」不同：請確認是這個月配息變了，"
+               "還是記錄要改；確認後自行更新總覽 O 欄或配息記錄。")
     table = pd.DataFrame(alerts).drop(columns=["_index"])
     table["已確認"] = table["已確認"].map({True: "是", False: "否"})
-    st.markdown(html_table(table, ["App 實際配息原幣", "總覽配息金額", "差額"], decimals=2), unsafe_allow_html=True)
+    st.markdown(html_table(table, ["App 每單位配息", "總覽配息金額", "差額"], decimals=4), unsafe_allow_html=True)
 
 
 def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:

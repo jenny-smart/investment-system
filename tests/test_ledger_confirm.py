@@ -85,15 +85,15 @@ if __name__ == "__main__":
 class MonthlyAmountAlertTests(unittest.TestCase):
     def test_alerts_when_actual_differs_from_column_o(self):
         from invest_app.sheet_compare import monthly_amount_alerts
-        sheet = [{"分類": "台新-南非", "基金名稱": "高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)", "總帳配息原幣": 11772.0},
-                 {"分類": "台新-南非", "基金名稱": "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)", "總帳配息原幣": 22423.0}]
+        sheet = [{"分類": "台新-南非", "基金名稱": "高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)", "總帳配息原幣": 14.0},
+                 {"分類": "台新-南非", "基金名稱": "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)", "總帳配息原幣": 4.515}]
         df = pd.DataFrame([
             {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)",
-             "實際配息原幣": 11772.46, "確認入帳": False, "_sort_date": pd.Timestamp("2026-11-06")},
+             "每單位配息": 14.0, "確認入帳": False, "_sort_date": pd.Timestamp("2026-11-06")},
             {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)",
-             "實際配息原幣": 21000.0, "確認入帳": True, "_sort_date": pd.Timestamp("2026-11-01")},
+             "每單位配息": 4.3, "確認入帳": True, "_sort_date": pd.Timestamp("2026-11-01")},
             {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)",
-             "實際配息原幣": 20000.0, "確認入帳": True, "_sort_date": pd.Timestamp("2026-08-01")},   # 舊月份不提醒
+             "每單位配息": 4.0, "確認入帳": True, "_sort_date": pd.Timestamp("2026-08-01")},   # 舊月份不提醒
         ])
         alerts = monthly_amount_alerts(sheet, df, {(2026, 11), (2026, 10)})
-        self.assertEqual([(a["_index"], round(a["差額"], 2)) for a in alerts], [(1, -1423.0)])
+        self.assertEqual([(a["_index"], round(a["差額"], 3)) for a in alerts], [(1, -0.215)])

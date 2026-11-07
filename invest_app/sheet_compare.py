@@ -123,9 +123,9 @@ def sheet_value_for(sheet_rows: list[dict[str, Any]], platform: str, currency: s
 
 def monthly_amount_alerts(sheet_rows: list[dict[str, Any]], records: pd.DataFrame,
                           months: set[tuple[int, int]]) -> list[dict[str, Any]]:
-    """配息記錄（指定月份）的實際配息原幣 vs 總覽 O 欄「配息金額」（原幣），不同就列出。
+    """配息記錄（指定月份）的每單位配息 vs 總覽 O 欄「配息金額」（每單位配息，原幣），不同就列出。
 
-    sheet_rows 是 sheet_fund_dividends(grid, value_header="配息金額") 的結果；容許 0.2%（至少 1）。"""
+    sheet_rows 是 sheet_fund_dividends(grid, value_header="配息金額") 的結果；容許 0.5%。"""
     alerts: list[dict[str, Any]] = []
     if records is None or records.empty or not sheet_rows:
         return alerts
@@ -134,13 +134,13 @@ def monthly_amount_alerts(sheet_rows: list[dict[str, Any]], records: pd.DataFram
         if when is None or (getattr(when, "year", None), getattr(when, "month", None)) not in months:
             continue
         expected = sheet_value_for(sheet_rows, row.get("平台"), row.get("幣別"), row.get("基金名稱"))
-        actual = _number(row.get("實際配息原幣"))
+        actual = _number(row.get("每單位配息"))
         if not expected or not actual:
             continue
-        if abs(actual - expected) > max(1.0, abs(expected) * 0.002):
+        if abs(actual - expected) > abs(expected) * 0.005:
             alerts.append({"_index": idx, "平台": row.get("平台"), "基金名稱": row.get("基金名稱"),
                            "幣別": row.get("幣別"), "月份": f"{when.year}/{when.month:02d}",
-                           "App 實際配息原幣": actual, "總覽配息金額": expected, "差額": actual - expected,
+                           "App 每單位配息": actual, "總覽配息金額": expected, "差額": actual - expected,
                            "已確認": bool(row.get("確認入帳"))})
     return alerts
 
