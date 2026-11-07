@@ -1306,6 +1306,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             "每月配息": monthly_div_twd,
             "月配息來源": div_source if div_per_unit else "",
             "狀態": "✓" if price is not None and fx is not None else f"價格:{p_status} 匯率:{fx_status}",
+            "價格來源": p_status,
         })
         rows.append(out)
     return pd.DataFrame(rows)
