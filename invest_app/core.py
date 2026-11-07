@@ -1362,7 +1362,7 @@ def load_sheet_grid(gid: str) -> list[list[str]]:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_sheet_raw_grid(gid: str, cell_range: str = "F1:N80") -> list[list[Any]]:
+def load_sheet_raw_grid(gid: str, cell_range: str = "F1:P80") -> list[list[Any]]:
     """分頁某範圍讀成二維陣列，數字用儲存格實際值（含格式隱藏的小數）。
 
     CSV 匯出只有顯示文字，格式設成整數的儲存格會丟掉小數；改用 gviz 查詢加 `options no_format`

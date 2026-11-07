@@ -1468,6 +1468,7 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
     st.caption("目前單位數 × 最近一次每單位配息 = 預估配息原幣，再乘匯率得到台幣。")
     render_estimated_dividend_table(estimate_df)
 
+    render_monthly_amount_alerts(actual_df)
     st.markdown("#### 配息記錄表")
     st.caption("未勾確認入帳的是待確認的配息（含本月候選）；勾選並套用後才計入累計配息。")
     render_actual_dividend_table(actual_df)
@@ -1535,6 +1536,25 @@ def render_dividend_log_tab(enriched_df: pd.DataFrame, positions: pd.DataFrame) 
                         st.success("已新增！"); st.rerun()
                     except Exception as e:
                         st.error(f"新增失敗：{e}")
+
+
+def render_monthly_amount_alerts(actual_df: pd.DataFrame) -> None:
+    """本月、上月的配息記錄實際配息原幣 vs 總覽 O 欄「配息金額」：不同就提醒。"""
+    from invest_app.sheet_compare import monthly_amount_alerts, sheet_fund_dividends
+    try:
+        sheet_rows = sheet_fund_dividends(load_sheet_raw_grid(OVERVIEW_SHEET_GID), value_header="配息金額")
+    except Exception:
+        return  # 總覽沒有「配息金額」欄或讀不到：不提醒
+    now = tw_now()
+    last = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
+    alerts = monthly_amount_alerts(sheet_rows, actual_df, {(now.year, now.month), last})
+    if not alerts:
+        return
+    st.warning(f"⚠ {len(alerts)} 筆配息金額跟總覽 O 欄「配息金額」不同（原幣）：請確認是這個月實際配息變了，"
+               "還是記錄要改；確認後更新總覽 O 欄或配息記錄。")
+    table = pd.DataFrame(alerts).drop(columns=["_index"])
+    table["已確認"] = table["已確認"].map({True: "是", False: "否"})
+    st.markdown(html_table(table, ["App 實際配息原幣", "總覽配息金額", "差額"], decimals=2), unsafe_allow_html=True)
 
 
 def render_sheet_dividend_diff(enriched_df: pd.DataFrame) -> None:
