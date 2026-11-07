@@ -224,7 +224,13 @@ with st.container():
     # 預計配息對應的月份（下個月），小字放在金額後面
     _next_month = (tw_now().replace(day=1) + timedelta(days=32)).strftime("%Y.%m")
     two_line_metric(c8, "基金預計配息", money(total_div), suffix=_next_month)
-    render_total_asset_row(float(total_value), load_other_assets(), float(total_sell_cost))
+    _other_assets = load_other_assets()
+    render_total_asset_row(float(total_value), _other_assets, float(total_sell_cost))
+    try:
+        from invest_app.overview_reconcile import render as render_overview_reconcile
+        render_overview_reconcile(enriched, _other_assets)
+    except Exception as _e:  # 對帳只是輔助，失敗不影響首頁
+        st.caption(f"總帳對帳暫時無法顯示：{_e}")
     st.markdown("</div>", unsafe_allow_html=True)
 PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "台股股利"]
 
