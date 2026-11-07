@@ -16,6 +16,10 @@ on:
         description: "Only look up prices and preview writes"
         type: boolean
         default: false
+      close_date:
+        description: "補正用：YYYYMMDD，用這天的證交所／櫃買正式收盤價更新 J 欄（平常留空）"
+        type: string
+        default: ""
       scheduled_slot:
         description: "排程設定派送時段（手動執行請留空）"
         type: string
@@ -46,12 +50,12 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run }}
           MODE: ${{ inputs.mode || 'auto' }}
+          CLOSE_DATE: ${{ inputs.close_date }}
         run: |
-          if [ "$DRY_RUN" = "true" ]; then
-            python sync_tw_stock_prices.py --mode "$MODE" --dry-run 2>&1 | tee -a run.out
-          else
-            python sync_tw_stock_prices.py --mode "$MODE" 2>&1 | tee -a run.out
-          fi
+          args=(--mode "$MODE")
+          [ -n "$CLOSE_DATE" ] && args+=(--close-date "$CLOSE_DATE")
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python sync_tw_stock_prices.py "${args[@]}" 2>&1 | tee -a run.out
       - name: Write update log（更新記錄）
         if: always() && github.event_name == 'workflow_dispatch'
         continue-on-error: true

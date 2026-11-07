@@ -58,3 +58,27 @@ class StockSyncTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfficialCloseTests(unittest.TestCase):
+    def test_twse_new_format(self):
+        from sync_tw_stock_prices import parse_close_table
+        payload = {"stat": "OK", "date": "20261106", "tables": [
+            {"title": "大盤統計", "fields": ["指數", "收盤指數"], "data": [["發行量加權", "23,000.1"]]},
+            {"title": "每日收盤行情", "fields": ["證券代號", "證券名稱", "成交股數", "開盤價", "收盤價", "漲跌價差"],
+             "data": [["2317", "鴻海", "1,000", "226.00", "224.50", "1.5"], ["0056", "元大高股息", "1", "49.9", "49.82", "0"],
+                      ["9999", "停牌", "0", "--", "--", "0"]]},
+        ]}
+        self.assertEqual(parse_close_table(payload, "20261106"), {"2317": 224.5, "0056": 49.82})
+        self.assertEqual(parse_close_table(payload, "20261107"), {})          # 日期不符：不用
+
+    def test_twse_old_format_and_tpex(self):
+        from sync_tw_stock_prices import parse_close_table
+        old = {"stat": "OK", "date": "20261106", "fields9": ["證券代號", "證券名稱", "收盤價"],
+               "data9": [["2317", "鴻海", "224.50"]]}
+        self.assertEqual(parse_close_table(old, "20261106"), {"2317": 224.5})
+        tpex_old = {"reportDate": "115/11/06", "aaData": [["6505", "台塑化", "85.70", "0.1"]]}
+        self.assertEqual(parse_close_table(tpex_old, "20261106"), {"6505": 85.7})
+        tpex_new = {"date": "20261106", "tables": [{"fields": ["代號", "名稱", "收盤 ", "漲跌"],
+                                                     "data": [["00740B", "某債", "18.24", "0"]]}]}
+        self.assertEqual(parse_close_table(tpex_new, "20261106"), {"00740B": 18.24})

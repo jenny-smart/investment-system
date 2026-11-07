@@ -20,6 +20,8 @@ TIMESTAMP_CELL = "A2"
 # runner delay for the 14:30 trigger.
 WINDOW_START = time(8, 30)
 WINDOW_END = time(14, 40)
+# 收盤後（13:35 起）J 欄改用證交所／櫃買中心公布的正式收盤價；抓不到才退回即時報價
+CLOSE_AFTER = time(13, 35)
 MIS_BATCH = 20
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -154,6 +156,101 @@ def fetch_yahoo_quote(code, today):
     raise RuntimeError(f"{code}: no valid quote within seven days; original cell preserved")
 
 
+def _number_text(value):
+    text = str(value or "").replace(",", "").strip()
+    return valid_price(text) if re.fullmatch(r"\d+(\.\d+)?", text) else None
+
+
+def _roc_or_ad(text):
+    """'1151106'、'115/11/06'、'20261106'、'2026/11/06' → 'YYYYMMDD'；認不得回 ''。"""
+    digits = re.sub(r"\D", "", str(text or ""))
+    if len(digits) == 7:
+        return f"{int(digits[:3]) + 1911}{digits[3:]}"
+    return digits if len(digits) == 8 else ""
+
+
+def _tables(payload):
+    """[(fields, rows)]：新格式 tables[]，舊格式 fieldsN/dataN、aaData。"""
+    out = []
+    for table in payload.get("tables") or []:
+        out.append((table.get("fields") or [], table.get("data") or []))
+    for k, v in payload.items():
+        if k.startswith("fields") and isinstance(v, list):
+            out.append((v, payload.get("data" + k[len("fields"):]) or []))
+    if payload.get("aaData"):
+        out.append((["代號", "名稱", "收盤"], payload["aaData"]))
+    return out
+
+
+def parse_close_table(payload, day):
+    """證交所 MI_INDEX／櫃買 每日收盤行情 JSON → {code: price}；日期不是 day（YYYYMMDD）就回空。"""
+    when = _roc_or_ad(payload.get("date") or payload.get("reportDate") or "")
+    if when and when != day:
+        return {}
+    closes = {}
+    for fields, rows in _tables(payload):
+        names = [str(f).strip() for f in fields]
+        code_col = next((i for i, f in enumerate(names) if f in ("證券代號", "代號")), None)
+        close_col = next((i for i, f in enumerate(names) if f.startswith("收盤") and "價差" not in f), None)
+        if code_col is None or close_col is None:
+            continue
+        for row in rows:
+            if len(row) > max(code_col, close_col):
+                code = normalize_tw_code(row[code_col])
+                price = _number_text(row[close_col])
+                if code and price:
+                    closes.setdefault(code, price)
+    return closes
+
+
+def fetch_official_closes(day):
+    """{code: {"price", "date", "source"}}：day（YYYYMMDD）證交所＋櫃買中心正式收盤價。"""
+    import requests
+    headers = {"User-Agent": "Mozilla/5.0"}
+    ad = f"{day[:4]}/{day[4:6]}/{day[6:]}"
+    roc = f"{int(day[:4]) - 1911}/{day[4:6]}/{day[6:]}"
+    sources = (
+        ("TWSE 收盤", "https://www.twse.com.tw/exchangeReport/MI_INDEX",
+         {"response": "json", "date": day, "type": "ALLBUT0999"}),
+        ("TPEx 收盤", "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc",
+         {"date": ad, "type": "EW", "response": "json"}),
+        ("TPEx 收盤", "https://www.tpex.org.tw/web/stock/aftertrading/daily_close_quotes/stk_quote_result.php",
+         {"l": "zh-tw", "d": roc, "o": "json"}),
+    )
+    quotes = {}
+    for name, url, params in sources:
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            found = parse_close_table(response.json(), day)
+            for code, price in found.items():
+                quotes.setdefault(code, {"price": price, "date": day, "source": name})
+            print(f"{name}: {len(found)} 檔收盤價（{url.split('/')[2]}）")
+        except Exception as exc:
+            print(f"{name} unavailable ({type(exc).__name__}: {str(exc)[:80]})")
+    return quotes
+
+
+def fetch_closing_quotes(codes, day, fallback):
+    """收盤後：正式收盤價優先；沒有的代碼用 fallback（即時報價）或略過。"""
+    official = fetch_official_closes(day)
+    wanted = list(dict.fromkeys(codes))
+    quotes = {c: official[c] for c in wanted if c in official}
+    missing = [c for c in wanted if c not in quotes]
+    errors = []
+    if missing and fallback:
+        more, errors = fetch_quotes(missing, datetime.strptime(day, "%Y%m%d").date())
+        quotes.update(more)
+    elif missing:
+        errors = [f"{c}: {day} 沒有正式收盤價，J 欄不變" for c in missing]
+        for e in errors:
+            print(e, file=sys.stderr)
+    for code in wanted:
+        if code in quotes and quotes[code].get("source", "").endswith("收盤"):
+            print(code, json.dumps(quotes[code], ensure_ascii=False))
+    return quotes, errors
+
+
 def fetch_quotes(codes, today):
     codes = list(dict.fromkeys(codes))
     quotes, errors = fetch_mis_quotes(codes, today), []
@@ -179,7 +276,7 @@ def read_codes(sheet):
     )
 
 
-def run_update(spreadsheet, sheets, now, dry_run):
+def run_update(spreadsheet, sheets, now, dry_run, close_date=None):
     plans, columns = {}, {}
     for sheet_id in SHEET_IDS:
         sheet = sheets[sheet_id]
@@ -188,9 +285,13 @@ def run_update(spreadsheet, sheets, now, dry_run):
         if plans[sheet_id][2]:
             print(f"{sheet.title}: rows {plans[sheet_id][2]} are not Taiwan codes; J unchanged")
 
-    quotes, errors = fetch_quotes(
-        [code for prices, _, _ in plans.values() for _, code in prices], now.date()
-    )
+    codes = [code for prices, _, _ in plans.values() for _, code in prices]
+    if close_date:   # 指定日期：只用那天的正式收盤價，沒有的不改
+        quotes, errors = fetch_closing_quotes(codes, close_date, fallback=False)
+    elif now.time() >= CLOSE_AFTER:
+        quotes, errors = fetch_closing_quotes(codes, f"{now:%Y%m%d}", fallback=True)
+    else:
+        quotes, errors = fetch_quotes(codes, now.date())
     updates = []
     for sheet_id, (prices, duplicates, _) in plans.items():
         title = quoted_title(sheets[sheet_id].title)
@@ -225,7 +326,11 @@ def main():
         help="auto only runs 08:30-14:30 Asia/Taipei on trading days; update always runs",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--close-date", help="YYYYMMDD：用這天的正式收盤價更新 J 欄（補正用，視為 update 模式）")
     args = parser.parse_args()
+    if args.close_date:
+        args.close_date = _roc_or_ad(args.close_date)
+        args.mode = "update"
 
     now = datetime.now(TAIPEI)
     if args.mode == "auto" and not in_update_window(now):
@@ -250,7 +355,7 @@ def main():
     missing_sheets = set(SHEET_IDS) - set(sheets)
     if missing_sheets:
         raise RuntimeError(f"Missing sheet IDs {sorted(missing_sheets)}; no cells changed")
-    return run_update(spreadsheet, sheets, now, args.dry_run)
+    return run_update(spreadsheet, sheets, now, args.dry_run, args.close_date)
 
 
 if __name__ == "__main__":
