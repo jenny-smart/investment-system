@@ -251,6 +251,16 @@ def fetch_closing_quotes(codes, day, fallback):
     return quotes, errors
 
 
+def last_trading_day(now):
+    """最近一個已收盤的交易日（YYYYMMDD）：今天 13:35 後且開市就是今天，否則往前找（跳過週末、休市日）。"""
+    day = now.date()
+    if not (now.weekday() < 5 and now.time() >= CLOSE_AFTER and not is_market_holiday(day)):
+        day -= timedelta(days=1)
+        while day.weekday() >= 5 or is_market_holiday(day):
+            day -= timedelta(days=1)
+    return f"{day:%Y%m%d}"
+
+
 def fetch_quotes(codes, today):
     codes = list(dict.fromkeys(codes))
     quotes, errors = fetch_mis_quotes(codes, today), []
@@ -326,8 +336,11 @@ def main():
         help="auto only runs 08:30-14:30 Asia/Taipei on trading days; update always runs",
     )
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--close-date", help="YYYYMMDD：用這天的正式收盤價更新 J 欄（補正用，視為 update 模式）")
+    parser.add_argument("--close-date", help="YYYYMMDD 或 last：用這天（last＝最近交易日）的正式收盤價更新 J 欄（補正用）")
     args = parser.parse_args()
+    if args.close_date == "last":
+        args.close_date = last_trading_day(datetime.now(TAIPEI))
+        print(f"最近一個交易日收盤：{args.close_date}")
     if args.close_date:
         args.close_date = _roc_or_ad(args.close_date)
         args.mode = "update"
