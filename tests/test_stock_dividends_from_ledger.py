@@ -3,7 +3,7 @@ import unittest
 from datetime import date
 
 from sync_stock_dividends_from_ledger import (
-    NoteItem, build_stock_index, default_years, was_added_by_apply, reconcile_plan, position_targets, ledger_items, parse_note, plan, resolve,
+    NoteItem, build_stock_index, default_years, was_added_by_apply, reconcile_plan, position_targets, stale_candidates, ledger_items, parse_note, plan, resolve,
 )
 
 STOCKS = [
@@ -104,6 +104,19 @@ class YearTests(unittest.TestCase):
         self.assertEqual([(a["id"], l["id"]) for a, l in merges], [(1, 2), (3, 4), (9, 10)])
         self.assertEqual([r["id"] for r in returns], [6])
         self.assertEqual(position_targets(recs[:8])["00900"], 420)
+
+    def test_stale_candidates_cleared_when_ledger_has_cash(self):
+        year_of = lambda r: 2026
+        recs = [
+            {"id": 1, "ticker": "3189.TW", "is_cash_received": True, "actual_cash_total": 3345, "source": "ledger_note"},
+            {"id": 2, "ticker": "3189.TW", "estimated_cash_total": 3869},                       # 景碩：刪
+            {"id": 3, "ticker": "2885.TW", "is_cash_received": True, "actual_cash_total": 30529},
+            {"id": 4, "ticker": "2885.TW", "estimated_cash_total": 31198, "estimated_stock_shares": 260},  # 留股票
+            {"id": 5, "ticker": "2330.TW", "estimated_cash_total": 5000},                        # 細帳沒有：不動
+            {"id": 6, "ticker": "3189.TW", "estimated_cash_total": 3869, "ex_date": "2027/06/20"},  # 有日期：不動
+        ]
+        self.assertEqual([(r["id"], a) for r, a in stale_candidates(recs, [2026], year_of)],
+                         [(2, "刪除"), (4, "只留股票股利")])
 
     def test_default_years(self):
         self.assertEqual(default_years(date(2026, 11, 7)), [2026])         # 不匯入 2025

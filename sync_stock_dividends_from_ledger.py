@@ -558,6 +558,55 @@ def set_position_totals(sb, targets, apply_changes):
         print("  股利記錄有、但沒有持倉列（首頁不會算到）：" + "、".join(no_position))
 
 
+# ── 沒有日期的舊候選：細帳已入帳的就清掉 ─────────────────────────────────────
+
+CASH_COVERED = "現金股利已在細帳入帳"
+
+
+def stale_candidates(records, years, year_of):
+    """沒有除息日、發放日、還沒入帳的候選，同一支股票同年已有入帳記錄（細帳）→ 現金股利重複。
+
+    回傳 [(record, "刪除" | "只留股票股利")]：有預估股票股利的留著等股票入帳，只去掉現金部分。"""
+    received = {(plain_code(r.get("ticker")), year_of(r)) for r in records
+                if r.get("is_cash_received") and number(r.get("actual_cash_total")) > 0}
+    out = []
+    for r in records:
+        if r.get("is_cash_received") or r.get("is_stock_received"):
+            continue
+        if r.get("ex_date") or r.get("cash_pay_date") or r.get("stock_pay_date"):
+            continue
+        if CASH_COVERED in str(r.get("note") or ""):
+            continue
+        year = year_of(r)
+        if year not in years or (plain_code(r.get("ticker")), year) not in received:
+            continue
+        out.append((r, "只留股票股利" if number(r.get("estimated_stock_shares")) > 0 else "刪除"))
+    return out
+
+
+def clean_stale_candidates(sb, records, years, apply_changes):
+    from invest_app.stock_dividends import _stock_year_from_record
+    items = stale_candidates(records, years, _stock_year_from_record)
+    if not items:
+        return
+    tag = "" if apply_changes else "（預覽）"
+    total = sum(number(r.get("estimated_cash_total")) for r, _ in items)
+    print(f"\n== 待入帳舊候選（無日期、細帳已入帳）{tag}：{len(items)} 筆，預估現金 {total:,.0f}")
+    for r, action in items:
+        print(f"  {action} #{r.get('id')} {r.get('name', '')}（{r.get('ticker', '')}）"
+              f"預估現金 {number(r.get('estimated_cash_total')):,.0f}"
+              + (f"、股票 {number(r.get('estimated_stock_shares')):,.4f} 股" if action == "只留股票股利" else ""))
+        if not apply_changes:
+            continue
+        if action == "刪除":
+            sb.table("stock_dividend_log").delete().eq("id", r["id"]).execute()
+        else:
+            sb.table("stock_dividend_log").update({
+                "estimated_cash_total": 0, "cash_dividend_per_share": 0,
+                "note": f"{r.get('note') or ''}｜{CASH_COVERED}".strip("｜"),
+            }).eq("id", r["id"]).execute()
+
+
 FIRST_YEAR = 2026  # 這個流程從 2026 細帳開始；2025 以前的股利已含在持倉累計股利裡，不匯入
 
 
@@ -628,6 +677,7 @@ def main(argv=None):
         print(f"\n預覽：{todo} 筆會寫入；確認無誤後用 apply 執行")
     if args.reconcile:
         reconcile(sb, records, years, args.apply)
+    clean_stale_candidates(sb, records, years, args.apply)
     return 0
 
 
