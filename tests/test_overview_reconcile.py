@@ -11,9 +11,9 @@ GRID = [["加總Total", "115,916,843"], ["台股total", "43,993,724"], ["渣打-
 DF = pd.DataFrame([
     {"asset_type": "台股", "platform": "台股", "currency": "TWD", "name": "鴻海", "ticker": "2317.TW", "units": 10000,
      "即時價格/淨值": 224.5, "價格來源": "TWSE買賣價備援", "匯率": 1.0, "台幣市值": 2245000, "賣出稅費": 9934},
-    {"asset_type": "美股", "platform": "美股", "currency": "USD", "name": "PayPal", "ticker": "PYPL", "units": 1,
+    {"asset_type": "美股", "platform": "美股", "currency": "USD", "name": "PayPal", "ticker": "NASDAQ:PYPL", "units": 1,
      "即時價格/淨值": 59.24, "匯率": 32.739, "台幣市值": 1679571, "賣出稅費": 0},
-    {"asset_type": "美股", "platform": "美股", "currency": "USD", "name": "Block", "ticker": "XYZ", "units": 1,
+    {"asset_type": "美股", "platform": "美股", "currency": "USD", "name": "xyz", "ticker": "", "units": 1,
      "即時價格/淨值": 85.48, "匯率": 32.739, "台幣市值": 4153018, "賣出稅費": 0},
     {"asset_type": "基金", "platform": "渣打基金", "currency": "USD", "name": "大華銀新加坡房地產", "ticker": "", "units": 1,
      "台幣市值": 1115745},
@@ -32,7 +32,8 @@ class ReconcileTests(unittest.TestCase):
     def test_compare_maps_each_row(self):
         t = compare(overview_rows(GRID), DF, OTHER).set_index("分類")
         self.assertEqual(t.loc["台股total", "App"], 2245000 - 9934)
-        self.assertEqual(t.loc["渣打-sq", "差額"], 0)                 # sq＝xyz
+        self.assertEqual(t.loc["渣打-sq", "差額"], 0)                 # sq＝xyz（只有名稱）
+        self.assertEqual(t.loc["渣打-pypl", "差額"], 0)               # NASDAQ:PYPL
         self.assertEqual(t.loc["渣打-大華", "差額"], 0)
         self.assertEqual(t.loc["渣打-美金", "差額"], 594032 - 593381)   # 大華另列
         self.assertEqual(t.loc["銀行total", "差額"], 0)

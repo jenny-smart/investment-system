@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -69,7 +70,11 @@ def category_mask(label: str, df: pd.DataFrame) -> pd.Series | None:
     if label.startswith("渣打-") and label not in FUND_ROWS:
         code = label.split("-", 1)[1].strip().lower()
         codes = US_ALIASES.get(code, {code})
-        return (df["asset_type"].astype(str) == "美股") & df["ticker"].astype(str).str.lower().isin(codes)
+        is_us = (df["asset_type"].astype(str) == "美股") | (df["platform"].astype(str) == "美股")
+        # 代號可能存成 PYPL、PYPL.US、NASDAQ:PYPL，或只有名稱 pypl：拆成英文字詞比對
+        words = (df["ticker"].astype(str) + " " + df["name"].astype(str)).str.lower().map(
+            lambda text: set(re.findall(r"[a-z]+", text)))
+        return is_us & words.map(lambda w: bool(w & codes))
     return None
 
 
