@@ -91,6 +91,19 @@ jobs:
           else
             python sync_fund_dividend_totals.py 2>&1 | tee -a run.out
           fi
+      - name: 總覽 O 欄配息金額跟實際入帳不同 → 修正並加日曆提醒
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            python sync_dividend_amounts.py --dry-run 2>&1 | tee -a run.out
+          else
+            python sync_dividend_amounts.py 2>&1 | tee -a run.out
+          fi
       - name: Write update log（更新記錄）
         if: always() && github.event_name == 'workflow_dispatch'
         continue-on-error: true
