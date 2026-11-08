@@ -1011,13 +1011,11 @@ def fetch_richart_fx() -> tuple[dict[str, float], str]:
     """Richart「賣外幣」匯率：讀總帳總覽 R 欄（由基金淨值／匯率 workflow 每 10 分鐘同步）。
 
     Streamlit Cloud 連不到 richart.tw，所以不直接抓網頁；失敗回空 dict 與原因。
-    讀儲存格實際值（完整小數，不是畫面顯示的 4 位），跟總覽算市值用的匯率一致。
+    不另外快取，跟著 load_sheet_grid 的 2 分鐘快取，R 欄更新後最慢 2 分鐘反映。
     """
     try:
         from invest_app.sheet_compare import sheet_fx_rates
-        # 用儲存格實際值（完整小數）；CSV 只有顯示的 4 位，乘上去會跟總覽市值差幾元
-        rates = {k: v for k, v in sheet_fx_rates(load_sheet_raw_grid(OVERVIEW_SHEET_GID, "A1:R80")).items()
-                 if k != "TWD" and v > 0}
+        rates = {k: v for k, v in sheet_fx_rates(load_sheet_grid(OVERVIEW_SHEET_GID)).items() if k != "TWD" and v > 0}
         return (rates, "Richart") if rates else ({}, "總覽 R 欄沒有匯率")
     except Exception as e:
         return {}, f"總覽 R 欄讀取失敗:{str(e)[:60]}"

@@ -478,7 +478,7 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
                 from invest_app.core import OVERVIEW_SHEET_GID as _gid, load_sheet_raw_grid
                 from invest_app.sheet_compare import sheet_fx_rates
                 items = overview_items(load_sheet_raw_grid(_gid))
-                rates = sheet_fx_rates(load_sheet_raw_grid(_gid, "A1:R80"))   # 完整小數
+                rates = sheet_fx_rates(load_sheet_grid(_gid))
                 tables.append(unify(label, item_diff(label, items, enriched, rates) if items else pd.DataFrame()))
             except Exception as exc:
                 notes.append(f"{label}：讀不到總帳明細（{exc}）")
