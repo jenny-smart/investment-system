@@ -84,7 +84,9 @@ def _holdings(enriched: pd.DataFrame, asset_type: str) -> pd.DataFrame:
     df = df[df["台幣市值"].fillna(0) > 0]
     if df.empty:
         return df
-    df["ticker"] = df["ticker"].map(normalize_ticker)
+    # 沒填代號的用名稱當代號（同 enrich：美股 name.upper()）
+    df["ticker"] = [normalize_ticker(t) or normalize_ticker(n) for t, n in zip(df.get("ticker", ""), df.get("name", ""))]
+    df = df[df["ticker"] != ""]
     # 同一檔分在不同券商／批次時合併
     return (df.groupby("ticker", as_index=False)
               .agg(名稱=("name", "first"), 台幣市值=("台幣市值", "sum")))
@@ -209,6 +211,67 @@ def _render_scenario(scn: dict[str, Any]) -> None:
                " ③ 外資多空淨額判斷外資站哪邊，推估走哪一種劇本。")
 
 
+# Streamlit Cloud 的 Python 3.14 載入 altair 會出錯，st.line_chart／bar_chart 不能用，這裡直接畫 SVG。
+_W, _H, _PAD_L, _PAD_B, _PAD_T = 520, 200, 44, 22, 10
+
+
+def _svg_frame(body: str, labels: list[str], lo: float, hi: float, fmt) -> str:
+    plot_h = _H - _PAD_B - _PAD_T
+    ticks = "".join(
+        f'<text x="{_PAD_L - 6}" y="{_PAD_T + plot_h * (1 - f) + 4:.1f}" text-anchor="end" font-size="10" fill="#94a3b8">'
+        f'{fmt(lo + (hi - lo) * f)}</text>'
+        f'<line x1="{_PAD_L}" x2="{_W}" y1="{_PAD_T + plot_h * (1 - f):.1f}" y2="{_PAD_T + plot_h * (1 - f):.1f}" '
+        f'stroke="#f1f5f9"/>' for f in (0, 0.5, 1))
+    n = len(labels)
+    step = max(1, n // 5)
+    xl = "".join(
+        f'<text x="{_PAD_L + (i + 0.5) * (_W - _PAD_L) / n:.1f}" y="{_H - 6}" text-anchor="middle" font-size="10" '
+        f'fill="#94a3b8">{str(labels[i])[5:]}</text>' for i in range(0, n, step))
+    return (f'<svg viewBox="0 0 {_W} {_H}" width="100%" style="background:#fff;border:1px solid #e2e8f0;'
+            f'border-radius:10px">{ticks}{body}{xl}</svg>')
+
+
+def _svg_line(labels: list[str], values: list[float]) -> str:
+    pts = [(i, v) for i, v in enumerate(values) if v is not None and v == v]
+    if len(pts) < 2:
+        return '<div style="color:#94a3b8">資料不足</div>'
+    vals = [v for _, v in pts]
+    lo, hi = min(vals) * 0.95, max(vals) * 1.05
+    n, plot_h = len(labels), _H - _PAD_B - _PAD_T
+    x = lambda i: _PAD_L + (i + 0.5) * (_W - _PAD_L) / n
+    y = lambda v: _PAD_T + plot_h * (1 - (v - lo) / (hi - lo or 1))
+    avg = sum(vals) / len(vals)
+    path = " ".join(f"{'M' if k == 0 else 'L'}{x(i):.1f},{y(v):.1f}" for k, (i, v) in enumerate(pts))
+    last_i, last_v = pts[-1]
+    body = (f'<line x1="{_PAD_L}" x2="{_W}" y1="{y(avg):.1f}" y2="{y(avg):.1f}" stroke="#94a3b8" stroke-dasharray="4 3"/>'
+            f'<path d="{path}" fill="none" stroke="#2563eb" stroke-width="2"/>'
+            f'<circle cx="{x(last_i):.1f}" cy="{y(last_v):.1f}" r="3.5" fill="#2563eb"/>'
+            f'<text x="{x(last_i) - 6:.1f}" y="{y(last_v) - 8:.1f}" text-anchor="end" font-size="11" fill="#1e293b">'
+            f'{last_v:.1%}</text>')
+    return _svg_frame(body, labels, lo, hi, lambda v: f"{v:.0%}")
+
+
+def _svg_bars(labels: list[str], values: list[float]) -> str:
+    vals = [v if v is not None and v == v else None for v in values]
+    present = [v for v in vals if v is not None]
+    if not present:
+        return '<div style="color:#94a3b8">資料不足</div>'
+    m = max(abs(v) for v in present) or 1
+    lo, hi = -m * 1.1, m * 1.1
+    n, plot_h = len(labels), _H - _PAD_B - _PAD_T
+    bw = (_W - _PAD_L) / n
+    y = lambda v: _PAD_T + plot_h * (1 - (v - lo) / (hi - lo))
+    body = f'<line x1="{_PAD_L}" x2="{_W}" y1="{y(0):.1f}" y2="{y(0):.1f}" stroke="#cbd5e1"/>'
+    for i, v in enumerate(vals):
+        if v is None:
+            continue
+        top, bottom = (y(v), y(0)) if v >= 0 else (y(0), y(v))
+        color = "#dc2626" if v >= 0 else "#059669"  # 台股慣例：紅多綠空
+        body += (f'<rect x="{_PAD_L + i * bw + bw * 0.15:.1f}" y="{top:.1f}" width="{bw * 0.7:.1f}" '
+                 f'height="{max(bottom - top, 1):.1f}" fill="{color}"><title>{labels[i]}：{v:+,.0f} 口</title></rect>')
+    return _svg_frame(body, labels, lo, hi, lambda v: f"{v:+,.0f}")
+
+
 def render_night_futures_page(enriched: pd.DataFrame) -> None:
     st.markdown("### 台指期夜盤")
     latest, history = _load()
@@ -276,11 +339,13 @@ def render_night_futures_page(enriched: pd.DataFrame) -> None:
         h = h.set_index("夜盤日期")
         left, right = st.columns(2)
         with left:
-            st.caption("夜盤量佔比")
-            st.line_chart(pd.to_numeric(h["夜盤量佔比"], errors="coerce"), height=220)
+            st.caption("夜盤量佔比（虛線＝期間平均）")
+            st.markdown(_svg_line(h.index.tolist(), pd.to_numeric(h["夜盤量佔比"], errors="coerce").tolist()),
+                        unsafe_allow_html=True)
         with right:
-            st.caption("外資夜盤多空淨額（口）")
-            st.bar_chart(pd.to_numeric(h["外資夜盤多空淨額口數"], errors="coerce"), height=220)
+            st.caption("外資夜盤多空淨額（口，紅＝偏多、綠＝偏空）")
+            st.markdown(_svg_bars(h.index.tolist(), pd.to_numeric(h["外資夜盤多空淨額口數"], errors="coerce").tolist()),
+                        unsafe_allow_html=True)
         with st.expander("每晚明細"):
             st.dataframe(history.iloc[::-1], hide_index=True, use_container_width=True)
 
