@@ -1197,7 +1197,7 @@ def match_trade_units(df: pd.DataFrame, trades: dict | list[dict]) -> list[dict[
         gap = abs((item["trade_units"] or 0) - item["after_units"])
         unmatched = len(lots) - len(item["lot_units"])
         if gap < 0.00005:
-            item["status"] = "一致" if abs(total - item["after_units"]) < 0.00005 else "一致（分批改成 4 位小數）"
+            item["status"] = "一致"
         else:
             item["status"] = (f"還差 {item['after_units'] - (item['trade_units'] or 0):+,.4f}：" +
                               (f"{unmatched} 筆分批對不到明細金額" if unmatched else f"明細多 {len(rows)} 筆 App 沒有"))
