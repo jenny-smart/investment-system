@@ -52,8 +52,8 @@ def _position_counts_on_ex_date(row: pd.Series, ex_date: str | None) -> bool:
 
 
 def _position_dividend_units(row: pd.Series) -> float:
-    units = normalize_number(row.get("units", 0), 0)
-    original_units = normalize_number(row.get("original_units", 0), 0)
+    from invest_app.core import fund_units
+    original_units, units = fund_units(row)
     note = normalize_text(row.get("note", ""))
     is_closed = any(term in note for term in ["已賣出", "已結清", "結清", "賣出"])
     return units if units > 0 or is_closed else original_units
