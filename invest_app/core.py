@@ -1200,28 +1200,8 @@ def apply_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str
 
 
 def fund_units(r: pd.Series) -> tuple[float, float]:
-    """(原始單位數, 目前單位數)。基金：原始單位數＝投資金額 ÷ 購買價格，取 4 位小數（同總帳）；
-    沒有投資金額或購買價格、或跟記錄的成本股數差超過 1% 時，用記錄的成本股數（也取 4 位）；
-    目前單位數也取 4 位。其他資產照原值。"""
-    original_units = normalize_number(r.get("original_units", 0), 0)
-    units = normalize_number(r.get("units", 0), 0)
-    if normalize_text(r.get("asset_type", "")) != "基金":
-        return original_units, units
-    amount = normalize_number(r.get("total_cost_input", 0), 0)
-    price = normalize_number(r.get("avg_cost", 0), 0)
-    if amount > 0 and price > 0:
-        derived = amount / price
-        # 防呆：跟記錄的成本股數差超過 1%（例如投資金額含手續費、或欄位填錯），保留記錄值
-        if original_units <= 0 or abs(derived - original_units) <= original_units * 0.01:
-            original_units = derived
-    traded = normalize_number(r.get("trade_units", 0), 0)
-    if traded > 0:   # 交易明細逐筆取 4 位加總（apply_trade_units 依比例分到各分批）
-        if units > 0:
-            units = traded
-        else:
-            original_units = traded
-        return original_units, units
-    return round(original_units, 4), round(units, 4)
+    """(原始單位數, 目前單位數)：App 資料庫記錄的值，不另外換算（交易明細單位數只在核對表比對）。"""
+    return normalize_number(r.get("original_units", 0), 0), normalize_number(r.get("units", 0), 0)
 
 
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
@@ -1413,10 +1393,7 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         if key[0] in fresh
     }
     _prefetch_quotes(df, set(sheet_quotes))
-    try:
-        df = apply_trade_units(df, load_fund_trade_units())
-    except Exception:
-        pass
+    # 交易明細單位數只用來核對（首頁「📐 基金單位數核對」），不改 App 的市值計算
     rows = []
     dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     dividend_original_totals = fund_dividend_original_totals(df)
