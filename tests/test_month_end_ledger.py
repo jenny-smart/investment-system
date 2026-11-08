@@ -44,14 +44,18 @@ class DateTests(unittest.TestCase):
         self.assertEqual(last_weekday(OCT, {date(2026, 10, 30)}), date(2026, 10, 29))
 
     def test_auto_tasks(self):
-        self.assertEqual(auto_tasks(date(2026, 10, 29)), (None, None))
-        self.assertEqual(auto_tasks(date(2026, 10, 30)), (OCT, None))
-        self.assertEqual(auto_tasks(date(2026, 10, 31)), (OCT, None))
-        self.assertEqual(auto_tasks(date(2026, 11, 1)), (OCT, date(2026, 11, 1)))
-        self.assertEqual(auto_tasks(date(2026, 11, 7)), (OCT, date(2026, 11, 1)))   # 1 日漏跑也會補
-        self.assertEqual(auto_tasks(date(2026, 11, 10)), (OCT, date(2026, 11, 1)))
-        self.assertEqual(auto_tasks(date(2026, 11, 11)), (None, None))
-        self.assertEqual(auto_tasks(date(2027, 2, 28)), (date(2027, 2, 1), None))
+        N1 = date(2026, 11, 1)
+        self.assertEqual(auto_tasks(date(2026, 10, 29)), (None, None, None))
+        self.assertEqual(auto_tasks(date(2026, 10, 30)), (OCT, None, None))
+        self.assertEqual(auto_tasks(date(2026, 10, 31)), (OCT, None, None))
+        self.assertEqual(auto_tasks(date(2026, 11, 1)), (OCT, N1, None))     # 週日
+        self.assertEqual(auto_tasks(date(2026, 11, 2)), (OCT, N1, None))     # 第 1 個工作天
+        self.assertEqual(auto_tasks(date(2026, 11, 3)), (OCT, N1, None))     # 第 2 個工作天
+        self.assertEqual(auto_tasks(date(2026, 11, 4)), (None, N1, OCT))     # 過了：不再讀，檢查記日曆
+        self.assertEqual(auto_tasks(date(2026, 11, 4), {date(2026, 11, 2)}), (OCT, N1, None))   # 休市順延
+        self.assertEqual(auto_tasks(date(2026, 11, 10)), (None, N1, OCT))
+        self.assertEqual(auto_tasks(date(2026, 11, 11)), (None, None, None))
+        self.assertEqual(auto_tasks(date(2027, 2, 28)), (date(2027, 2, 1), None, None))
 
     def test_overview_income_range_includes_rows_40_to_43(self):
         from month_end_ledger import OVERVIEW_INCOME_CELLS
