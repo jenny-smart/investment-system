@@ -416,9 +416,9 @@ def _reason_row(name, sh, app_nav, app_fx, sheet_fx, units, app_value):
 
 def trade_units_table(items: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame([{
-        "平台": i["platform"], "幣別": i["currency"], "基金名稱": i["name"],
-        "交易明細單位數": i["trade_units"], "App 原本單位數": i["app_units"],
-        "差額": (i["trade_units"] - i["app_units"]) if i["trade_units"] is not None else None,
+        "平台": i["platform"], "基金名稱": i["name"],
+        "交易明細單位數": i["trade_units"], "App 原本單位數": i["app_units"], "App 改 4 位後": i["after_units"],
+        "差額（改後−明細）": (i["after_units"] - i["trade_units"]) if i["trade_units"] is not None else None,
         "狀態": i["status"],
     } for i in items])
 
@@ -435,13 +435,14 @@ def render_trade_units() -> None:
         return
     if not items:
         return
-    applied = sum(1 for i in items if i["applied"])
-    with st.expander(f"📐 基金單位數核對：{len(items)} 檔，{applied} 檔用交易明細單位數"
+    ok = sum(1 for i in items if i["status"].startswith("一致"))
+    with st.expander(f"📐 基金單位數核對：{len(items)} 檔，{ok} 檔一致"
                      f"（讀到 {len([s for s in sheets if s])} 張明細）", expanded=False):
-        st.caption("左邊「交易明細單位數」＝你股票總帳各基金工作表（F 欄有勾的每一列 L 投資金額 ÷ I 購買價格、各取 4 位小數）的加總，"
-                   "應該等於你工作表上的單位數；右邊是 App 原本記的。狀態「一致」＝兩邊一樣；「已套用」＝App 市值改用左邊的數字；"
-                   "「差超過 1%」＝差太多，App 不改，請看是哪邊記錯。")
-        st.markdown(html_table(trade_units_table(items), {"交易明細單位數": 4, "App 原本單位數": 4, "差額": 4}),
+        st.caption("交易明細單位數＝股票總帳各基金工作表 F 欄有勾的每一筆（投資金額 ÷ 單位成本，各取 4 位小數）加總。"
+                   "App 改 4 位後＝App 每一筆分批用投資金額對到明細那一筆，改成那筆的 4 位小數單位數再加總（App 市值用這個；不寫入資料庫）。"
+                   "「一致」＝改後跟明細一樣；「還差」＝有分批對不到明細金額，那幾筆維持 App 原本的值。")
+        st.markdown(html_table(trade_units_table(items), {"交易明細單位數": 4, "App 原本單位數": 4, "App 改 4 位後": 4,
+                                                          "差額（改後−明細）": 4}),
                     unsafe_allow_html=True)
 
 

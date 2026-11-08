@@ -131,60 +131,6 @@ class UnifyTests(unittest.TestCase):
         self.assertEqual(stock.loc[0, "App 匯率"], 1.0)
 
 
-class TradeUnitsTests(unittest.TestCase):
-    def test_sum_of_rounded_trades(self):
-        from invest_app.core import apply_trade_units, fund_name_key, trade_units
-        def row(name, tick, price, amount):
-            r = [""] * 12
-            r[0], r[5], r[8], r[11] = name, tick, price, amount
-            return r
-        rows = [row("貝萊德A6日圓", "TRUE", 1077.0, 100000), row("貝萊德A6日圓", "TRUE", 1050.0, 150000),
-                row("貝萊德A6日圓", "FALSE", 1000.0, 999999), row("", "TRUE", 1.0, 1)]
-        units = trade_units(rows)
-        expected = round(round(100000 / 1077, 4) + round(150000 / 1050, 4), 4)
-        self.assertEqual(units[fund_name_key("貝萊德A6日圓")], expected)
-        df = pd.DataFrame([
-            {"asset_type": "基金", "name": "貝萊德A6日圓", "original_units": 92.85, "units": 0, "total_cost_input": 0, "avg_cost": 0, "note": ""},
-            {"asset_type": "基金", "name": "貝萊德A6日圓", "original_units": 142.86, "units": 0, "total_cost_input": 0, "avg_cost": 0, "note": ""},
-        ])
-        out = apply_trade_units(df, units)
-        self.assertAlmostEqual(out["trade_units"].sum(), expected)
-        far = apply_trade_units(df, {fund_name_key("貝萊德A6日圓"): 300.0})   # 差超過 1%：不套用
-        self.assertEqual(far["trade_units"].sum(), 0)
-        two = apply_trade_units(df, [{fund_name_key("貝萊德A6日圓"): 4966.65}, units])   # 同名在兩張：選接近的
-        self.assertAlmostEqual(two["trade_units"].sum(), expected)
-
-
-class TradeUnitsTableTests(unittest.TestCase):
-    def test_status(self):
-        from invest_app.core import fund_name_key, match_trade_units
-        from invest_app.overview_reconcile import trade_units_table
-        df = pd.DataFrame([
-            {"asset_type": "基金", "platform": "基富通", "currency": "JPY", "name": "貝萊德", "original_units": 232.09, "units": 0, "note": ""},
-            {"asset_type": "基金", "platform": "渣打基金", "currency": "USD", "name": "大華", "original_units": 6000, "units": 0, "note": ""},
-            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": "高盛", "original_units": 986.64, "units": 0, "note": ""},
-        ])
-        t = trade_units_table(match_trade_units(df, [{fund_name_key("貝萊德"): 232.0826, fund_name_key("大華"): 7000}])).set_index("基金名稱")
-        self.assertEqual(t.loc["貝萊德", "狀態"], "已套用")
-        self.assertIn("差超過 1%", t.loc["大華", "狀態"])
-        self.assertEqual(t.loc["高盛", "狀態"], "交易明細找不到這檔")
-
-
-class SameNameTwoPlatformsTests(unittest.TestCase):
-    def test_scb_and_taishin_kept_apart(self):
-        from invest_app.core import fund_name_key, match_trade_units
-        name1, name2 = "東方匯理基金新興市場債券U 南非幣(穩定月配息)", "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
-        df = pd.DataFrame([
-            {"asset_type": "基金", "platform": "渣打基金", "currency": "ZAR", "name": name1, "original_units": 1817.037, "units": 0, "note": ""},
-            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name2, "original_units": 4966.65, "units": 0, "note": ""},
-        ])
-        sheets = [{fund_name_key(name1): 1817.0385}, {fund_name_key(name2): 4966.657}]
-        items = {i["platform"]: i for i in match_trade_units(df, sheets)}
-        self.assertEqual(items["渣打基金"]["trade_units"], 1817.0385)
-        self.assertEqual(items["台新基金"]["trade_units"], 4966.657)
-        self.assertTrue(items["渣打基金"]["applied"] and items["台新基金"]["applied"])
-
-
 class TradeColumnsTests(unittest.TestCase):
     def test_kifutong_twd_layout_uses_j(self):
         from invest_app.core import fund_name_key, trade_units
@@ -201,3 +147,59 @@ class TradeColumnsTests(unittest.TestCase):
         row = ["東方匯理基金新興市場債券U 美元(穩定月配息)", "", "PUF6", "2025/9/", "", "TRUE", "", 16.57, 19.3, "", 148017, 5266, 4521, 272.8497]
         units = trade_units([header, row])
         self.assertEqual(units[fund_name_key("東方匯理基金新興市場債券Ｕ(美金)(穩定月配息)")], 272.8497)   # 美金＝美元
+
+
+class LotUnitsTests(unittest.TestCase):
+    HEADER_TW = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資成本", "總市值", "單位數"]
+
+    def row(self, name, tick, price, amount):
+        return [name, "", "", "", "", tick, "", "", price, amount, "", ""]
+
+    def test_each_lot_uses_its_trade_row(self):
+        from invest_app.core import apply_trade_units, fund_name_key, fund_units, match_trade_units, trade_rows
+        sheet = trade_rows([self.HEADER_TW, self.row("富蘭克林華美B-新臺幣", "TRUE", 3.9349, 10000),
+                            self.row("富蘭克林華美B-新臺幣", "TRUE", 3.9062, 30000),
+                            self.row("富蘭克林華美B-新臺幣", "FALSE", 3.4, 543958)])
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "基富通", "currency": "TWD", "name": "富蘭克林華美B-新臺幣",
+             "original_units": 2541.36, "units": 0, "total_cost_input": 10000, "note": ""},
+            {"asset_type": "基金", "platform": "基富通", "currency": "TWD", "name": "富蘭克林華美B-新臺幣",
+             "original_units": 7680.1, "units": 0, "total_cost_input": 30000, "note": ""},
+        ])
+        item = match_trade_units(df, [sheet])[0]
+        expected = round(round(10000 / 3.9349, 4) + round(30000 / 3.9062, 4), 4)
+        self.assertEqual(item["trade_units"], expected)
+        self.assertEqual(item["after_units"], expected)
+        self.assertTrue(item["status"].startswith("一致"))
+        out = apply_trade_units(df, [sheet])
+        self.assertEqual(fund_units(out.iloc[0])[0], round(10000 / 3.9349, 4))
+
+    def test_taishin_zar_lot_with_usd_label_and_wrong_avg_cost(self):
+        from invest_app.core import match_trade_units, trade_rows
+        header = ["", "", "", "", "", "", "觀察成本", "現在市值", "單位成本", "投資台幣", "市值台幣", "投資南非", "市值南非", "單位數"]
+        name = "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
+        r = lambda price, amount: [name, "", "", "", "", "TRUE", "", 211.23, price, "", "", amount, "", ""]
+        sheet = trade_rows([header, r(260.51, 60842), r(236.23, 62446)])
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 233.55,
+             "units": 0, "total_cost_input": 60842, "note": ""},
+            {"asset_type": "基金", "platform": "台新基金", "currency": "USD", "name": name, "original_units": 264.34,
+             "units": 0, "total_cost_input": 62446, "note": ""},
+        ])
+        items = match_trade_units(df, [sheet])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["after_units"], round(round(60842 / 260.51, 4) + round(62446 / 236.23, 4), 4))
+
+    def test_scb_and_taishin_same_name_kept_apart(self):
+        from invest_app.core import fund_name_key, match_trade_units
+        n1, n2 = "東方匯理基金新興市場債券U 南非幣(穩定月配息)", "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "渣打基金", "currency": "ZAR", "name": n1, "original_units": 1817.04,
+             "units": 0, "total_cost_input": 542004, "note": ""},
+            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": n2, "original_units": 85.4,
+             "units": 0, "total_cost_input": 22175, "note": ""},
+        ])
+        sheets = [{fund_name_key(n1): [(542004.0, 1817.0385)]}, {fund_name_key(n2): [(22175.0, 85.3968)]}]
+        items = {i["platform"]: i for i in match_trade_units(df, sheets)}
+        self.assertEqual(items["渣打基金"]["after_units"], 1817.0385)
+        self.assertEqual(items["台新基金"]["after_units"], 85.3968)

@@ -1100,10 +1100,10 @@ def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int]:
     return -1, 8, 11
 
 
-def trade_units(rows: list[list[Any]]) -> dict[str, float]:
-    """交易明細列 → {基金名稱 key: Σ round(投資金額 ÷ 購買價格, 4)}；只算 F 欄有打勾的列。"""
+def trade_rows(rows: list[list[Any]]) -> dict[str, list[tuple[float, float]]]:
+    """交易明細列 → {基金名稱 key: [(投資金額, 單位數＝round(投資金額 ÷ 購買價格, 4))]}；只算 F 欄有打勾的列。"""
     header, price_col, amount_col = trade_columns(rows)
-    out: dict[str, float] = {}
+    out: dict[str, list[tuple[float, float]]] = {}
     for row in rows[header + 1:]:
         if len(row) <= max(price_col, amount_col, 5):
             continue
@@ -1111,95 +1111,121 @@ def trade_units(rows: list[list[Any]]) -> dict[str, float]:
         amount, price = to_float(row[amount_col]), to_float(row[price_col])
         if not name or ticked not in {"TRUE", "1", "V", "✓", "Y", "YES"} or not amount or not price or price <= 0:
             continue
-        key = fund_name_key(name)
-        out[key] = round(out.get(key, 0.0) + round(amount / price, 4), 4)
+        out.setdefault(fund_name_key(name), []).append((float(amount), round(amount / price, 4)))
     return out
 
 
+def trade_units(rows: list[list[Any]]) -> dict[str, float]:
+    """{基金名稱 key: Σ 每筆單位數（各取 4 位）}。"""
+    return {k: round(sum(u for _, u in v), 4) for k, v in trade_rows(rows).items()}
+
+
 @st.cache_data(ttl=600, show_spinner=False)
-def load_fund_trade_units() -> list[dict[str, float]]:
+def load_fund_trade_units() -> list[dict[str, list[tuple[float, float]]]]:
     """讀各基金交易明細（gviz CSV，儲存格實際值），每張工作表各一份 {基金 key: 單位數}。
 
     分開存：不同平台可能有同名基金（渣打、台新都有東方匯理 U 南非幣），不能加在一起。讀不到的工作表略過。"""
     import csv
-    sheets: list[dict[str, float]] = []
+    sheets: list[dict[str, list[tuple[float, float]]]] = []
     for gid in FUND_TRADE_SHEET_GIDS:
         try:
             response = requests.get(
                 f"https://docs.google.com/spreadsheets/d/{FUND_TRADE_SHEET_ID}/gviz/tq",
                 params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A1:Q500",
-                        "headers": "0", "tq": "options no_format"},
+                        "headers": "1", "tq": "options no_format"},
                 timeout=15)
             response.raise_for_status()
             if "<html" in response.text[:200].lower():
                 continue
             rows = [[_raw_cell(v) for v in row] for row in csv.reader(io.StringIO(response.text))]
-            sheets.append(trade_units(rows))
+            sheets.append(trade_rows(rows))
         except Exception:
             continue
     return sheets
 
 
-def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str, float]]) -> list[dict[str, Any]]:
-    """每檔基金（同名合併）：App 單位數、交易明細單位數、要不要套用。
+def _sheet_total(sheet: dict, key: str) -> float | None:
+    rows = sheet.get(key)
+    if not rows:
+        return None
+    return round(sum(u for _, u in rows), 4) if isinstance(rows, list) else float(rows)
 
-    同名基金出現在多張明細（不同平台）時，選單位數最接近 App 的那張；差超過 1% 就不套用。"""
+
+def match_trade_units(df: pd.DataFrame, trades: dict | list[dict]) -> list[dict[str, Any]]:
+    """每檔基金（同平台同名合併）：App 單位數、交易明細單位數，以及每一筆分批對到的明細單位數。
+
+    分批跟明細用「投資金額」一筆對一筆（金額差 1 元內）；對到的分批用明細的 4 位小數單位數，
+    對不到的維持 App 原本的值。同名基金出現在多張明細（不同平台）時，選合計最接近 App 的那張。"""
     sheets = trades if isinstance(trades, list) else [trades]
     out: list[dict[str, Any]] = []
     if df.empty:
         return out
     funds = df[df["asset_type"].astype(str) == "基金"]
-    # 平台＋幣別＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」，不能併成一檔
+    # 平台＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」要分開；同平台同名的分批（即使幣別欄填得不同）合在一起
     group_keys = (funds.get("platform", pd.Series("", index=funds.index)).astype(str) + "|"
-                  + funds.get("currency", pd.Series("", index=funds.index)).astype(str).str.upper() + "|"
                   + funds["name"].map(fund_name_key))
     for group, part in funds.groupby(group_keys, sort=False):
-        key = group.split("|", 2)[2]
-        lots = {}
+        key = group.split("|", 1)[1]
+        lots, amounts = {}, {}
         for idx, r in part.iterrows():
             note = normalize_text(r.get("note", ""))
             if any(t in note for t in ["已賣出", "已結清", "結清", "賣出"]):
                 continue
-            original, units = fund_units(r.drop(labels=["trade_units"], errors="ignore"))
+            original, units = normalize_number(r.get("original_units", 0), 0), normalize_number(r.get("units", 0), 0)
             lots[idx] = units if units > 0 else original
-        total = sum(lots.values())
-        candidates = [sheet[key] for sheet in sheets if sheet.get(key)]
-        first = part.iloc[0]
-        item = {"name": str(first.get("name", "")), "platform": str(first.get("platform", "")),
-                "currency": str(first.get("currency", "")), "lots": lots, "app_units": total,
-                "trade_units": None, "applied": False, "status": ""}
+            amounts[idx] = normalize_number(r.get("total_cost_input", 0), 0)
         if not lots:
             continue
+        first = part.iloc[0]
+        total = sum(lots.values())
+        item = {"name": str(first.get("name", "")), "platform": str(first.get("platform", "")),
+                "currency": str(first.get("currency", "")), "lots": lots, "app_units": total,
+                "trade_units": None, "lot_units": {}, "after_units": total, "status": ""}
+        candidates = [s for s in sheets if s.get(key)]
         if not candidates:
             item["status"] = "交易明細找不到這檔"
-        elif total <= 0:
-            item["status"] = "App 沒有單位數"
+            out.append(item)
+            continue
+        sheet = min(candidates, key=lambda s: abs((_sheet_total(s, key) or 0) - total))
+        item["trade_units"] = _sheet_total(sheet, key)
+        rows = list(sheet[key]) if isinstance(sheet[key], list) else []
+        for idx, amount in amounts.items():
+            hit = next((i for i, (a, _) in enumerate(rows) if amount > 0 and abs(a - amount) < 1), None)
+            if hit is not None:
+                item["lot_units"][idx] = rows.pop(hit)[1]
+        item["after_units"] = round(sum(item["lot_units"].get(i, u) for i, u in lots.items()), 4)
+        gap = abs((item["trade_units"] or 0) - item["after_units"])
+        unmatched = len(lots) - len(item["lot_units"])
+        if gap < 0.00005:
+            item["status"] = "一致" if abs(total - item["after_units"]) < 0.00005 else "一致（分批改成 4 位小數）"
         else:
-            target = min(candidates, key=lambda u: abs(u / total - 1))
-            item["trade_units"] = target
-            if abs(target / total - 1) > TRADE_UNITS_MAX_DIFF:
-                item["status"] = "差超過 1%，未套用（請檢查明細或 App）"
-            else:
-                item["applied"] = True
-                item["status"] = "已套用" if abs(target - total) >= 0.00005 else "一致"
+            item["status"] = (f"還差 {item['after_units'] - (item['trade_units'] or 0):+,.4f}：" +
+                              (f"{unmatched} 筆分批對不到明細金額" if unmatched else f"明細多 {len(rows)} 筆 App 沒有"))
         out.append(item)
     return out
 
 
-def apply_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str, float]]) -> pd.DataFrame:
-    """基金持倉加一欄 trade_units：同一檔各分批依比例調整，讓合計等於交易明細算出的單位數。"""
+def apply_trade_units(df: pd.DataFrame, trades: dict | list[dict]) -> pd.DataFrame:
+    """基金分批加一欄 trade_units：對到明細的分批，用明細那一筆的 4 位小數單位數。"""
     df = df.copy()
     df["trade_units"] = 0.0
     for item in match_trade_units(df, trades):
-        if item["applied"]:
-            for idx, lot in item["lots"].items():
-                df.at[idx, "trade_units"] = lot * item["trade_units"] / item["app_units"]
+        for idx, units in item["lot_units"].items():
+            df.at[idx, "trade_units"] = units
     return df
 
 
 def fund_units(r: pd.Series) -> tuple[float, float]:
-    """(原始單位數, 目前單位數)：App 資料庫記錄的值，不另外換算（交易明細單位數只在核對表比對）。"""
-    return normalize_number(r.get("original_units", 0), 0), normalize_number(r.get("units", 0), 0)
+    """(原始單位數, 目前單位數)：App 資料庫記錄的值；有對到交易明細的分批用明細的 4 位小數單位數。"""
+    original_units = normalize_number(r.get("original_units", 0), 0)
+    units = normalize_number(r.get("units", 0), 0)
+    traded = normalize_number(r.get("trade_units", 0), 0)
+    if traded > 0:
+        if units > 0:
+            units = traded
+        else:
+            original_units = traded
+    return original_units, units
 
 
 def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
@@ -1391,7 +1417,11 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         if key[0] in fresh
     }
     _prefetch_quotes(df, set(sheet_quotes))
-    # 交易明細單位數只用來核對（首頁「📐 基金單位數核對」），不改 App 的市值計算
+    # 基金分批的市值股數用交易明細那一筆的 4 位小數單位數（對不到的維持資料庫的值），不寫入資料庫
+    try:
+        df = apply_trade_units(df, load_fund_trade_units())
+    except Exception:
+        pass
     rows = []
     dividend_primary_seen: set[tuple[str, str, str, str]] = set()
     dividend_original_totals = fund_dividend_original_totals(df)
