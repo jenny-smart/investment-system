@@ -272,6 +272,62 @@ def _svg_bars(labels: list[str], values: list[float]) -> str:
     return _svg_frame(body, labels, lo, hi, lambda v: f"{v:+,.0f}")
 
 
+ACTION_STYLE = {  # 台股慣例：紅＝偏多、綠＝偏空
+    "買進": "background-color:#fee2e2;color:#b91c1c;font-weight:700",
+    "拉回再買": "background-color:#ffedd5;color:#c2410c;font-weight:600",
+    "觀望偏多": "background-color:#fef9c3;color:#a16207",
+    "觀望": "color:#64748b",
+    "賣出／避開": "background-color:#dcfce7;color:#15803d;font-weight:700",
+    "超跌勿追殺": "background-color:#e0f2fe;color:#0369a1;font-weight:600",
+    "過熱減碼": "background-color:#ede9fe;color:#6d28d9;font-weight:700",
+}
+
+
+def _render_hot_stocks(hot: list[dict[str, Any]], enriched: pd.DataFrame) -> None:
+    st.markdown("#### 熱門股 20 檔：趨勢與買賣建議")
+    if not hot:
+        st.info("熱門股資料還沒有（每天早上 07:00 跟夜盤一起更新）。")
+        return
+    held = set()
+    if enriched is not None and not enriched.empty and "ticker" in enriched:
+        tw = enriched[enriched["asset_type"].astype(str) == "台股"]
+        held = {normalize_ticker(t).split(".")[0] for t in tw["ticker"].astype(str)}
+    df = pd.DataFrame(hot)
+    counts = df["建議"].value_counts()
+    st.caption("　".join(f"{k} {counts[k]} 檔" for k in ACTION_STYLE if k in counts))
+
+    pctf = lambda v: "-" if v is None or pd.isna(v) else f"{v:+.1%}"
+    numf = lambda v, d=1: "-" if v is None or pd.isna(v) else f"{v:,.{d}f}"
+    view = pd.DataFrame({
+        "#": df["排名"],
+        "股票": [f"{n} {c}" + (" ★持有" if c in held else "") for n, c in zip(df["名稱"], df["代號"])],
+        "收盤": df["收盤價"].map(numf),
+        "1日": df.get("1日漲跌", pd.Series(dtype=float)).map(pctf),
+        "5日": df.get("5日漲跌", pd.Series(dtype=float)).map(pctf),
+        "20日": df.get("20日漲跌", pd.Series(dtype=float)).map(pctf),
+        "近20日走勢": df.get("近20日走勢", pd.Series([[]] * len(df))),
+        "趨勢": df["趨勢"],
+        "建議": df["建議"],
+        "關鍵價位": [("-" if v is None or pd.isna(v) else f"{k} {v:,.1f}")
+                     for v, k in zip(df.get("關鍵價位", pd.Series([None] * len(df))),
+                                     df.get("價位類型", pd.Series([""] * len(df))))],
+        "RSI": df.get("RSI", pd.Series(dtype=float)).map(lambda v: numf(v, 0)),
+        "外資(張)": df["外資買賣超張"].map(lambda v: numf(v, 0)),
+        "投信(張)": df["投信買賣超張"].map(lambda v: numf(v, 0)),
+        "成交(億)": df["成交金額億"].map(numf),
+        "理由": df.get("理由", ""),
+    })
+    st.dataframe(
+        view.style.map(lambda v: ACTION_STYLE.get(v, ""), subset=["建議"]),
+        hide_index=True, use_container_width=True, height=min(740, 38 + 35 * len(view)),
+        column_config={"近20日走勢": st.column_config.LineChartColumn("近20日走勢", width="small")},
+    )
+    st.caption("挑選：前一交易日成交金額前 80 名上市股，依成交金額＋三大法人買賣超金額排名取 20 檔。"
+               "建議為規則式技術面判斷（20／60 日線排列、RSI、法人買賣超）；關鍵價位：偏多標「停損」（跌破出場），"
+               "偏空標「壓力」（站回 20 日線才轉觀望）；RSI ≤ 20 的空頭股標「超跌勿追殺」。"
+               "只是統計規則，不是投資建議，進出場請搭配上方夜盤劇本與自己的部位控管。")
+
+
 def render_night_futures_page(enriched: pd.DataFrame) -> None:
     st.markdown("### 台指期夜盤")
     latest, history = _load()
@@ -317,6 +373,8 @@ def render_night_futures_page(enriched: pd.DataFrame) -> None:
     )
 
     _render_holdings_impact(enriched, to_float(est.get("預估漲跌幅")), latest)
+
+    _render_hot_stocks(latest.get("熱門股") or [], enriched)
 
     st.markdown("#### 國際盤")
     gq = pd.DataFrame(latest.get("國際盤", []))
