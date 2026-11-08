@@ -1011,11 +1011,13 @@ def fetch_richart_fx() -> tuple[dict[str, float], str]:
     """Richart「賣外幣」匯率：讀總帳總覽 R 欄（由基金淨值／匯率 workflow 每 10 分鐘同步）。
 
     Streamlit Cloud 連不到 richart.tw，所以不直接抓網頁；失敗回空 dict 與原因。
-    不另外快取，跟著 load_sheet_grid 的 2 分鐘快取，R 欄更新後最慢 2 分鐘反映。
+    讀儲存格實際值（完整小數，不是畫面顯示的 4 位），跟總覽算市值用的匯率一致。
     """
     try:
         from invest_app.sheet_compare import sheet_fx_rates
-        rates = {k: v for k, v in sheet_fx_rates(load_sheet_grid(OVERVIEW_SHEET_GID)).items() if k != "TWD" and v > 0}
+        # 用儲存格實際值（完整小數）；CSV 只有顯示的 4 位，乘上去會跟總覽市值差幾元
+        rates = {k: v for k, v in sheet_fx_rates(load_sheet_raw_grid(OVERVIEW_SHEET_GID, "A1:R80")).items()
+                 if k != "TWD" and v > 0}
         return (rates, "Richart") if rates else ({}, "總覽 R 欄沒有匯率")
     except Exception as e:
         return {}, f"總覽 R 欄讀取失敗:{str(e)[:60]}"
@@ -1067,9 +1069,26 @@ def fetch_fx(currency: str) -> tuple[float | None, str]:
 TW_STOCK_SELL_COST_RATE = 0.004425
 
 
-def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
+def fund_units(r: pd.Series) -> tuple[float, float]:
+    """(原始單位數, 目前單位數)。基金：原始單位數＝投資金額 ÷ 購買價格，取 4 位小數（同總帳）；
+    沒有投資金額或購買價格、或跟記錄的成本股數差超過 1% 時，用記錄的成本股數（也取 4 位）；
+    目前單位數也取 4 位。其他資產照原值。"""
     original_units = normalize_number(r.get("original_units", 0), 0)
     units = normalize_number(r.get("units", 0), 0)
+    if normalize_text(r.get("asset_type", "")) != "基金":
+        return original_units, units
+    amount = normalize_number(r.get("total_cost_input", 0), 0)
+    price = normalize_number(r.get("avg_cost", 0), 0)
+    if amount > 0 and price > 0:
+        derived = amount / price
+        # 防呆：跟記錄的成本股數差超過 1%（例如投資金額含手續費、或欄位填錯），保留記錄值
+        if original_units <= 0 or abs(derived - original_units) <= original_units * 0.01:
+            original_units = derived
+    return round(original_units, 4), round(units, 4)
+
+
+def calculate_cost_and_value(r: pd.Series, latest_price: float | None, fx: float | None) -> dict[str, Any]:
+    original_units, units = fund_units(r)
     avg_cost = normalize_number(r.get("avg_cost", 0), 0)
     total_cost_input = normalize_number(r.get("total_cost_input", 0), 0)
     note = normalize_text(r.get("note", ""))

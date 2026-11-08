@@ -129,3 +129,14 @@ class UnifyTests(unittest.TestCase):
                                                   "差額": -5000, "差在哪裡": "價格不同"}]))
         self.assertEqual(list(stock.columns), UNIFIED)
         self.assertEqual(stock.loc[0, "App 匯率"], 1.0)
+
+
+class FundUnitsTests(unittest.TestCase):
+    def test_amount_over_price_rounded_to_4(self):
+        from invest_app.core import fund_units
+        r = pd.Series({"asset_type": "基金", "total_cost_input": 50000, "avg_cost": 215.4366, "original_units": 232.09, "units": 0})
+        self.assertEqual(fund_units(r), (232.0868, 0.0))
+        far = pd.Series({"asset_type": "基金", "total_cost_input": 50000, "avg_cost": 100, "original_units": 232.09123, "units": 0})
+        self.assertEqual(fund_units(far)[0], 232.0912)          # 差超過 1%：保留記錄值
+        stock = pd.Series({"asset_type": "台股", "total_cost_input": 0, "avg_cost": 10, "original_units": 1000.123456, "units": 0})
+        self.assertEqual(fund_units(stock)[0], 1000.123456)
