@@ -195,3 +195,21 @@ class SameNameTwoPlatformsTests(unittest.TestCase):
         self.assertEqual(items["渣打基金"]["trade_units"], 1817.0385)
         self.assertEqual(items["台新基金"]["trade_units"], 4966.657)
         self.assertTrue(items["渣打基金"]["applied"] and items["台新基金"]["applied"])
+
+
+class TradeColumnsTests(unittest.TestCase):
+    def test_kifutong_twd_layout_uses_j(self):
+        from invest_app.core import fund_name_key, trade_units
+        header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資成本", "總市值", "單位數"]
+        total = ["div/section", "", "", "", "", "FALSE", "", "", "", 31000000, 28555111, ""]
+        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.36]
+        r2 = ["富蘭克林華美", "acft94", "", "", "", "FALSE", 3.91, 3.2684, 3.4, 543958, 522904, 159987.74]
+        units = trade_units([header, total, r1, r2])
+        self.assertEqual(units[fund_name_key("富蘭克林華美")], round(10000 / 3.9349, 4))
+
+    def test_foreign_layout_uses_investment_currency(self):
+        from invest_app.core import fund_name_key, trade_units
+        header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資台幣", "市值台幣", "投資美金", "市值美金", "單位數"]
+        row = ["東方匯理基金新興市場債券U 美元(穩定月配息)", "", "PUF6", "2025/9/", "", "TRUE", "", 16.57, 19.3, "", 148017, 5266, 4521, 272.8497]
+        units = trade_units([header, row])
+        self.assertEqual(units[fund_name_key("東方匯理基金新興市場債券Ｕ(美金)(穩定月配息)")], 272.8497)   # 美金＝美元

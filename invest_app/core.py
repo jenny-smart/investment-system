@@ -1078,17 +1078,39 @@ TRADE_UNITS_MAX_DIFF = 0.01   # 跟 App 單位數差超過 1% 就不套用（可
 
 def fund_name_key(name: Any) -> str:
     import unicodedata
-    return re.sub(r"[\s()（）\-—_]", "", unicodedata.normalize("NFKC", str(name or "")).lower())
+    text = unicodedata.normalize("NFKC", str(name or "")).lower()
+    for old, new in (("美金", "美元"), ("鋒裕匯理", "東方匯理"), ("證劵", "證券")):
+        text = text.replace(old, new)
+    return re.sub(r"[\s()（）\-—_]", "", text)
+
+
+def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int]:
+    """(標題列 index, 購買價格欄, 投資金額欄)：依標題找。
+
+    各工作表欄位不同：渣打／台新／基富通-日幣是 I「單位成本」、L「投資美金／南非／日幣」；
+    基富通-台是 I「單位成本」、J「投資成本」。找不到標題就用 I、L。"""
+    for i, row in enumerate(rows[:10]):
+        names = [str(c).strip() for c in row]
+        if "單位成本" not in names:
+            continue
+        price = names.index("單位成本")
+        if "投資成本" in names:
+            return i, price, names.index("投資成本")
+        foreign = [j for j, n in enumerate(names) if n.startswith("投資") and n not in ("投資台幣", "投資月份")]
+        if foreign:
+            return i, price, foreign[0]
+    return -1, 8, 11
 
 
 def trade_units(rows: list[list[Any]]) -> dict[str, float]:
     """交易明細列 → {基金名稱 key: Σ round(投資金額 ÷ 購買價格, 4)}；只算 F 欄有打勾的列。"""
+    header, price_col, amount_col = trade_columns(rows)
     out: dict[str, float] = {}
-    for row in rows:
-        if len(row) < 12:
+    for row in rows[header + 1:]:
+        if len(row) <= max(price_col, amount_col, 5):
             continue
         name, ticked = str(row[0]).strip(), str(row[5]).strip().upper()
-        amount, price = to_float(row[11]), to_float(row[8])
+        amount, price = to_float(row[amount_col]), to_float(row[price_col])
         if not name or ticked not in {"TRUE", "1", "V", "✓", "Y", "YES"} or not amount or not price or price <= 0:
             continue
         key = fund_name_key(name)
@@ -1107,7 +1129,7 @@ def load_fund_trade_units() -> list[dict[str, float]]:
         try:
             response = requests.get(
                 f"https://docs.google.com/spreadsheets/d/{FUND_TRADE_SHEET_ID}/gviz/tq",
-                params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A2:L500",
+                params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A1:Q500",
                         "headers": "0", "tq": "options no_format"},
                 timeout=15)
             response.raise_for_status()
