@@ -180,3 +180,18 @@ class TradeUnitsTableTests(unittest.TestCase):
         self.assertEqual(t.loc["貝萊德", "狀態"], "已套用")
         self.assertIn("差超過 1%", t.loc["大華", "狀態"])
         self.assertEqual(t.loc["高盛", "狀態"], "交易明細找不到這檔")
+
+
+class SameNameTwoPlatformsTests(unittest.TestCase):
+    def test_scb_and_taishin_kept_apart(self):
+        from invest_app.core import fund_name_key, match_trade_units
+        name1, name2 = "東方匯理基金新興市場債券U 南非幣(穩定月配息)", "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "渣打基金", "currency": "ZAR", "name": name1, "original_units": 1817.037, "units": 0, "note": ""},
+            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name2, "original_units": 4966.65, "units": 0, "note": ""},
+        ])
+        sheets = [{fund_name_key(name1): 1817.0385}, {fund_name_key(name2): 4966.657}]
+        items = {i["platform"]: i for i in match_trade_units(df, sheets)}
+        self.assertEqual(items["渣打基金"]["trade_units"], 1817.0385)
+        self.assertEqual(items["台新基金"]["trade_units"], 4966.657)
+        self.assertTrue(items["渣打基金"]["applied"] and items["台新基金"]["applied"])

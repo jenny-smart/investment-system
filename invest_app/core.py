@@ -1127,7 +1127,12 @@ def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str
     if df.empty:
         return out
     funds = df[df["asset_type"].astype(str) == "基金"]
-    for key, part in funds.groupby(funds["name"].map(fund_name_key), sort=False):
+    # 平台＋幣別＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」，不能併成一檔
+    group_keys = (funds.get("platform", pd.Series("", index=funds.index)).astype(str) + "|"
+                  + funds.get("currency", pd.Series("", index=funds.index)).astype(str).str.upper() + "|"
+                  + funds["name"].map(fund_name_key))
+    for group, part in funds.groupby(group_keys, sort=False):
+        key = group.split("|", 2)[2]
         lots = {}
         for idx, r in part.iterrows():
             note = normalize_text(r.get("note", ""))
