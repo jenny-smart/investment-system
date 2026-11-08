@@ -109,3 +109,23 @@ class TwLedgerTests(unittest.TestCase):
         self.assertIn("股數不同", out.loc["6505", "差在哪裡"])
         self.assertNotIn("1560", out.index)
         self.assertEqual(out.loc["9999", "差在哪裡"], "App 沒有這檔持倉")
+
+
+class UnifyTests(unittest.TestCase):
+    def test_same_columns_for_stock_and_fund(self):
+        from invest_app.overview_reconcile import UNIFIED, item_diff, overview_items, unify
+        grid = [["投資分類", "日期", "現值", "損益", "台幣成本", "台幣市值"], ["基富通-日", "", "", "", "", ""],
+                ["富蘭克林坦伯頓-穩定月收益日幣避險A(Mdis)H1", "", "", "", "", 0],     # 已贖回、0：不列
+                ["貝萊德全球智慧數據股票入息Hedged A6日圓穩定配息", "11/6", 1050.0, 0, 0, 50102]]
+        df = pd.DataFrame([{"asset_type": "基金", "platform": "基富通", "currency": "JPY", "ticker": "",
+                            "name": "貝萊德全球智慧數據股票入息Hedged A6日圓穩定配息", "市值股數": 232.09,
+                            "即時價格/淨值": 1050.0, "匯率": 0.2056, "台幣市值": 50104.0}])
+        fund = unify("基富通-日", item_diff("基富通-日", overview_items(grid), df, {"JPY": 0.2056}))
+        self.assertEqual(list(fund.columns), UNIFIED)
+        self.assertEqual(len(fund), 1)
+        self.assertAlmostEqual(fund.loc[0, "總帳股數／單位"], 50102 / (1050 * 0.2056))
+        stock = unify("台股total", pd.DataFrame([{"名稱": "鴻海", "總帳市價": 225.0, "App 價格": 224.5, "總帳股數": 10000,
+                                                  "App 股數": 10000, "總帳市值": 2250000, "App 市值": 2245000,
+                                                  "差額": -5000, "差在哪裡": "價格不同"}]))
+        self.assertEqual(list(stock.columns), UNIFIED)
+        self.assertEqual(stock.loc[0, "App 匯率"], 1.0)

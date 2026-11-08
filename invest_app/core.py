@@ -1528,13 +1528,14 @@ def _format_dividend_date(value: Any) -> str:
     return parsed.strftime("%Y/%m/%d")
 
 
-def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] = (), max_height: int | None = None,
+def html_table(df: pd.DataFrame, number_cols: list[str] | tuple[str, ...] | dict[str, int] = (), max_height: int | None = None,
                decimals: int = 0) -> str:
     """精簡 HTML 表格：欄寬依內容、數字靠右、沒有資料的格子空白（st.dataframe 一律顯示 None）。"""
     def cell(col: str, value: Any) -> str:
         if col in number_cols:
             n = to_float(value)
-            text = "" if n is None else f"{n:,.{decimals}f}"
+            places = number_cols.get(col, decimals) if isinstance(number_cols, dict) else decimals
+            text = "" if n is None else f"{n:,.{places}f}"
             return f'<td style="text-align:right;font-family:monospace">{text}</td>'
         text = "" if value is None or (isinstance(value, float) and pd.isna(value)) else html_lib.escape(str(value))
         return f"<td>{text}</td>"
