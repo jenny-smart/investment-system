@@ -49,6 +49,7 @@ NAV_COL, VALUE_COL = 2, 5     # offsets inside OVERVIEW_RANGE
 
 FREEZE_START_DAY = 30         # or the last day of a shorter month
 FREEZE_GRACE_DAYS = 10        # keep checking the previous month until this day
+NAV_BUSINESS_DAYS = 2         # 上個月基金月底淨值只在新月份前 2 個工作天讀取；之後沒取得就記入日曆
 LATE_AFTER_DAYS = 5           # a block still not frozen after this day is reported
 TW_CLOSE = time(14, 40)       # TWSE closes 13:30; the price sync's last run is 14:30
 TW_OPEN = time(8, 30)         # the price sync starts overwriting prices here
@@ -171,19 +172,34 @@ def to_number(value):
         return None
 
 
-def auto_tasks(today):
-    """(month to freeze or None, month to roll the overview to or None)."""
+def nth_business_day(month_start, n, closed=()):
+    """該月第 n 個工作天（跳過週末、休市日）。"""
+    day, count = month_start, 0
+    while True:
+        if day.weekday() < 5 and day not in closed:
+            count += 1
+            if count == n:
+                return day
+        day += timedelta(days=1)
+
+
+def auto_tasks(today, closed=()):
+    """(要固定的月份或 None, 總覽要切換到的月份或 None, 要檢查是否漏固定、記日曆的月份或 None)。
+
+    上個月：只在本月前 NAV_BUSINESS_DAYS 個工作天讀月底淨值固定；過了就不再重試，改檢查並記日曆。"""
     this_month = today.replace(day=1)
     start = min(FREEZE_START_DAY, month_end(today).day)
+    freeze = alert = None
     if today.day >= start:
         freeze = this_month
     elif today.day <= FREEZE_GRACE_DAYS:
-        freeze = add_months(this_month, -1)
-    else:
-        freeze = None
+        if today <= nth_business_day(this_month, NAV_BUSINESS_DAYS, closed):
+            freeze = add_months(this_month, -1)
+        else:
+            alert = add_months(this_month, -1)
     # 1–10 日每次都檢查：已是本月欄就不會改，1 日沒跑到（例如排程停擺）之後也會補上
     roll = this_month if today.day <= FREEZE_GRACE_DAYS else None
-    return freeze, roll
+    return freeze, roll, alert
 
 
 def month_end_price(history, month):
@@ -689,7 +705,7 @@ def strip_extra(updates):
     return [{"range": u["range"], "values": u["values"]} for u in updates]
 
 
-def run_freeze(spreadsheet, month, now, dry_run, force):
+def run_freeze(spreadsheet, month, now, dry_run, force, plan_only=False):
     ledger = spreadsheet.worksheet(LEDGER_SHEET)
     sub_col = find_month_column([ledger.row_values(1)], month)
     first_col = sub_col - 1
@@ -702,6 +718,8 @@ def run_freeze(spreadsheet, month, now, dry_run, force):
         OVERVIEW_RANGE, value_render_option="UNFORMATTED_VALUE")
     plan = plan_freeze(column_a, formulas, values, first_col, overview_rows, month, now,
                        tw_closed_days(), force, PriceHistory(month, spreadsheet))
+    if plan_only:
+        return plan
     for label in plan.done:
         print(f"  已是值：{label}")
     for label, reason in plan.waiting:
@@ -737,6 +755,29 @@ def run_freeze(spreadsheet, month, now, dry_run, force):
         written = len(updates)
     print(f"  已寫入 {written} 格")
     return plan.problems, written
+
+
+def run_missing_alert(spreadsheet, month, now, dry_run):
+    """前 2 個工作天過後：上個月還沒固定的區塊（多半是基金月底淨值沒取得）記入 Google 日曆，一個月一次。"""
+    import calendar_note
+    print(f"== {month:%Y/%m} 月底固定檢查（已過本月第 {NAV_BUSINESS_DAYS} 個工作天，不再讀淨值） ==")
+    plan = run_freeze(spreadsheet, month, now, True, False, plan_only=True)
+    missing = [label for label, _ in plan.waiting] + [block.label for block, _, _ in plan.backfill]
+    if not missing:
+        print("  都已固定")
+        return []
+    detail = "\n".join(f"・{label}：{reason}" for label, reason in plan.waiting)
+    detail += "".join(f"\n・{block.label}：可回填月底淨值（{note}）" for block, _, note in plan.backfill)
+    print(f"  還沒固定：{'、'.join(missing)}")
+    if dry_run:
+        return []
+    result = calendar_note.add_once(
+        key=f"month-end-nav-{month:%Y-%m}", day=now.date(),
+        summary=f"{month:%Y/%m} 月底淨值未取得｜{'、'.join(missing)}",
+        description=(f"本月前 {NAV_BUSINESS_DAYS} 個工作天內沒有取得 {month:%Y/%m} 月底淨值，"
+                     f"Jennyall {month:%Y/%m} 欄這些區塊還是公式，請手動固定：\n{detail}"))
+    print(f"  日曆：{'已加入' if result == 'added' else '已記過' if result == 'exists' else 'WARN 寫入失敗 ' + result}")
+    return []
 
 
 def run_roll(spreadsheet, month, dry_run):
@@ -819,14 +860,15 @@ def main():
         month = parse_month(args.month) if args.month else settled
         show_month_end_prices(open_spreadsheet(args.credentials_file), month)
         return 0  # diagnostic only; the fund NAV log fills up as the NAV sync runs
-    freeze_month, roll_month = auto_tasks(today)
+    closed = tw_closed_days() if today.day <= FREEZE_GRACE_DAYS else set()
+    freeze_month, roll_month, alert_month = auto_tasks(today, closed)
     if args.mode == "freeze":
-        freeze_month = parse_month(args.month) if args.month else (freeze_month or previous)
-        roll_month = None
+        freeze_month = parse_month(args.month) if args.month else (freeze_month or alert_month or previous)
+        roll_month = alert_month = None
     elif args.mode == "roll":
         roll_month = parse_month(args.month) if args.month else today.replace(day=1)
-        freeze_month = None
-    if not freeze_month and not roll_month:
+        freeze_month = alert_month = None
+    if not freeze_month and not roll_month and not alert_month:
         print(f"{today:%Y/%m/%d}：不在月底檢查期間（{FREEZE_START_DAY} 日起到下月 {FREEZE_GRACE_DAYS} 日），略過")
         return 0
 
@@ -838,6 +880,8 @@ def main():
     if freeze_month:
         found, count = run_freeze(spreadsheet, freeze_month, now, args.dry_run, args.force)
         problems, written = problems + found, written + count
+    if alert_month:
+        run_missing_alert(spreadsheet, alert_month, now, args.dry_run)
     return exit_code(problems, written, now, args.mode, args.dry_run)
 
 
