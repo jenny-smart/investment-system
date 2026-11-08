@@ -203,3 +203,22 @@ class LotUnitsTests(unittest.TestCase):
         items = {i["platform"]: i for i in match_trade_units(df, sheets)}
         self.assertEqual(items["渣打基金"]["after_units"], 1817.0385)
         self.assertEqual(items["台新基金"]["after_units"], 85.3968)
+
+
+class LotRowsTests(unittest.TestCase):
+    def test_lot_status(self):
+        from invest_app.core import fund_name_key, match_trade_units
+        from invest_app.overview_reconcile import lot_rows
+        name = "高盛Y南非"
+        df = pd.DataFrame([
+            {"id": 1, "asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 330.63, "units": 0, "total_cost_input": 270988, "note": ""},
+            {"id": 2, "asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 14.1712, "units": 0, "total_cost_input": 11615, "note": ""},
+            {"id": 3, "asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 10.0, "units": 0, "total_cost_input": 999, "note": ""},
+            {"id": 4, "asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 50.0, "units": 40.0, "total_cost_input": 5000, "note": ""},
+        ])
+        sheets = [{fund_name_key(name): [(270988.0, 330.6264), (11615.0, 14.1712), (5000.0, 50.0)]}]
+        lots = lot_rows(df, match_trade_units(df, sheets)).set_index("_id")
+        self.assertEqual(lots.loc[1, "狀態"], "可更新")
+        self.assertEqual(lots.loc[2, "狀態"], "一致")
+        self.assertIn("對不到明細", lots.loc[3, "狀態"])
+        self.assertIn("部分贖回", lots.loc[4, "狀態"])

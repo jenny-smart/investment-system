@@ -1189,8 +1189,12 @@ def match_trade_units(df: pd.DataFrame, trades: dict | list[dict]) -> list[dict[
         sheet = min(candidates, key=lambda s: abs((_sheet_total(s, key) or 0) - total))
         item["trade_units"] = _sheet_total(sheet, key)
         rows = list(sheet[key]) if isinstance(sheet[key], list) else []
+        partly_sold = {idx for idx, r in part.iterrows() if normalize_number(r.get("units", 0), 0) > 0}
         for idx, amount in amounts.items():
             hit = next((i for i, (a, _) in enumerate(rows) if amount > 0 and abs(a - amount) < 1), None)
+            if hit is not None and idx in partly_sold:
+                rows.pop(hit)   # 有部分贖回：明細那筆是買進單位數，不拿來取代現在股數
+                continue
             if hit is not None:
                 item["lot_units"][idx] = rows.pop(hit)[1]
         item["after_units"] = round(sum(item["lot_units"].get(i, u) for i, u in lots.items()), 4)

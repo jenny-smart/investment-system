@@ -423,13 +423,37 @@ def trade_units_table(items: list[dict[str, Any]]) -> pd.DataFrame:
     } for i in items])
 
 
+def lot_rows(df: pd.DataFrame, items: list[dict[str, Any]]) -> pd.DataFrame:
+    """每一筆基金分批：資料庫成本股數 vs 交易明細那一筆的 4 位小數，狀態一致／可更新／對不到明細。"""
+    out = []
+    for item in items:
+        for idx, lot in item["lots"].items():
+            r = df.loc[idx]
+            trade = item["lot_units"].get(idx)
+            current_units = float(pd.to_numeric(r.get("units", 0), errors="coerce") or 0)
+            original = float(pd.to_numeric(r.get("original_units", 0), errors="coerce") or 0)
+            if current_units > 0:
+                status = "有部分贖回（現在股數），不更新"
+            elif trade is None:
+                status = "對不到明細（投資金額不同或明細沒打勾），請檢查"
+            elif abs(trade - original) < 0.00005:
+                status = "一致"
+            else:
+                status = "可更新"
+            out.append({"_id": r.get("id"), "平台": item["platform"], "基金名稱": item["name"],
+                        "投資金額": float(pd.to_numeric(r.get("total_cost_input", 0), errors="coerce") or 0),
+                        "成本股數（資料庫）": original, "交易明細 4 位": trade, "狀態": status})
+    return pd.DataFrame(out, columns=["_id", "平台", "基金名稱", "投資金額", "成本股數（資料庫）", "交易明細 4 位", "狀態"])
+
+
 def render_trade_units() -> None:
     """基金單位數核對：交易明細（F 打勾、每筆 L÷I 取 4 位加總）vs App 原本記錄，給人對照自己的單位數。"""
     import streamlit as st
     from invest_app.core import html_table, load_fund_trade_units, load_positions, match_trade_units
     try:
         sheets = load_fund_trade_units()
-        items = match_trade_units(load_positions(), sheets)
+        positions = load_positions()
+        items = match_trade_units(positions, sheets)
     except Exception as exc:
         st.caption(f"基金單位數核對暫時無法顯示：{exc}")
         return
@@ -444,6 +468,33 @@ def render_trade_units() -> None:
         st.markdown(html_table(trade_units_table(items), {"交易明細單位數": 4, "App 原本單位數": 4, "App 改 4 位後": 4,
                                                           "差額（改後−明細）": 4}),
                     unsafe_allow_html=True)
+        lots = lot_rows(positions, items)
+        if lots.empty:
+            return
+        todo = lots[lots["狀態"] == "可更新"]
+        check = lots[lots["狀態"].str.startswith(("對不到", "有部分"))]
+        st.markdown(f"**逐筆：{len(lots)} 筆分批，{len(todo)} 筆可更新成 4 位小數，{len(check)} 筆請檢查**")
+        show = lots[lots["狀態"] != "一致"].drop(columns="_id")
+        if not show.empty:
+            st.markdown(html_table(show, {"投資金額": 0, "成本股數（資料庫）": 4, "交易明細 4 位": 4}),
+                        unsafe_allow_html=True)
+        if todo.empty:
+            st.caption("沒有需要更新的分批。")
+            return
+        agree = st.checkbox(f"我確認把以上 {len(todo)} 筆「可更新」的成本股數，寫成交易明細的 4 位小數（寫入資料庫）",
+                            key="lot_units_confirm")
+        if st.button(f"💾 更新 {len(todo)} 筆成本股數", key="lot_units_save", disabled=not agree):
+            from invest_app.core import supabase_client
+            sb, done = supabase_client(), 0
+            for _, row in todo.iterrows():
+                if row["_id"] is None or pd.isna(row["_id"]):
+                    continue
+                sb.table("positions").update({"original_units": round(float(row["交易明細 4 位"]), 4)}) \
+                    .eq("id", int(float(row["_id"]))).execute()
+                done += 1
+            st.cache_data.clear()
+            st.success(f"已更新 {done} 筆成本股數為 4 位小數")
+            st.rerun()
 
 
 def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
