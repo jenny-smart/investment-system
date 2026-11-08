@@ -1118,35 +1118,55 @@ def load_fund_trade_units() -> list[dict[str, float]]:
     return sheets
 
 
-def apply_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str, float]]) -> pd.DataFrame:
-    """基金持倉加一欄 trade_units：同一檔各分批依比例調整，讓合計等於交易明細算出的單位數。
+def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str, float]]) -> list[dict[str, Any]]:
+    """每檔基金（同名合併）：App 單位數、交易明細單位數、要不要套用。
 
-    同名基金出現在多張明細（不同平台）時，選單位數最接近 App 的那張；都差超過 1% 就不套用。"""
+    同名基金出現在多張明細（不同平台）時，選單位數最接近 App 的那張；差超過 1% 就不套用。"""
     sheets = trades if isinstance(trades, list) else [trades]
-    df = df.copy()
-    df["trade_units"] = 0.0
-    if not any(sheets) or df.empty:
-        return df
+    out: list[dict[str, Any]] = []
+    if df.empty:
+        return out
     funds = df[df["asset_type"].astype(str) == "基金"]
-    for key, part in funds.groupby(funds["name"].map(fund_name_key)):
-        candidates = [sheet[key] for sheet in sheets if sheet.get(key)]
-        if not candidates:
-            continue
+    for key, part in funds.groupby(funds["name"].map(fund_name_key), sort=False):
         lots = {}
         for idx, r in part.iterrows():
             note = normalize_text(r.get("note", ""))
             if any(t in note for t in ["已賣出", "已結清", "結清", "賣出"]):
                 continue
-            original, units = fund_units(r)
+            original, units = fund_units(r.drop(labels=["trade_units"], errors="ignore"))
             lots[idx] = units if units > 0 else original
         total = sum(lots.values())
-        if total <= 0:
+        candidates = [sheet[key] for sheet in sheets if sheet.get(key)]
+        first = part.iloc[0]
+        item = {"name": str(first.get("name", "")), "platform": str(first.get("platform", "")),
+                "currency": str(first.get("currency", "")), "lots": lots, "app_units": total,
+                "trade_units": None, "applied": False, "status": ""}
+        if not lots:
             continue
-        target = min(candidates, key=lambda u: abs(u / total - 1))
-        if abs(target / total - 1) > TRADE_UNITS_MAX_DIFF:
-            continue
-        for idx, lot in lots.items():
-            df.at[idx, "trade_units"] = lot * target / total
+        if not candidates:
+            item["status"] = "交易明細找不到這檔"
+        elif total <= 0:
+            item["status"] = "App 沒有單位數"
+        else:
+            target = min(candidates, key=lambda u: abs(u / total - 1))
+            item["trade_units"] = target
+            if abs(target / total - 1) > TRADE_UNITS_MAX_DIFF:
+                item["status"] = "差超過 1%，未套用（請檢查明細或 App）"
+            else:
+                item["applied"] = True
+                item["status"] = "已套用" if abs(target - total) >= 0.00005 else "一致"
+        out.append(item)
+    return out
+
+
+def apply_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str, float]]) -> pd.DataFrame:
+    """基金持倉加一欄 trade_units：同一檔各分批依比例調整，讓合計等於交易明細算出的單位數。"""
+    df = df.copy()
+    df["trade_units"] = 0.0
+    for item in match_trade_units(df, trades):
+        if item["applied"]:
+            for idx, lot in item["lots"].items():
+                df.at[idx, "trade_units"] = lot * item["trade_units"] / item["app_units"]
     return df
 
 

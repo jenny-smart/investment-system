@@ -414,6 +414,36 @@ def _reason_row(name, sh, app_nav, app_fx, sheet_fx, units, app_value):
             "差在哪裡": "；".join(reasons)}
 
 
+def trade_units_table(items: list[dict[str, Any]]) -> pd.DataFrame:
+    return pd.DataFrame([{
+        "平台": i["platform"], "幣別": i["currency"], "基金名稱": i["name"],
+        "交易明細單位數": i["trade_units"], "App 原本單位數": i["app_units"],
+        "差額": (i["trade_units"] - i["app_units"]) if i["trade_units"] is not None else None,
+        "狀態": i["status"],
+    } for i in items])
+
+
+def render_trade_units() -> None:
+    """基金單位數核對：交易明細（F 打勾、每筆 L÷I 取 4 位加總）vs App 原本記錄，給人對照自己的單位數。"""
+    import streamlit as st
+    from invest_app.core import html_table, load_fund_trade_units, load_positions, match_trade_units
+    try:
+        sheets = load_fund_trade_units()
+        items = match_trade_units(load_positions(), sheets)
+    except Exception as exc:
+        st.caption(f"基金單位數核對暫時無法顯示：{exc}")
+        return
+    if not items:
+        return
+    applied = sum(1 for i in items if i["applied"])
+    with st.expander(f"📐 基金單位數核對：{len(items)} 檔，{applied} 檔用交易明細單位數"
+                     f"（讀到 {len([s for s in sheets if s])} 張明細）", expanded=False):
+        st.caption("交易明細單位數＝股票總帳各基金工作表 F 欄打勾的每一列 L 投資金額 ÷ I 購買價格、各取 4 位小數後加總。"
+                   "請跟你工作表上的單位數合計對照；App 市值用的是「已套用」那幾檔的交易明細單位數。")
+        st.markdown(html_table(trade_units_table(items), {"交易明細單位數": 4, "App 原本單位數": 4, "差額": 4}),
+                    unsafe_allow_html=True)
+
+
 def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
     import streamlit as st
     from invest_app.core import OVERVIEW_SHEET_GID, html_table, load_sheet_grid, money
@@ -424,6 +454,7 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
         return
     if not rows or enriched.empty:
         return
+    render_trade_units()
     table = compare(rows, enriched, other)
     total = table.iloc[0]
     if total["差額"] is None or pd.isna(total["差額"]) or abs(total["差額"]) < TOLERANCE:
