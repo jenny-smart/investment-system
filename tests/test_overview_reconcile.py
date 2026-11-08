@@ -140,3 +140,43 @@ class FundUnitsTests(unittest.TestCase):
         self.assertEqual(fund_units(far)[0], 232.0912)          # 差超過 1%：保留記錄值
         stock = pd.Series({"asset_type": "台股", "total_cost_input": 0, "avg_cost": 10, "original_units": 1000.123456, "units": 0})
         self.assertEqual(fund_units(stock)[0], 1000.123456)
+
+
+class TradeUnitsTests(unittest.TestCase):
+    def test_sum_of_rounded_trades(self):
+        from invest_app.core import apply_trade_units, fund_name_key, fund_units, trade_units
+        def row(name, tick, price, amount):
+            r = [""] * 12
+            r[0], r[5], r[8], r[11] = name, tick, price, amount
+            return r
+        rows = [row("貝萊德A6日圓", "TRUE", 1077.0, 100000), row("貝萊德A6日圓", "TRUE", 1050.0, 150000),
+                row("貝萊德A6日圓", "FALSE", 1000.0, 999999), row("", "TRUE", 1.0, 1)]
+        units = trade_units(rows)
+        expected = round(round(100000 / 1077, 4) + round(150000 / 1050, 4), 4)
+        self.assertEqual(units[fund_name_key("貝萊德A6日圓")], expected)
+        df = pd.DataFrame([
+            {"asset_type": "基金", "name": "貝萊德A6日圓", "original_units": 92.85, "units": 0, "total_cost_input": 0, "avg_cost": 0, "note": ""},
+            {"asset_type": "基金", "name": "貝萊德A6日圓", "original_units": 142.86, "units": 0, "total_cost_input": 0, "avg_cost": 0, "note": ""},
+        ])
+        out = apply_trade_units(df, units)
+        self.assertAlmostEqual(out["trade_units"].sum(), expected)
+        self.assertAlmostEqual(sum(fund_units(r)[0] for _, r in out.iterrows()), expected)
+        far = apply_trade_units(df, {fund_name_key("貝萊德A6日圓"): 300.0})   # 差超過 1%：不套用
+        self.assertEqual(far["trade_units"].sum(), 0)
+        two = apply_trade_units(df, [{fund_name_key("貝萊德A6日圓"): 4966.65}, units])   # 同名在兩張：選接近的
+        self.assertAlmostEqual(two["trade_units"].sum(), expected)
+
+
+class TradeUnitsTableTests(unittest.TestCase):
+    def test_status(self):
+        from invest_app.core import fund_name_key, match_trade_units
+        from invest_app.overview_reconcile import trade_units_table
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "基富通", "currency": "JPY", "name": "貝萊德", "original_units": 232.09, "units": 0, "note": ""},
+            {"asset_type": "基金", "platform": "渣打基金", "currency": "USD", "name": "大華", "original_units": 6000, "units": 0, "note": ""},
+            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": "高盛", "original_units": 986.64, "units": 0, "note": ""},
+        ])
+        t = trade_units_table(match_trade_units(df, [{fund_name_key("貝萊德"): 232.0826, fund_name_key("大華"): 7000}])).set_index("基金名稱")
+        self.assertEqual(t.loc["貝萊德", "狀態"], "已套用")
+        self.assertIn("差超過 1%", t.loc["大華", "狀態"])
+        self.assertEqual(t.loc["高盛", "狀態"], "交易明細找不到這檔")
