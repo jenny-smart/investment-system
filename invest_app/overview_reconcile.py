@@ -243,10 +243,37 @@ def tw_ledger_diff(ledger: dict[str, dict[str, float]], df: pd.DataFrame) -> pd.
     if out.empty:
         return out
     out["_abs"] = out["差額"].abs().fillna(float("inf"))
-    out = out.sort_values("_abs", ascending=False).drop(columns="_abs").reset_index(drop=True)
-    for col in ("總帳市價", "App 價格"):
-        out[col] = out[col].map(lambda v: f"{v:,.2f}" if isinstance(v, (int, float)) and pd.notna(v) else "")
-    return out
+    return out.sort_values("_abs", ascending=False).drop(columns="_abs").reset_index(drop=True)
+
+
+UNIFIED = ["分類", "名稱", "總帳價格／淨值", "App 價格／淨值", "總帳匯率", "App 匯率", "總帳股數／單位",
+           "App 股數／單位", "總帳市值", "App 市值", "差額", "差在哪裡"]
+UNIFIED_NUMBERS = {"總帳價格／淨值": 4, "App 價格／淨值": 4, "總帳匯率": 4, "App 匯率": 4,
+                   "總帳股數／單位": 4, "App 股數／單位": 4, "總帳市值": 0, "App 市值": 0, "差額": 0}
+
+
+def unify(label: str, table: pd.DataFrame) -> pd.DataFrame:
+    """台股（股票總帳）、美股／基金（總覽）兩種比對表轉成同一組欄位，好合成一張表、欄位對齊。"""
+    if table.empty:
+        return pd.DataFrame(columns=UNIFIED)
+    pick = (lambda *names: next((table[n] for n in names if n in table), pd.Series([None] * len(table))))
+    out = pd.DataFrame({
+        "分類": label,
+        "名稱": pick("名稱"),
+        "總帳價格／淨值": pick("總帳市價", "總覽淨值"),
+        "App 價格／淨值": pick("App 價格", "App 淨值"),
+        "總帳匯率": pick("總覽匯率"),
+        "App 匯率": pick("App 匯率"),
+        "總帳股數／單位": pick("總帳股數", "總覽單位數"),
+        "App 股數／單位": pick("App 股數", "單位數"),
+        "總帳市值": pick("總帳市值", "總覽市值"),
+        "App 市值": pick("App 市值"),
+        "差額": pick("差額"),
+        "差在哪裡": pick("差在哪裡"),
+    })
+    if label.lower().startswith("台股"):
+        out["總帳匯率"], out["App 匯率"] = 1.0, 1.0
+    return out[UNIFIED]
 
 
 def load_tw_ledger() -> dict[str, dict[str, float]]:
@@ -356,35 +383,35 @@ def item_diff(label: str, items: list[dict[str, Any]], df: pd.DataFrame,
     for k, sh in merged.items():
         if k not in used:
             rows.append({"名稱": sh["name"], "總覽淨值": sh["nav"], "App 淨值": None, "總覽匯率": None,
-                         "App 匯率": None, "單位數": None, "總覽市值": sh["value"], "App 市值": None,
+                         "App 匯率": None, "單位數": None, "總覽單位數": None, "總覽市值": sh["value"], "App 市值": None,
                          "差額": None, "差在哪裡": "App 沒有這檔"})
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    out = out[out["差額"].isna() | (out["差額"].abs() >= TOLERANCE)]
-    for col in ("總覽淨值", "App 淨值", "總覽匯率", "App 匯率"):
-        out[col] = out[col].map(lambda v: f"{v:,.4f}" if isinstance(v, (int, float)) and pd.notna(v) else "")
+    out = out[(out["差額"].isna() & (out["總覽市值"].fillna(0).abs() >= TOLERANCE) | out["App 市值"].notna())
+              & (out["差額"].isna() | (out["差額"].abs() >= TOLERANCE))]
     return out.reset_index(drop=True)
 
 
 def _reason_row(name, sh, app_nav, app_fx, sheet_fx, units, app_value):
     if sh is None:
         return {"名稱": name, "總覽淨值": None, "App 淨值": app_nav, "總覽匯率": sheet_fx, "App 匯率": app_fx,
-                "單位數": units, "總覽市值": None, "App 市值": app_value, "差額": None, "差在哪裡": "總覽找不到這檔"}
+                "單位數": units, "總覽單位數": None, "總覽市值": None, "App 市值": app_value, "差額": None, "差在哪裡": "總覽找不到這檔"}
     diff = app_value - (sh["value"] or 0.0)
     reasons = []
+    sheet_units = (sh["value"] or 0) / (sh["nav"] * sheet_fx) if sh["nav"] and sheet_fx else None
     if sh["nav"] and app_nav and abs(app_nav - sh["nav"]) > 1e-6 * max(1.0, abs(sh["nav"])):
         reasons.append(f"淨值／價格不同（影響約 {(app_nav - sh['nav']) * units * (app_fx or 1):+,.0f}）")
     if sheet_fx and app_fx and abs(app_fx - sheet_fx) > 1e-9:
         reasons.append(f"匯率不同（影響約 {(app_fx - sheet_fx) * units * (app_nav or 0):+,.0f}）")
-    if not reasons and sh["nav"] and sheet_fx:
-        sheet_units = (sh["value"] or 0) / (sh["nav"] * sheet_fx)
+    if not reasons and sheet_units is not None:
         if units and abs(sheet_units - units) > max(0.01, units * 0.0005):
             reasons.append(f"單位數不同（總覽約 {sheet_units:,.4f}，App {units:,.4f}）")
     if not reasons:
         reasons.append("淨值、匯率、單位數都一樣：四捨五入差")
     return {"名稱": name, "總覽淨值": sh["nav"], "App 淨值": app_nav, "總覽匯率": sheet_fx, "App 匯率": app_fx,
-            "單位數": units, "總覽市值": sh["value"], "App 市值": app_value, "差額": diff, "差在哪裡": "；".join(reasons)}
+            "單位數": units, "總覽單位數": sheet_units, "總覽市值": sh["value"], "App 市值": app_value, "差額": diff,
+            "差在哪裡": "；".join(reasons)}
 
 
 def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
@@ -410,43 +437,24 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
         rest = total["差額"] - explained
         if abs(rest) >= TOLERANCE:
             st.caption(f"以上分類合計 {explained:+,.0f}，還有 {rest:+,.0f} 對不到分類（總覽 B1 公式或其他列）。")
+        tables, notes = [], []
         for label in diff["分類"]:
-            if label.lower().startswith("台股"):
-                try:
-                    stocks = tw_ledger_diff(load_tw_ledger(), enriched)
-                    if not stocks.empty:
-                        st.markdown(f"**{label}：差在這 {len(stocks)} 檔**（股票總帳台股工作表 I 股數 × J 市價 vs App；差額＝App−總帳）")
-                        st.markdown(html_table(stocks, ["總帳股數", "App 股數", "總帳市值", "App 市值", "差額"]),
-                                    unsafe_allow_html=True)
-                        continue
-                except Exception as exc:
-                    st.caption(f"讀不到股票總帳台股工作表（{exc}），改用總帳台股分頁 A/B 欄比對")
-                try:
-                    stocks = tw_stock_diff(load_tw_sheet_values(), enriched)
-                except Exception as exc:
-                    stocks = pd.DataFrame()
-                    st.caption(f"讀不到總帳台股分頁：{exc}")
-                if not stocks.empty:
-                    st.markdown(f"**{label}：差在這 {len(stocks)} 檔**（總帳台股分頁 A/B 欄 vs App；差額＝App−總帳）")
-                    st.markdown(html_table(stocks, ["總帳市值", "App 市值", "差額", "股數"]), unsafe_allow_html=True)
-                    continue
             try:
+                if label.lower().startswith("台股"):
+                    tables.append(unify(label, tw_ledger_diff(load_tw_ledger(), enriched)))
+                    continue
                 from invest_app.core import OVERVIEW_SHEET_GID as _gid, load_sheet_raw_grid
                 from invest_app.sheet_compare import sheet_fx_rates
                 items = overview_items(load_sheet_raw_grid(_gid))
                 rates = sheet_fx_rates(load_sheet_grid(_gid))
-                compared = item_diff(label, items, enriched, rates) if items else pd.DataFrame()
+                tables.append(unify(label, item_diff(label, items, enriched, rates) if items else pd.DataFrame()))
             except Exception as exc:
-                compared = pd.DataFrame()
-                st.caption(f"{label}：讀不到總覽明細（{exc}）")
-            if not compared.empty:
-                st.markdown(f"**{label}：差在這 {len(compared)} 檔**（總覽 vs App；差額＝App−總覽）")
-                st.markdown(html_table(compared, ["單位數", "總覽市值", "App 市值", "差額"]), unsafe_allow_html=True)
-                continue
-            part = detail(label, enriched)
-            if part.empty:
-                continue
-            st.markdown(f"**{label}**：App 每一檔（請對照總帳的價格、淨值、匯率）")
-            if label.startswith("台股"):
-                st.caption("價格來源不是「TWSE即時」或收盤價的（買賣價備援、昨收、Yahoo）最可能跟總帳 J 欄不同。")
-            st.markdown(html_table(part, ["股數／單位", "台幣市值", "賣出稅費"]), unsafe_allow_html=True)
+                notes.append(f"{label}：讀不到總帳明細（{exc}）")
+        tables = [t for t in tables if not t.empty]
+        if tables:
+            merged = pd.concat(tables, ignore_index=True)
+            st.markdown(f"**逐檔比對：差在這 {len(merged)} 檔**（總帳 vs App；差額＝App−總帳；"
+                        "台股看股票總帳台股工作表 I 股數 × J 價格，美股／基金看總覽）")
+            st.markdown(html_table(merged, UNIFIED_NUMBERS), unsafe_allow_html=True)
+        for note in notes:
+            st.caption(note)
