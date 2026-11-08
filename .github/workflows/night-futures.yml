@@ -1,0 +1,88 @@
+name: Taiwan futures night session
+run-name: ${{ github.event_name == 'pull_request' && github.event.pull_request.title || github.event_name == 'push' && github.event.head_commit.message || inputs.scheduled_slot && format('cloud-{0}', inputs.scheduled_slot) || inputs.dry_run && 'dry-run' || 'update' }}
+
+on:
+  # tool-system 主控表「排程設定」（invest_night_futures）每天 07:00 派送。
+  # 夜盤（前一天 15:00～05:00）＋外資夜盤多空淨額＋四種劇本＋國際盤＋新聞 → data/night_futures/，
+  # app「台指期夜盤」頁籤讀這裡。週二至週六若期交所還沒公布，最多等 20 分鐘。
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只抓資料印出，不寫檔"
+        type: boolean
+        default: false
+      scheduled_slot:
+        description: "排程設定派送時段（手動執行請留空）"
+        type: string
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "night_futures/**"
+      - ".github/workflows/night-futures.yml"
+  pull_request:
+    paths:
+      - "night_futures/**"
+      - "invest_app/night_futures_page.py"
+      - ".github/workflows/night-futures.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: night-futures
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install 'requests>=2,<3' 'beautifulsoup4>=4,<5' 'yfinance>=0.2,<2' 'pandas>=2,<3' pytest
+      - name: Unit tests
+        run: python -m pytest -q night_futures/test_pipeline.py
+      - name: Build night session data
+        shell: bash
+        env:
+          DRY_RUN: ${{ github.event_name == 'pull_request' || inputs.dry_run }}
+          SLOT: ${{ inputs.scheduled_slot }}
+        run: |
+          args=()
+          # 排程派送且是週二至週六（前一晚有夜盤）：期交所還沒公布就等
+          dow=$(TZ=Asia/Taipei date +%u)
+          if [ -n "$SLOT" ] && [ "$dow" -ge 2 ] && [ "$dow" -le 6 ]; then args+=(--wait 20); fi
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python -m night_futures.pipeline "${args[@]}" 2>&1 | tee -a run.out
+          exit ${PIPESTATUS[0]}
+      - name: Commit generated data
+        if: github.event_name != 'pull_request' && !inputs.dry_run
+        run: |
+          if git diff --quiet -- data/night_futures && [ -z "$(git ls-files --others --exclude-standard data/night_futures)" ]; then
+            echo "No night futures data changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/night_futures
+          git commit -m "data: update Taiwan futures night session"
+          git pull --rebase origin main
+          git push
+      - name: Write update log（更新記錄）
+        if: always() && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SCHEDULED_SLOT: ${{ inputs.scheduled_slot }}
+          JOB_STATUS: ${{ job.status }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          python -c "import gspread" 2>/dev/null || pip install -q 'gspread>=6,<7' 'google-auth>=2,<3'
+          args=(--function "台指期夜盤" --target "data/night_futures" --status "$JOB_STATUS" --output run.out --always)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          python run_log.py "${args[@]}"

@@ -21,6 +21,7 @@ cron-job.org 上 investment-system 的工作都可以停用。
 | invest_stock_dividends | `stock-dividends-from-ledger.yml` | 每 10 分鐘 | 台股股利：掃描除權息公告建立應入帳，再用細帳「股利-台股」備註確認入帳 |
 | invest_snapshot | `snapshot.yml` | 08:00、20:00 | 資產快照 |
 | invest_stock_radar | `stock-radar.yml` | 週一至五 14:30 | 台股雷達 |
+| invest_night_futures | `night-futures.yml` | 每天 07:00 | 台指期夜盤（app「台指期夜盤」頁籤）：夜盤漲跌、日盤／夜盤量與夜盤量佔比、外資夜盤多空淨額、四種劇本、國際盤、新聞；週二至六期交所未公布時最多等 20 分鐘 |
 | ~~Richart 匯率~~（已停用） | `richart-fx.yml` | — | 匯率由「基金淨值／匯率」一併更新；此 workflow 保留供手動執行 |
 
 時段外的觸發由程式自己略過（`auto` 模式）。
