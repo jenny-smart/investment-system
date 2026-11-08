@@ -34,7 +34,7 @@ LOG_SHEET_TITLE = os.environ.get("INVESTMENT_LOG_SHEET_TITLE", "investment-syste
 HEADERS = ["執行時間", "系統", "功能", "執行方式", "區域", "期別/日期", "目標位置", "來源檔案", "結果", "訊息", "執行者"]
 # 「系統」欄填子系統（同 tool-system執行Log 的「日排程系統」「財務管理」）
 SUBSYSTEMS = {"台股價格": "價格同步", "美股價格": "價格同步", "基金淨值／匯率": "價格同步",
-              "App 喚醒": "App", "資產快照": "App", "台股雷達": "App"}
+              "App 喚醒": "App", "資產快照": "App", "台股雷達": "App", "台指期夜盤": "App"}
 
 
 def subsystem(function):

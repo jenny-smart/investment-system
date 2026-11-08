@@ -32,6 +32,9 @@ from invest_app.non_investment import (
     render_total_asset_row,
     write_with_optional_columns,
 )
+from invest_app.night_futures_page import (
+    render_night_futures_page,
+)
 from invest_app.overview import (
     render_investment_overview_page,
 )
@@ -232,7 +235,7 @@ with st.container():
     except Exception as _e:  # 對帳只是輔助，失敗不影響首頁
         st.caption(f"總帳對帳暫時無法顯示：{_e}")
     st.markdown("</div>", unsafe_allow_html=True)
-PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "配息記錄", "台股股利"]
+PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "台指期夜盤", "配息記錄", "台股股利"]
 
 # 功能列：只執行選到的那一頁（st.tabs 會每次把全部分頁都跑一遍，載入慢）。
 # 選擇記在網址 ?page=，重新整理後停在同一頁。
@@ -252,6 +255,9 @@ try:
 
     if page == "股票研究":
         render_research_page(enriched)
+
+    if page == "台指期夜盤":
+        render_night_futures_page(enriched)
 
     if page in PLATFORMS:
         render_platform_page(page, positions, enriched, total_value, total_cost, total_pnl, total_rate, total_div)
