@@ -438,8 +438,9 @@ def render_trade_units() -> None:
     applied = sum(1 for i in items if i["applied"])
     with st.expander(f"📐 基金單位數核對：{len(items)} 檔，{applied} 檔用交易明細單位數"
                      f"（讀到 {len([s for s in sheets if s])} 張明細）", expanded=False):
-        st.caption("交易明細單位數＝股票總帳各基金工作表 F 欄打勾的每一列 L 投資金額 ÷ I 購買價格、各取 4 位小數後加總。"
-                   "請跟你工作表上的單位數合計對照；App 市值用的是「已套用」那幾檔的交易明細單位數。")
+        st.caption("左邊「交易明細單位數」＝你股票總帳各基金工作表（F 欄有勾的每一列 L 投資金額 ÷ I 購買價格、各取 4 位小數）的加總，"
+                   "應該等於你工作表上的單位數；右邊是 App 原本記的。狀態「一致」＝兩邊一樣；「已套用」＝App 市值改用左邊的數字；"
+                   "「差超過 1%」＝差太多，App 不改，請看是哪邊記錯。")
         st.markdown(html_table(trade_units_table(items), {"交易明細單位數": 4, "App 原本單位數": 4, "差額": 4}),
                     unsafe_allow_html=True)
 

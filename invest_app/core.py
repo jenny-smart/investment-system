@@ -1071,7 +1071,7 @@ TW_STOCK_SELL_COST_RATE = 0.004425
 
 # 股票總帳各基金交易明細（基富通-台／人民幣／日幣、渣打、台新…）：A 基金名稱、F 打勾＝實際交易、I 購買價格、L 投資金額
 FUND_TRADE_SHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
-FUND_TRADE_SHEET_GIDS = ("827779166", "1350793322", "449144834", "272991674", "1786063877")
+FUND_TRADE_SHEET_GIDS = ("827779166", "1350793322", "449144834", "272991674", "1786063877", "958127137", "1514344649")
 TRADE_UNITS_MAX_DIFF = 0.01   # 跟 App 單位數差超過 1% 就不套用（可能對錯基金或明細不完整）
 
 
@@ -1127,7 +1127,12 @@ def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str
     if df.empty:
         return out
     funds = df[df["asset_type"].astype(str) == "基金"]
-    for key, part in funds.groupby(funds["name"].map(fund_name_key), sort=False):
+    # 平台＋幣別＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」，不能併成一檔
+    group_keys = (funds.get("platform", pd.Series("", index=funds.index)).astype(str) + "|"
+                  + funds.get("currency", pd.Series("", index=funds.index)).astype(str).str.upper() + "|"
+                  + funds["name"].map(fund_name_key))
+    for group, part in funds.groupby(group_keys, sort=False):
+        key = group.split("|", 2)[2]
         lots = {}
         for idx, r in part.iterrows():
             note = normalize_text(r.get("note", ""))
