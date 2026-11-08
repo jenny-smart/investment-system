@@ -136,7 +136,7 @@ class TradeColumnsTests(unittest.TestCase):
         from invest_app.core import fund_name_key, trade_units
         header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資成本", "總市值", "單位數"]
         total = ["div/section", "", "", "", "", "FALSE", "", "", "", 31000000, 28555111, ""]
-        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.36]
+        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.3606]
         r2 = ["富蘭克林華美", "acft94", "", "", "", "FALSE", 3.91, 3.2684, 3.4, 543958, 522904, 159987.74]
         units = trade_units([header, total, r1, r2])
         self.assertEqual(units[fund_name_key("富蘭克林華美")], round(10000 / 3.9349, 4))
