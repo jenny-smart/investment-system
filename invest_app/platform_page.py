@@ -64,6 +64,7 @@ def render_platform_page(platform, positions, enriched, total_value, total_cost,
             "價差損益率":       st.column_config.NumberColumn("市值損益率", format="%.2f%%"),
             "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
         }
+        labels = {"total_cost_input": "總投入成本", "original_units": "成本股數", "units": "現在股數", "市值股數": "市值股數", "avg_cost": "平均成本", "即時價格/淨值": "即時價格/淨值", "匯率": "匯率", "成本原幣": "成本原幣", "市值原幣": "市值原幣", "台幣成本": "台幣成本", "台幣市值": "台幣市值", "價差損益": "市值損益", "累計配息原幣": "累積配息原幣", "累計已領配息": "累積配息台幣", "含息總損益": "總損益", "每月配息": "月配息", "每單位月配息估算": "每單位月配息", "價差損益率": "市值損益率", "含息總損益率": "總損益率"}
         view_disp = view[show_cols].copy()
         # 數字欄轉成數值型別，NumberColumn 的格式（單位數 4 位小數）才會套用
         for col in num_cols:
@@ -73,11 +74,21 @@ def render_platform_page(platform, positions, enriched, total_value, total_cost,
         for col in ["價差損益率", "含息總損益率"]:
             if col in view_disp.columns:
                 view_disp[col] = view_disp[col].apply(lambda x: x * 100 if x is not None and str(x) not in ["-", "—", "nan"] else None)
+        # 小數位數用 pandas Styler 指定（NumberColumn 的 format 在部分版本不會套用，單位數會只顯示 3 位）
+        decimals = {"total_cost_input": 0, "original_units": 4, "units": 4, "市值股數": 4, "avg_cost": 4,
+                    "即時價格/淨值": 4, "匯率": 4, "成本原幣": 0, "市值原幣": 0, "台幣成本": 0, "台幣市值": 0,
+                    "價差損益": 0, "累計配息原幣": 2, "累計已領配息": 0, "含息總損益": 0, "每月配息": 0,
+                    "每單位月配息估算": 4, "價差損益率": 2, "含息總損益率": 2}
+        pct_cols = {"價差損益率", "含息總損益率"}
+        styler = view_disp.style.format(
+            {c: (lambda places, suffix: (lambda v: "" if pd.isna(v) else f"{v:,.{places}f}{suffix}"))(
+                d, "%" if c in pct_cols else "")
+             for c, d in decimals.items() if c in view_disp.columns})
         st.dataframe(
-            view_disp,
+            styler,
             use_container_width=True,
             hide_index=True,
             height=400,
-            column_config=num_cols,
+            column_config={k: st.column_config.Column(label) for k, label in labels.items()},
         )
     editable_platform_table(platform, positions, f"editor_{platform}")
