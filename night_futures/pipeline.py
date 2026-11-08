@@ -189,7 +189,8 @@ def parse_openapi_rows(payload: list[dict]) -> list[dict[str, Any]]:
 
 def fetch_tx_rows(today: datetime, days: int = 28) -> list[dict[str, Any]]:
     start = (today - timedelta(days=days)).strftime("%Y/%m/%d")
-    end = today.strftime("%Y/%m/%d")
+    # 週五／連假前的夜盤歸屬到下一個營業日（可能在今天之後），結束日往後放一週
+    end = (today + timedelta(days=7)).strftime("%Y/%m/%d")
     errors = []
     try:
         resp = requests.post(
