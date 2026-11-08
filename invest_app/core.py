@@ -1083,30 +1083,29 @@ def fund_name_key(name: Any) -> str:
     return re.sub(r"[\s()（）\-—_]", "", text)
 
 
-def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int, int | None]:
-    """(標題列 index, 購買價格欄, 投資金額欄, 單位數欄或 None)：依第 1 列標題找。
+def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int]:
+    """(標題列 index, 購買價格欄, 投資金額欄)：依標題找。
 
-    各工作表欄位不同：渣打／台新／基富通-日幣是 I「單位成本」、L「投資美金／南非／日幣」、N「單位數」；
-    基富通-台是 I「單位成本」、J「投資成本」、L「單位數」。找不到標題就用 I、L。"""
+    各工作表欄位不同：渣打／台新／基富通-日幣是 I「單位成本」、L「投資美金／南非／日幣」；
+    基富通-台是 I「單位成本」、J「投資成本」。找不到標題就用 I、L。"""
     for i, row in enumerate(rows[:10]):
         names = [str(c).strip() for c in row]
         if "單位成本" not in names:
             continue
         price = names.index("單位成本")
-        units = names.index("單位數") if "單位數" in names else None
         if "投資成本" in names:
-            return i, price, names.index("投資成本"), units
+            return i, price, names.index("投資成本")
         foreign = [j for j, n in enumerate(names) if n.startswith("投資") and n not in ("投資台幣", "投資月份")]
         if foreign:
-            return i, price, foreign[0], units
-    return -1, 8, 11, None
+            return i, price, foreign[0]
+    return -1, 8, 11
 
 
 def trade_rows(rows: list[list[Any]]) -> dict[str, list[tuple[float, float]]]:
     """交易明細列 → {基金名稱 key: [(投資金額, round(投資金額 ÷ 單位成本, 4))]}；只算 F 欄有打勾的列。
 
     投資金額、單位成本要用儲存格實際值（例如 270,987.72），不是畫面顯示的整數，見 gviz_values。"""
-    header, price_col, amount_col, units_col = trade_columns(rows)
+    header, price_col, amount_col = trade_columns(rows)
     out: dict[str, list[tuple[float, float]]] = {}
     for row in rows[header + 1:]:
         if len(row) <= max(price_col, amount_col, 5):
