@@ -187,25 +187,31 @@ def parse_openapi_rows(payload: list[dict]) -> list[dict[str, Any]]:
     return out
 
 
+def _download_csv(start: str, end: str) -> list[dict[str, Any]]:
+    resp = requests.post(
+        FUT_DOWNLOAD_URL,
+        data={"down_type": "1", "commodity_id": "TX", "commodity_id2": "",
+              "queryStartDate": start, "queryEndDate": end},
+        headers=HEADERS, timeout=60,
+    )
+    resp.raise_for_status()
+    return parse_fut_csv(resp.content.decode("cp950", errors="replace"))
+
+
 def fetch_tx_rows(today: datetime, days: int = 28) -> list[dict[str, Any]]:
     start = (today - timedelta(days=days)).strftime("%Y/%m/%d")
-    end = today.strftime("%Y/%m/%d")
     errors = []
-    try:
-        resp = requests.post(
-            FUT_DOWNLOAD_URL,
-            data={"down_type": "1", "commodity_id": "TX", "commodity_id2": "",
-                  "queryStartDate": start, "queryEndDate": end},
-            headers=HEADERS, timeout=60,
-        )
-        resp.raise_for_status()
-        text = resp.content.decode("cp950", errors="replace")
-        rows = parse_fut_csv(text)
-        if rows:
-            return rows
-        errors.append("futDataDown 沒有資料")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"futDataDown：{exc}")
+    # 週五／連假前的夜盤歸屬到下一個營業日（日期在今天之後），但期交所不接受還沒有資料的結束日
+    # （會回錯誤頁）。所以從 7 天後開始逐天往回試，第一個有資料的就是最新的歸屬日。
+    for ahead in range(7, -1, -1):
+        end = (today + timedelta(days=ahead)).strftime("%Y/%m/%d")
+        try:
+            rows = _download_csv(start, end)
+            if rows:
+                return rows
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{end}：{exc}"[:120])
+    errors = [f"futDataDown 都抓不到（{errors[-1] if errors else '沒有資料'}）"]
     try:
         resp = requests.get(FUT_OPENAPI_URL, headers=HEADERS, timeout=60)
         resp.raise_for_status()
