@@ -164,13 +164,25 @@ class TradeUnitsTableTests(unittest.TestCase):
             {"asset_type": "基金", "platform": "渣打基金", "currency": "USD", "name": "大華", "original_units": 6000, "units": 0, "note": ""},
             {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": "高盛", "original_units": 986.64, "units": 0, "note": ""},
         ])
-        t = trade_units_table(match_trade_units(df, [{fund_name_key("貝萊德"): 232.0826, fund_name_key("大華"): 7000}])).set_index("基金名稱")
-        self.assertEqual(t.loc["貝萊德", "狀態"], "已套用")
-        self.assertIn("差超過 1%", t.loc["大華", "狀態"])
+        t = trade_units_table(match_trade_units(df, [{fund_name_key("貝萊德"): 232.0866, fund_name_key("大華"): 7000}])).set_index("基金名稱")
+        self.assertIn("小數 2 位", t.loc["貝萊德", "狀態"])
+        self.assertIn("差距大", t.loc["大華", "狀態"])
         self.assertEqual(t.loc["高盛", "狀態"], "交易明細找不到這檔")
 
 
 class SameNameTwoPlatformsTests(unittest.TestCase):
+    def test_same_platform_lots_with_wrong_currency_merge(self):
+        from invest_app.core import fund_name_key, match_trade_units
+        name = "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name, "original_units": 4702.31, "units": 0, "note": ""},
+            {"asset_type": "基金", "platform": "台新基金", "currency": "USD", "name": name, "original_units": 264.34, "units": 0, "note": ""},
+        ])
+        items = match_trade_units(df, [{fund_name_key(name): 4966.6517}])
+        self.assertEqual(len(items), 1)
+        self.assertAlmostEqual(items[0]["app_units"], 4966.65)
+
+
     def test_scb_and_taishin_kept_apart(self):
         from invest_app.core import fund_name_key, match_trade_units
         name1, name2 = "東方匯理基金新興市場債券U 南非幣(穩定月配息)", "東方匯理基金新興市場債券Ｕ(南非幣)(穩定月配息)"
@@ -178,10 +190,10 @@ class SameNameTwoPlatformsTests(unittest.TestCase):
             {"asset_type": "基金", "platform": "渣打基金", "currency": "ZAR", "name": name1, "original_units": 1817.037, "units": 0, "note": ""},
             {"asset_type": "基金", "platform": "台新基金", "currency": "ZAR", "name": name2, "original_units": 4966.65, "units": 0, "note": ""},
         ])
-        sheets = [{fund_name_key(name1): 1817.0385}, {fund_name_key(name2): 4966.657}]
+        sheets = [{fund_name_key(name1): 1817.0385}, {fund_name_key(name2): 4966.653}]
         items = {i["platform"]: i for i in match_trade_units(df, sheets)}
         self.assertEqual(items["渣打基金"]["trade_units"], 1817.0385)
-        self.assertEqual(items["台新基金"]["trade_units"], 4966.657)
+        self.assertEqual(items["台新基金"]["trade_units"], 4966.653)
         self.assertTrue(items["渣打基金"]["applied"] and items["台新基金"]["applied"])
 
 

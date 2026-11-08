@@ -1128,7 +1128,7 @@ def load_fund_trade_units() -> list[dict[str, float]]:
             response = requests.get(
                 f"https://docs.google.com/spreadsheets/d/{FUND_TRADE_SHEET_ID}/gviz/tq",
                 params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A1:Q500",
-                        "headers": "0", "tq": "options no_format"},
+                        "headers": "1", "tq": "options no_format"},
                 timeout=15)
             response.raise_for_status()
             if "<html" in response.text[:200].lower():
@@ -1149,12 +1149,11 @@ def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str
     if df.empty:
         return out
     funds = df[df["asset_type"].astype(str) == "基金"]
-    # 平台＋幣別＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」，不能併成一檔
+    # 平台＋名稱分組：渣打、台新都有「東方匯理 U 南非幣」要分開；同平台同名的分批（即使幣別欄填得不同）合在一起
     group_keys = (funds.get("platform", pd.Series("", index=funds.index)).astype(str) + "|"
-                  + funds.get("currency", pd.Series("", index=funds.index)).astype(str).str.upper() + "|"
                   + funds["name"].map(fund_name_key))
     for group, part in funds.groupby(group_keys, sort=False):
-        key = group.split("|", 2)[2]
+        key = group.split("|", 1)[1]
         lots = {}
         for idx, r in part.iterrows():
             note = normalize_text(r.get("note", ""))
@@ -1177,11 +1176,14 @@ def match_trade_units(df: pd.DataFrame, trades: dict[str, float] | list[dict[str
         else:
             target = min(candidates, key=lambda u: abs(u / total - 1))
             item["trade_units"] = target
-            if abs(target / total - 1) > TRADE_UNITS_MAX_DIFF:
-                item["status"] = "差超過 1%，未套用（請檢查明細或 App）"
+            gap = abs(target - total)
+            if gap < 0.00005:
+                item["status"] = "一致"
+            elif gap <= 0.005 * len(lots):
+                item["applied"] = True   # 只是 App 單位數記到小數 2 位造成的差
+                item["status"] = "App 只記到小數 2 位，可更新成 4 位"
             else:
-                item["applied"] = True
-                item["status"] = "已套用" if abs(target - total) >= 0.00005 else "一致"
+                item["status"] = "差距大，請檢查明細或 App"
         out.append(item)
     return out
 
