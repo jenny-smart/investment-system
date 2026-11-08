@@ -1490,6 +1490,12 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
             out["fund_code"] = fund_code
             out["fund_pattern"] = fund_pattern
         out.update(calc)
+        if asset_type == "基金":
+            # 成本股數跟市值股數用同一個值（對到交易明細的分批是那一筆的 4 位小數）
+            original_units, current_units = fund_units(r)
+            out["original_units"] = round(original_units, 4)
+            if current_units > 0:
+                out["units"] = round(current_units, 4)
         out.update({
             "即時價格/淨值": price,
             "基金淨值日期": fund_nav_date,
