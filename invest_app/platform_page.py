@@ -65,6 +65,10 @@ def render_platform_page(platform, positions, enriched, total_value, total_cost,
             "含息總損益率":     st.column_config.NumberColumn("總損益率",   format="%.2f%%"),
         }
         view_disp = view[show_cols].copy()
+        # 數字欄轉成數值型別，NumberColumn 的格式（單位數 4 位小數）才會套用
+        for col in num_cols:
+            if col in view_disp.columns:
+                view_disp[col] = pd.to_numeric(view_disp[col], errors="coerce")
         # 把百分比欄位從小數轉成百分比數值
         for col in ["價差損益率", "含息總損益率"]:
             if col in view_disp.columns:

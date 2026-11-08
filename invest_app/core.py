@@ -1071,7 +1071,8 @@ TW_STOCK_SELL_COST_RATE = 0.004425
 
 # 股票總帳各基金交易明細（基富通-台／人民幣／日幣、渣打、台新…）：A 基金名稱、F 打勾＝實際交易、I 購買價格、L 投資金額
 FUND_TRADE_SHEET_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"
-FUND_TRADE_SHEET_GIDS = ("827779166", "1350793322", "449144834", "272991674", "1786063877", "958127137", "1514344649")
+FUND_TRADE_SHEET_GIDS = ("827779166", "1350793322", "449144834", "272991674", "1786063877", "958127137", "1514344649",
+                         "基富通-台", "基富通-人民幣")   # 數字＝gid，文字＝工作表名稱
 TRADE_UNITS_MAX_DIFF = 0.01   # 跟 App 單位數差超過 1% 就不套用（可能對錯基金或明細不完整）
 
 
@@ -1097,7 +1098,7 @@ def trade_units(rows: list[list[Any]]) -> dict[str, float]:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_fund_trade_units() -> list[dict[str, float]]:
-    """讀 5 張基金交易明細（gviz CSV，儲存格實際值），每張工作表各一份 {基金 key: 單位數}。
+    """讀各基金交易明細（gviz CSV，儲存格實際值），每張工作表各一份 {基金 key: 單位數}。
 
     分開存：不同平台可能有同名基金（渣打、台新都有東方匯理 U 南非幣），不能加在一起。讀不到的工作表略過。"""
     import csv
@@ -1106,7 +1107,8 @@ def load_fund_trade_units() -> list[dict[str, float]]:
         try:
             response = requests.get(
                 f"https://docs.google.com/spreadsheets/d/{FUND_TRADE_SHEET_ID}/gviz/tq",
-                params={"tqx": "out:csv", "gid": gid, "range": "A2:L500", "headers": "0", "tq": "options no_format"},
+                params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A2:L500",
+                        "headers": "0", "tq": "options no_format"},
                 timeout=15)
             response.raise_for_status()
             if "<html" in response.text[:200].lower():
