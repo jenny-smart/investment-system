@@ -65,3 +65,25 @@ class TwStockDiffTests(unittest.TestCase):
         self.assertEqual(list(out["名稱"]), ["賣掉的", "中砂", "鴻海"])
         self.assertEqual(out.loc[1, "差額"], -20000)
         self.assertEqual(out.loc[1, "總帳推算價格"], "660.00")
+
+
+class ItemDiffTests(unittest.TestCase):
+    def test_reason_nav_fx_rounding(self):
+        from invest_app.overview_reconcile import item_diff, overview_items
+        grid = [["投資分類", "日期", "現值", "損益", "台幣成本", "台幣市值"],
+                ["基富通-日", "", "", "", "", ""],
+                ["貝萊德全球智慧數據股票入息Hedged A6日圓穩定配息", "11/6", 1050.0, 0, 0, 50102],
+                ["安聯收益成長基金-AMgi月收總收益類股(日圓避險", "11/5", 1708.81, 0, 0, 236198],
+                ["台新-美金", "", "", "", "", ""],
+                ["高盛新興市場債券基金Y股美元", "11/5", 71.67, 0, 0, 130457]]
+        items = overview_items(grid)
+        self.assertEqual(len(items), 3)
+        df = pd.DataFrame([
+            {"asset_type": "基金", "platform": "基富通", "currency": "JPY", "ticker": "", "name": "貝萊德全球智慧數據股票入息Hedged A6日圓穩定配息",
+             "市值股數": 232.09, "即時價格/淨值": 1050.0, "匯率": 0.2056, "台幣市值": 50104.0},
+            {"asset_type": "基金", "platform": "基富通", "currency": "JPY", "ticker": "", "name": "安聯收益成長基金-AMgi月收總收益類股(日圓避險",
+             "市值股數": 680.0, "即時價格/淨值": 1694.24, "匯率": 0.2056, "台幣市值": 236873.0},
+        ])
+        out = item_diff("基富通-日", items, df, {"JPY": 0.2056}).set_index("名稱")
+        self.assertIn("四捨五入", out.iloc[0]["差在哪裡"])
+        self.assertIn("淨值／價格不同", out.loc["安聯收益成長基金-AMgi月收總收益類股(日圓避險", "差在哪裡"])
