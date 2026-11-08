@@ -48,3 +48,20 @@ class ReconcileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TwStockDiffTests(unittest.TestCase):
+    def test_lists_only_differing_stocks(self):
+        from invest_app.overview_reconcile import sheet_name_values, tw_stock_diff
+        sheet = sheet_name_values([["名稱", "市值"], ["鴻海", "2,250,000"], ["中砂", "1,320,000"], ["智冠", "93,800"],
+                                   ["賣掉的", "5,000"], ["加總", "999"]])
+        df = pd.DataFrame([
+            {"asset_type": "台股", "name": "鴻海", "units": 10000, "即時價格/淨值": 224.5, "價格來源": "收盤價", "台幣市值": 2245000},
+            {"asset_type": "台股", "name": "中砂", "units": 1000, "即時價格/淨值": 650, "價格來源": "TWSE買賣價備援", "台幣市值": 650000},
+            {"asset_type": "台股", "name": "中砂", "units": 1000, "即時價格/淨值": 650, "價格來源": "TWSE買賣價備援", "台幣市值": 650000},
+            {"asset_type": "台股", "name": "智冠", "units": 1000, "即時價格/淨值": 93.8, "價格來源": "收盤價", "台幣市值": 93800},
+        ])
+        out = tw_stock_diff(sheet, df)
+        self.assertEqual(list(out["名稱"]), ["賣掉的", "中砂", "鴻海"])
+        self.assertEqual(out.loc[1, "差額"], -20000)
+        self.assertEqual(out.loc[1, "總帳推算價格"], "660.00")

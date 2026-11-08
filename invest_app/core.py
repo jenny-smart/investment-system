@@ -5,7 +5,7 @@ import os
 import io
 import re
 import html as html_lib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 import pandas as pd
@@ -712,6 +712,28 @@ def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def tw_market_open(now: datetime | None = None) -> bool:
+    """台股盤中（週一到週五 09:00–13:30）；盤後、週末用正式收盤價，不用即時買賣價。"""
+    now = now or tw_now()
+    return now.weekday() < 5 and time(9, 0) <= now.time() <= time(13, 30)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def tw_official_closes(day: str) -> dict[str, float]:
+    """{代號: 收盤價}：證交所＋櫃買中心 day（YYYYMMDD）正式收盤價（跟總帳 J 欄收盤後同一來源）。"""
+    from sync_tw_stock_prices import fetch_official_closes
+    try:
+        return {code: float(q["price"]) for code, q in fetch_official_closes(day).items()}
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def tw_last_trading_day(hour_key: str) -> str:
+    from sync_tw_stock_prices import last_trading_day
+    return last_trading_day(tw_now())
+
+
 def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, str]:
     ticker = normalize_ticker(ticker)
     if ticker in TW_DELISTED_TICKERS:
@@ -720,6 +742,12 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
     is_tw = asset_type == "台股" or is_tw_stock_ticker(ticker)
 
     if is_tw:
+        # 盤後、週末：用正式收盤價（盤後即時報價常只剩最佳買賣價，跟收盤價差一兩檔）
+        if not tw_market_open():
+            code = re.sub(r"\.(TW|TWO)$", "", ticker.upper())
+            close = tw_official_closes(tw_last_trading_day(tw_now().strftime("%Y%m%d%H"))).get(code)
+            if close:
+                return close, "收盤價"
         # 台股優先走 TWSE，避免 Yahoo Finance 短時間大量查詢被 429 限流。
         tw_quote = fetch_twse_realtime_quote(ticker)
         if tw_quote.get("price") is not None:
