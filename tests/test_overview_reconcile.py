@@ -205,12 +205,20 @@ class LotUnitsTests(unittest.TestCase):
         self.assertEqual(items["台新基金"]["after_units"], 85.3968)
 
 
-class SheetUnitsColumnTests(unittest.TestCase):
-    def test_uses_sheet_units_column(self):
-        from invest_app.core import fund_name_key, trade_units
-        header = ["", "", "", "", "", "", "觀察成本", "現在市值", "單位成本", "投資台幣", "市值台幣", "投資南非", "市值南非", "單位數"]
-        name = "高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)"
-        r = lambda price, amount, units: [name, "", "", "", "", "TRUE", "", 624.83, price, "", "", amount, "", units]
-        rows = [header, r(819.62, 270988, 330.6260), r(819.62, 271619, 331.3958), r(819.62, 11615, 14.1712),
-                r(814.21, 56655, 69.5828), r(680.96, 64768, 95.1128), r(624.83, 91066, 145.7452)]
-        self.assertEqual(trade_units(rows)[fund_name_key(name)], 986.6338)   # 跟工作表加總一樣
+class GvizValuesTests(unittest.TestCase):
+    def test_uses_actual_cell_values_not_display(self):
+        from unittest import mock
+        import invest_app.core as core
+        body = ('/*O_o*/\ngoogle.visualization.Query.setResponse({"status":"ok","table":{"cols":['
+                '{"label":"高盛"},{"label":""},{"label":""},{"label":""},{"label":""},{"label":""},{"label":"觀察成本"},'
+                '{"label":"現在市值"},{"label":"單位成本"},{"label":"投資台幣"},{"label":"市值台幣"},{"label":"投資南非"}],'
+                '"rows":[{"c":[{"v":"高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)"},null,null,null,null,{"v":true},null,'
+                '{"v":624.83},{"v":819.62,"f":"819.6200"},null,null,{"v":270987.72,"f":"270,988"}]}]}});')
+        resp = mock.Mock(text=body); resp.raise_for_status = lambda: None
+        with mock.patch.object(core.requests, "get", return_value=resp):
+            rows = core.gviz_values("x", "958127137", "A1:Q500")
+        self.assertEqual(rows[1][11], 270987.72)
+        units = core.trade_units(rows)
+        self.assertEqual(list(units.values()), [round(270987.72 / 819.62, 4)])   # 330.626
+
+
