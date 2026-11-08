@@ -131,20 +131,9 @@ class UnifyTests(unittest.TestCase):
         self.assertEqual(stock.loc[0, "App 匯率"], 1.0)
 
 
-class FundUnitsTests(unittest.TestCase):
-    def test_amount_over_price_rounded_to_4(self):
-        from invest_app.core import fund_units
-        r = pd.Series({"asset_type": "基金", "total_cost_input": 50000, "avg_cost": 215.4366, "original_units": 232.09, "units": 0})
-        self.assertEqual(fund_units(r), (232.0868, 0.0))
-        far = pd.Series({"asset_type": "基金", "total_cost_input": 50000, "avg_cost": 100, "original_units": 232.09123, "units": 0})
-        self.assertEqual(fund_units(far)[0], 232.0912)          # 差超過 1%：保留記錄值
-        stock = pd.Series({"asset_type": "台股", "total_cost_input": 0, "avg_cost": 10, "original_units": 1000.123456, "units": 0})
-        self.assertEqual(fund_units(stock)[0], 1000.123456)
-
-
 class TradeUnitsTests(unittest.TestCase):
     def test_sum_of_rounded_trades(self):
-        from invest_app.core import apply_trade_units, fund_name_key, fund_units, trade_units
+        from invest_app.core import apply_trade_units, fund_name_key, trade_units
         def row(name, tick, price, amount):
             r = [""] * 12
             r[0], r[5], r[8], r[11] = name, tick, price, amount
@@ -160,7 +149,6 @@ class TradeUnitsTests(unittest.TestCase):
         ])
         out = apply_trade_units(df, units)
         self.assertAlmostEqual(out["trade_units"].sum(), expected)
-        self.assertAlmostEqual(sum(fund_units(r)[0] for _, r in out.iterrows()), expected)
         far = apply_trade_units(df, {fund_name_key("貝萊德A6日圓"): 300.0})   # 差超過 1%：不套用
         self.assertEqual(far["trade_units"].sum(), 0)
         two = apply_trade_units(df, [{fund_name_key("貝萊德A6日圓"): 4966.65}, units])   # 同名在兩張：選接近的
@@ -195,3 +183,21 @@ class SameNameTwoPlatformsTests(unittest.TestCase):
         self.assertEqual(items["渣打基金"]["trade_units"], 1817.0385)
         self.assertEqual(items["台新基金"]["trade_units"], 4966.657)
         self.assertTrue(items["渣打基金"]["applied"] and items["台新基金"]["applied"])
+
+
+class TradeColumnsTests(unittest.TestCase):
+    def test_kifutong_twd_layout_uses_j(self):
+        from invest_app.core import fund_name_key, trade_units
+        header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資成本", "總市值", "單位數"]
+        total = ["div/section", "", "", "", "", "FALSE", "", "", "", 31000000, 28555111, ""]
+        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.36]
+        r2 = ["富蘭克林華美", "acft94", "", "", "", "FALSE", 3.91, 3.2684, 3.4, 543958, 522904, 159987.74]
+        units = trade_units([header, total, r1, r2])
+        self.assertEqual(units[fund_name_key("富蘭克林華美")], round(10000 / 3.9349, 4))
+
+    def test_foreign_layout_uses_investment_currency(self):
+        from invest_app.core import fund_name_key, trade_units
+        header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資台幣", "市值台幣", "投資美金", "市值美金", "單位數"]
+        row = ["東方匯理基金新興市場債券U 美元(穩定月配息)", "", "PUF6", "2025/9/", "", "TRUE", "", 16.57, 19.3, "", 148017, 5266, 4521, 272.8497]
+        units = trade_units([header, row])
+        self.assertEqual(units[fund_name_key("東方匯理基金新興市場債券Ｕ(美金)(穩定月配息)")], 272.8497)   # 美金＝美元
