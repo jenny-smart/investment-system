@@ -136,7 +136,7 @@ class TradeColumnsTests(unittest.TestCase):
         from invest_app.core import fund_name_key, trade_units
         header = ["", "", "", "", "", "FALSE", "觀察成本", "現在市值", "單位成本", "投資成本", "總市值", "單位數"]
         total = ["div/section", "", "", "", "", "FALSE", "", "", "", 31000000, 28555111, ""]
-        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.36]
+        r1 = ["富蘭克林華美", "acft94", "", "2024/07/10", "", "TRUE", 3.86, 3.2684, 3.9349, 10000, 8306, 2541.3606]
         r2 = ["富蘭克林華美", "acft94", "", "", "", "FALSE", 3.91, 3.2684, 3.4, 543958, 522904, 159987.74]
         units = trade_units([header, total, r1, r2])
         self.assertEqual(units[fund_name_key("富蘭克林華美")], round(10000 / 3.9349, 4))
@@ -203,3 +203,22 @@ class LotUnitsTests(unittest.TestCase):
         items = {i["platform"]: i for i in match_trade_units(df, sheets)}
         self.assertEqual(items["渣打基金"]["after_units"], 1817.0385)
         self.assertEqual(items["台新基金"]["after_units"], 85.3968)
+
+
+class GvizValuesTests(unittest.TestCase):
+    def test_uses_actual_cell_values_not_display(self):
+        from unittest import mock
+        import invest_app.core as core
+        body = ('/*O_o*/\ngoogle.visualization.Query.setResponse({"status":"ok","table":{"cols":['
+                '{"label":"高盛"},{"label":""},{"label":""},{"label":""},{"label":""},{"label":""},{"label":"觀察成本"},'
+                '{"label":"現在市值"},{"label":"單位成本"},{"label":"投資台幣"},{"label":"市值台幣"},{"label":"投資南非"}],'
+                '"rows":[{"c":[{"v":"高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)"},null,null,null,null,{"v":true},null,'
+                '{"v":624.83},{"v":819.62,"f":"819.6200"},null,null,{"v":270987.72,"f":"270,988"}]}]}});')
+        resp = mock.Mock(text=body); resp.raise_for_status = lambda: None
+        with mock.patch.object(core.requests, "get", return_value=resp):
+            rows = core.gviz_values("x", "958127137", "A1:Q500")
+        self.assertEqual(rows[1][11], 270987.72)
+        units = core.trade_units(rows)
+        self.assertEqual(list(units.values()), [round(270987.72 / 819.62, 4)])   # 330.626
+
+

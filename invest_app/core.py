@@ -1,6 +1,7 @@
 """共用基礎：設定常數、Supabase、持倉讀寫、報價／基金淨值／匯率、enrich 計算、總帳試算表讀取。"""
 from __future__ import annotations
 
+import json
 import os
 import io
 import re
@@ -1101,7 +1102,9 @@ def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int]:
 
 
 def trade_rows(rows: list[list[Any]]) -> dict[str, list[tuple[float, float]]]:
-    """交易明細列 → {基金名稱 key: [(投資金額, 單位數＝round(投資金額 ÷ 購買價格, 4))]}；只算 F 欄有打勾的列。"""
+    """交易明細列 → {基金名稱 key: [(投資金額, round(投資金額 ÷ 單位成本, 4))]}；只算 F 欄有打勾的列。
+
+    投資金額、單位成本要用儲存格實際值（例如 270,987.72），不是畫面顯示的整數，見 gviz_values。"""
     header, price_col, amount_col = trade_columns(rows)
     out: dict[str, list[tuple[float, float]]] = {}
     for row in rows[header + 1:]:
@@ -1120,24 +1123,35 @@ def trade_units(rows: list[list[Any]]) -> dict[str, float]:
     return {k: round(sum(u for _, u in v), 4) for k, v in trade_rows(rows).items()}
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+def gviz_values(sheet_id: str, sheet: str, cell_range: str) -> list[list[Any]]:
+    """用 gviz JSON 讀儲存格「實際值」（v），第一列是標題。
+
+    CSV 匯出只有畫面顯示的文字：投資金額 270,987.72 若格式設成整數，CSV 會給 270,988。JSON 的 v 才是原值。"""
+    params = {"tqx": "out:json", "range": cell_range, "headers": "1",
+              ("gid" if sheet.isdigit() else "sheet"): sheet}
+    response = requests.get(f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq", params=params, timeout=15)
+    response.raise_for_status()
+    text = response.text
+    payload = json.loads(text[text.index("(") + 1:text.rindex(")")])
+    if payload.get("status") == "error":
+        raise RuntimeError(str(payload.get("errors"))[:200])
+    table = payload.get("table") or {}
+    rows = [[(c or {}).get("label", "") for c in table.get("cols", [])]]
+    for r in table.get("rows", []):
+        rows.append([(cell or {}).get("v") if cell else "" for cell in (r.get("c") or [])])
+    return [["" if v is None else v for v in row] for row in rows]
+
+
+@st.cache_data(ttl=120, show_spinner=False)
 def load_fund_trade_units() -> list[dict[str, list[tuple[float, float]]]]:
-    """讀各基金交易明細（gviz CSV，儲存格實際值），每張工作表各一份 {基金 key: 單位數}。
+    """讀各基金交易明細（gviz JSON，儲存格實際值），每張工作表各一份 {基金 key: [(投資金額, 單位數)]}。
 
     分開存：不同平台可能有同名基金（渣打、台新都有東方匯理 U 南非幣），不能加在一起。讀不到的工作表略過。"""
     import csv
     sheets: list[dict[str, list[tuple[float, float]]]] = []
     for gid in FUND_TRADE_SHEET_GIDS:
         try:
-            response = requests.get(
-                f"https://docs.google.com/spreadsheets/d/{FUND_TRADE_SHEET_ID}/gviz/tq",
-                params={"tqx": "out:csv", ("gid" if gid.isdigit() else "sheet"): gid, "range": "A1:Q500",
-                        "headers": "1", "tq": "options no_format"},
-                timeout=15)
-            response.raise_for_status()
-            if "<html" in response.text[:200].lower():
-                continue
-            rows = [[_raw_cell(v) for v in row] for row in csv.reader(io.StringIO(response.text))]
+            rows = gviz_values(FUND_TRADE_SHEET_ID, gid, "A1:Q500")
             sheets.append(trade_rows(rows))
         except Exception:
             continue
