@@ -1,0 +1,170 @@
+{
+  "更新時間": "2026-11-08 20:55",
+  "夜盤": {
+    "夜盤日期": "2026-11-06",
+    "日盤日期": "2026-11-05",
+    "契約月份": "202611",
+    "夜盤開盤": 41990.0,
+    "夜盤最高": 42298.0,
+    "夜盤最低": 38799.0,
+    "夜盤收盤": 38936.0,
+    "日盤收盤": 41915.0,
+    "夜盤漲跌點": -2979.0,
+    "夜盤漲跌幅": -0.07107240844566384,
+    "日盤成交量": 99094,
+    "夜盤成交量": 90470,
+    "夜盤量佔比": 0.4772530649279399,
+    "夜盤未平倉": null
+  },
+  "外資夜盤": {
+    "多方口數": 51736.0,
+    "多方千元": 419464620.0,
+    "空方口數": 51088.0,
+    "空方千元": 413950980.0,
+    "淨額口數": 648.0,
+    "淨額千元": 5513640.0
+  },
+  "劇本": {
+    "編號": 4,
+    "夜盤量佔比": 0.4772530649279399,
+    "近20晚平均佔比": 0.3423820293938476,
+    "可信度": "可信度高",
+    "名稱": "劇本四",
+    "條件": "夜盤下跌＋外資偏多",
+    "解讀": [
+      "先跌",
+      "開低反彈"
+    ],
+    "說明": "夜盤下跌＋外資偏多 → 先跌、開低反彈；夜盤量佔比 47.7%（近 20 晚平均 34.2%），可信度高"
+  },
+  "國際盤": [
+    {
+      "名稱": "道瓊",
+      "代號": "^DJI",
+      "收盤": 51285.73046875,
+      "漲跌": -237.328125,
+      "漲跌幅": -0.0046062507055586385,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "標普500",
+      "代號": "^GSPC",
+      "收盤": 7376.85986328125,
+      "漲跌": 23.1298828125,
+      "漲跌幅": 0.003145326640212812,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "那斯達克",
+      "代號": "^IXIC",
+      "收盤": 24579.4296875,
+      "漲跌": 264.4296875,
+      "漲跌幅": 0.01087516707793543,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "費城半導體",
+      "代號": "^SOX",
+      "收盤": 9390.25,
+      "漲跌": 379.1103515625,
+      "漲跌幅": 0.04207129912011034,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "台積電ADR",
+      "代號": "TSM",
+      "收盤": 375.44000244140625,
+      "漲跌": 22.339996337890625,
+      "漲跌幅": 0.06326818451354367,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "美元/台幣",
+      "代號": "TWD=X",
+      "收盤": 33.10929870605469,
+      "漲跌": 0.2880973815917969,
+      "漲跌幅": 0.008777782956319364,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "加權指數",
+      "代號": "^TWII",
+      "收盤": 39701.640625,
+      "漲跌": -1873.078125,
+      "漲跌幅": -0.045053296361746285,
+      "日期": "2026-11-06"
+    },
+    {
+      "名稱": "台積電",
+      "代號": "2330.TW",
+      "收盤": 2135.0,
+      "漲跌": -105.0,
+      "漲跌幅": -0.046875,
+      "日期": "2026-11-06"
+    }
+  ],
+  "開盤預估": {
+    "方向": "開低",
+    "預估漲跌幅": -0.07107240844566384,
+    "加權指數前收": 39701.640625,
+    "預估開盤": 36879.94940653704,
+    "台積電ADR溢價": 0.16445481845755694,
+    "依據": [
+      "夜盤收 38,936，較日盤收盤 -2,979 點（-7.11%）",
+      "費半 +4.21%",
+      "台積電 ADR +6.33%，折合台股溢價 +16.4%",
+      "外資夜盤多空淨額 +648 口（偏多）"
+    ],
+    "說明": "預估開盤＝加權指數前收 ×（1＋夜盤近月較日盤收盤漲跌幅），只供參考。"
+  },
+  "新聞": [
+    {
+      "標題": "美股暴跌令華爾街始料未及 策略師卻看到買入良機 | 美股動態 | 國際",
+      "來源": "經濟日報",
+      "時間": "11/08 16:10",
+      "連結": "https://news.google.com/rss/articles/CBMiXEFVX3lxTFBTeWpIbkJocDBab3B1eU5ZbTFnd0ktcDRMMVloNWRKdEZyVndnSkk1RThXMFUxN0d3WFhjQ2N3R090ZTROU1pWMGgxVG5zMmFyeWVyRUZlUnVYdE1Z?oc=5"
+    },
+    {
+      "標題": "美股崩跌她卻很淡定！女股神揭多頭還有大戲逆勢加碼這檔股票- 國際",
+      "來源": "工商時報",
+      "時間": "11/08 15:32",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE4welhOVFZmNmVWUzYxcjJ3ZEd2TUh5RUdjSHMwYVF4cmU0RjBZQkMyZ2lFdmdyZTNFOVdLZlZUZGhvOFFWdTNFdGo4eEVKa285X0ZFazVMbEhLS2FJTWVN?oc=5"
+    },
+    {
+      "標題": "AIDC審查恐拉高成本、美股急洩別慌？摩根解析：標普500回檔仍在歷史常態範圍",
+      "來源": "鉅亨網",
+      "時間": "11/08 20:20",
+      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE40RUFFZXdIZHEzOHhxb1k4b1RBMEZRTUtrNWhMbFkyMWlpVlUwZDlla3llNF9TUjlFNHZIQnpkNUxGZGtXaW5SM1RGU1g3bXc?oc=5"
+    },
+    {
+      "標題": "台股重挫能回血嗎？學者示警一大風險",
+      "來源": "自由財經",
+      "時間": "11/08 19:46",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE5NVjZ0VFF1N0l5cVBCRTM2R0ZLbWhhN3J2M2hqc0NLTGpHR2pKR0dfSnhRTnRwbFc1RGtZcXMzVVdhSkN6RUN5bmt2b3NYZVVHd3pIbUVBNlV5RmU3Rktn0gFkQVVfeXFMUFRyQnFtQzlTeHhFbFZZY1ZaSEtqOTVEdzJHaThDeElGWEN4WDAyRm9oZWdLak1WTWU3c0M1Z3pQNjUyY2lJaTc0dUFfdG1QT3dzQkpmNTFSSnFrWWRwUUljcnFyQQ?oc=5"
+    },
+    {
+      "標題": "台股週一有望迎強彈！法人籲「別盲目搶短」緊盯1事",
+      "來源": "Yahoo股市",
+      "時間": "11/08 15:28",
+      "連結": "https://news.google.com/rss/articles/CBMixgJBVV95cUxQUnktRnYxUHE0dDVMQk1sUFgyTGJHeklMMV9aN3dMc01qR2w5WUFGazhDbkFIWUdyMk50TUtjVkdNeFE4Nm81SEV0OEVSMlQ3QnUzRHpUZHBtckNhYkxycDhMeng1Wl9oOFlabVc2R01Zc0pNSEcxRDl4c1RIOXdBaVh0QjhZQnVKNkVnM0ZqeU9jaTZ3Zy1aSlNPb2ZRU0ZVTWk4UVYwOUltZU42NG1TaGVyRjhYdDFfVTE5eGNfMk1keXZhUXQwT2F3ZjhZSkhPM2tlQjFYM0ZWdFZ6QjZiZ1ZzNGJZWGRfS3RpVk1vd2tLQkVJZ29wOGVCVEVIMG5vUlI5c21BeFN0ZktZVEZaa0VuMlZzdmlRd1RSa0g2MFd0aWtmUVMxN3k3dml4ZVBMQUMzUHRaUklQVEFUeXFyNjEwWm1HQQ?oc=5"
+    },
+    {
+      "標題": "【祭限空令救台股！「空軍」喊憑什麼：股票大漲也沒有限多令】 明天9點不知道台股會怎麼樣ㄋ （#嘴邊肉）",
+      "來源": "Facebook",
+      "時間": "11/08 18:23",
+      "連結": "https://news.google.com/rss/articles/CBMivwRBVV95cUxOMWhybVJ3UDVlWldMUTZKVmYzOF9rcXpCeHBaa0YzNi1JSVVuNzFjWHZDT1E5NVB2UzAwUXN5SFoyV3ltMWZ4cE1IY1g1QVRPdzZIZjlQWnFkcmQ4S2kzdGczZDRtMnFUNTZoQUE1NTFqelRPb2txSHF6emI0TEZLQmMwRVlMWVgxdy1kQTdoclZ6dlRfVDVReGsxSkdaRUxrdFJKTVQ2aXlVRVhjaW0ycHhacjJhTF81LTJ1S3ktRkp2UlhuOXo2WlhkUXBOYUNodGtrVVBKSTZfTXB5S2djLVM4cVl0b1NNRmlsZ1VVd3pLVW5XeFlIcFN1dW52b1VOTlVZTFotRWlURFdRTnpwOFhqMVlpbTZ1WnRadDczNGtQNWJ5eEtiMHRKS3JHX1c3VzdHa1VBYk5mbFBMc2NPQkpnTFg4RkRvXzVnUUM0M08wZktsc2Y1ZVgyRE9kUTZrendybEQzaTY5dDBkWnkzeGxBdTRkeHZjNG0xeE9uMzFoYmlTQlpxSTdSSWtjdG5sUFY2M1h2LUN1bzRCYXNMR1lORkpjNkN2Y1AzVkJ3Vk5qbFU1akFiTFM0SUZOMzB2N2trT0tRMk1wVkZRY2o5QUlmSlVWS3ZTajRqWldsdW81UjF5YTZJRkZ0d3NIVlduM3FtdHBvYmdrOUVzWDBXZTg0ZXlEQVdhZ3oyVmNPWHlGR3RrSHdhcGR6clFZU0FlZ0JnSDNZM2MxQW14OUVhS0xZNi1DRUtQZkZES2NiOA?oc=5"
+    },
+    {
+      "標題": "台股週一有望強彈 分析師點名「5檔隱藏版黑馬」",
+      "來源": "三立新聞網SETN.com",
+      "時間": "11/08 16:35",
+      "連結": "https://news.google.com/rss/articles/CBMiS0FVX3lxTE9QenhyU0kxMEsxZVdhd0hWU1A1QXFqcUM2V05pRUc0dENlOTJXMW5sS0FjcHc2bF9fSkRoaHVTMjFPVDBKRVF2a0J3VQ?oc=5"
+    },
+    {
+      "標題": "11/9起祭5項禁空令穩定股市 5千億國安基金進場護盤",
+      "來源": "公視新聞",
+      "時間": "11/08 19:22",
+      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE4zak9kNzJLSmkyMU52M0ZfbWJoamxXQ3oxYVQ2ZlRDWnotd21zV3BkVUxWWmo3RjZEbExzZ1Mta20xeWdXQWF0U1pzRzMtOWc?oc=5"
+    }
+  ]
+}
