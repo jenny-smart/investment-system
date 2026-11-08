@@ -378,3 +378,10 @@ class DetailRefTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BadDateTests(unittest.TestCase):
+    def test_invalid_header_date_is_skipped(self):
+        from month_end_ledger import cell_date
+        self.assertIsNone(cell_date("2026/11/31"))
+        self.assertEqual(str(cell_date("2026/11/30")), "2026-11-30")
