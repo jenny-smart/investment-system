@@ -151,7 +151,13 @@ def cell_date(value):
         return date(1899, 12, 30) + timedelta(days=int(value)) if 30000 < value < 80000 else None
     text = str(value or "").strip()
     match = re.match(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})", text)
-    return date(int(match[1]), int(match[2]), int(match[3])) if match else None
+    if not match:
+        return None
+    try:
+        return date(int(match[1]), int(match[2]), int(match[3]))
+    except ValueError:   # 例如 2026/11/31：不是有效日期，當成不是月份欄（印警告），不要讓整支程式停掉
+        print(f"WARN 標題「{text}」不是有效日期，略過這欄")
+        return None
 
 
 def to_number(value):
