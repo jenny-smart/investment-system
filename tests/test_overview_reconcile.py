@@ -203,3 +203,14 @@ class LotUnitsTests(unittest.TestCase):
         items = {i["platform"]: i for i in match_trade_units(df, sheets)}
         self.assertEqual(items["渣打基金"]["after_units"], 1817.0385)
         self.assertEqual(items["台新基金"]["after_units"], 85.3968)
+
+
+class SheetUnitsColumnTests(unittest.TestCase):
+    def test_uses_sheet_units_column(self):
+        from invest_app.core import fund_name_key, trade_units
+        header = ["", "", "", "", "", "", "觀察成本", "現在市值", "單位成本", "投資台幣", "市值台幣", "投資南非", "市值南非", "單位數"]
+        name = "高盛新興市場債券基金Ｙ(南非幣對沖)(月配息)"
+        r = lambda price, amount, units: [name, "", "", "", "", "TRUE", "", 624.83, price, "", "", amount, "", units]
+        rows = [header, r(819.62, 270988, 330.6260), r(819.62, 271619, 331.3958), r(819.62, 11615, 14.1712),
+                r(814.21, 56655, 69.5828), r(680.96, 64768, 95.1128), r(624.83, 91066, 145.7452)]
+        self.assertEqual(trade_units(rows)[fund_name_key(name)], 986.6338)   # 跟工作表加總一樣

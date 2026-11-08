@@ -1082,27 +1082,30 @@ def fund_name_key(name: Any) -> str:
     return re.sub(r"[\s()（）\-—_]", "", text)
 
 
-def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int]:
-    """(標題列 index, 購買價格欄, 投資金額欄)：依標題找。
+def trade_columns(rows: list[list[Any]]) -> tuple[int, int, int, int | None]:
+    """(標題列 index, 購買價格欄, 投資金額欄, 單位數欄或 None)：依第 1 列標題找。
 
-    各工作表欄位不同：渣打／台新／基富通-日幣是 I「單位成本」、L「投資美金／南非／日幣」；
-    基富通-台是 I「單位成本」、J「投資成本」。找不到標題就用 I、L。"""
+    各工作表欄位不同：渣打／台新／基富通-日幣是 I「單位成本」、L「投資美金／南非／日幣」、N「單位數」；
+    基富通-台是 I「單位成本」、J「投資成本」、L「單位數」。找不到標題就用 I、L。"""
     for i, row in enumerate(rows[:10]):
         names = [str(c).strip() for c in row]
         if "單位成本" not in names:
             continue
         price = names.index("單位成本")
+        units = names.index("單位數") if "單位數" in names else None
         if "投資成本" in names:
-            return i, price, names.index("投資成本")
+            return i, price, names.index("投資成本"), units
         foreign = [j for j, n in enumerate(names) if n.startswith("投資") and n not in ("投資台幣", "投資月份")]
         if foreign:
-            return i, price, foreign[0]
-    return -1, 8, 11
+            return i, price, foreign[0], units
+    return -1, 8, 11, None
 
 
 def trade_rows(rows: list[list[Any]]) -> dict[str, list[tuple[float, float]]]:
-    """交易明細列 → {基金名稱 key: [(投資金額, 單位數＝round(投資金額 ÷ 購買價格, 4))]}；只算 F 欄有打勾的列。"""
-    header, price_col, amount_col = trade_columns(rows)
+    """交易明細列 → {基金名稱 key: [(投資金額, 單位數)]}；只算 F 欄有打勾的列。
+
+    單位數直接用工作表「單位數」欄（你工作表算好的 4 位小數）；沒有這欄才用 投資金額 ÷ 單位成本 取 4 位。"""
+    header, price_col, amount_col, units_col = trade_columns(rows)
     out: dict[str, list[tuple[float, float]]] = {}
     for row in rows[header + 1:]:
         if len(row) <= max(price_col, amount_col, 5):
@@ -1111,7 +1114,9 @@ def trade_rows(rows: list[list[Any]]) -> dict[str, list[tuple[float, float]]]:
         amount, price = to_float(row[amount_col]), to_float(row[price_col])
         if not name or ticked not in {"TRUE", "1", "V", "✓", "Y", "YES"} or not amount or not price or price <= 0:
             continue
-        out.setdefault(fund_name_key(name), []).append((float(amount), round(amount / price, 4)))
+        sheet_units = to_float(row[units_col]) if units_col is not None and units_col < len(row) else None
+        units = round(sheet_units, 4) if sheet_units and sheet_units > 0 else round(amount / price, 4)
+        out.setdefault(fund_name_key(name), []).append((float(amount), units))
     return out
 
 
@@ -1120,7 +1125,7 @@ def trade_units(rows: list[list[Any]]) -> dict[str, float]:
     return {k: round(sum(u for _, u in v), 4) for k, v in trade_rows(rows).items()}
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def load_fund_trade_units() -> list[dict[str, list[tuple[float, float]]]]:
     """讀各基金交易明細（gviz CSV，儲存格實際值），每張工作表各一份 {基金 key: 單位數}。
 
