@@ -8,6 +8,7 @@
 - 期交所「三大法人－區分各期貨契約－夜盤」（futContractsDateAh）：外資臺股期貨多空淨額。
 - Yahoo Finance（yfinance）：美股四大指數、費半、台積電 ADR、USD/TWD、加權指數、台積電。
 - Google News RSS：台股／台指期／美股 近一天新聞標題。
+- 熱門股 20 檔（證交所成交金額＋三大法人，見 night_futures/hot_stocks.py）。
 
 成交量：每個時段把 TX 各到期月份（不含價差單）的成交量加總。
 夜盤量佔比 = 夜盤成交量 ÷（日盤成交量 ＋ 夜盤成交量）。
@@ -518,6 +519,13 @@ def build(wait_minutes: int = 0, dry_run: bool = False) -> dict[str, Any]:
         print(f"WARN 新聞抓不到：{exc}")
         news = []
 
+    try:
+        from night_futures.hot_stocks import build_hot_stocks
+        hot_stocks = build_hot_stocks()
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN 熱門股抓不到：{exc}")
+        hot_stocks = []
+
     history = merge_history(existing, nights, foreign_by_date)
     prior_ratios = [float(r["夜盤量佔比"]) for r in history
                     if r["夜盤日期"] < latest["夜盤日期"] and num(r.get("夜盤量佔比")) is not None]
@@ -530,6 +538,7 @@ def build(wait_minutes: int = 0, dry_run: bool = False) -> dict[str, Any]:
         "國際盤": global_quotes,
         "開盤預估": estimate_open(latest, global_quotes, foreign),
         "新聞": news,
+        "熱門股": hot_stocks,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     if not dry_run:
