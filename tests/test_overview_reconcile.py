@@ -87,3 +87,25 @@ class ItemDiffTests(unittest.TestCase):
         out = item_diff("基富通-日", items, df, {"JPY": 0.2056}).set_index("名稱")
         self.assertIn("四捨五入", out.iloc[0]["差在哪裡"])
         self.assertIn("淨值／價格不同", out.loc["安聯收益成長基金-AMgi月收總收益類股(日圓避險", "差在哪裡"])
+
+
+class TwLedgerTests(unittest.TestCase):
+    def test_price_vs_shares(self):
+        from invest_app.overview_reconcile import ledger_stocks, tw_ledger_diff
+        #        C        D  E  F  G  H   I       J
+        rows = [["2317", "", "", "", "", "", 10000, 225.0],
+                ["6505", "", "", "", "", "", 1000, 85.7],
+                ["1560", "", "", "", "", "", 1000, 650.0], ["1560", "", "", "", "", "", 1000, 650.0],
+                ["9999", "", "", "", "", "", 500, 10.0], ["代碼", "", "", "", "", "", "股數", "市價"]]
+        ledger = ledger_stocks(rows)
+        self.assertEqual(ledger["1560"], {"units": 2000.0, "price": 650.0})
+        df = pd.DataFrame([
+            {"asset_type": "台股", "ticker": "2317.TW", "name": "鴻海", "units": 10000, "即時價格/淨值": 224.5, "台幣市值": 2245000},
+            {"asset_type": "台股", "ticker": "6505.TW", "name": "台塑化", "units": 1100, "即時價格/淨值": 85.7, "台幣市值": 94270},
+            {"asset_type": "台股", "ticker": "1560.TW", "name": "中砂", "units": 2000, "即時價格/淨值": 650.0, "台幣市值": 1300000},
+        ])
+        out = tw_ledger_diff(ledger, df).set_index("代號")
+        self.assertIn("價格不同", out.loc["2317", "差在哪裡"])
+        self.assertIn("股數不同", out.loc["6505", "差在哪裡"])
+        self.assertNotIn("1560", out.index)
+        self.assertEqual(out.loc["9999", "差在哪裡"], "App 沒有這檔持倉")

@@ -179,6 +179,91 @@ def tw_stock_diff(sheet_values: dict[str, float], df: pd.DataFrame) -> pd.DataFr
     return out
 
 
+STOCK_LEDGER_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"   # 股票總帳
+STOCK_LEDGER_GID = "0"                                               # 「台股」工作表
+LEDGER_RANGE = "C7:J600"                                             # C 代碼、I 股數、J 市價
+
+
+def ledger_stocks(rows: list[list[Any]]) -> dict[str, dict[str, float]]:
+    """股票總帳台股工作表 C7:J → {代碼: {"units": I 欄合計, "price": J 欄}}。"""
+    out: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if len(row) < 8:
+            continue
+        code = re.sub(r"\.(TW|TWO)$", "", str(row[0]).strip().upper())
+        units, price = _num(row[6]), _num(row[7])
+        if not re.fullmatch(r"[0-9]{4,6}[A-Z]?", code) or units is None:
+            continue
+        item = out.setdefault(code, {"units": 0.0, "price": 0.0})
+        item["units"] += units
+        if price:
+            item["price"] = price
+    return out
+
+
+def tw_ledger_diff(ledger: dict[str, dict[str, float]], df: pd.DataFrame) -> pd.DataFrame:
+    """逐檔：股票總帳（I 股數 × J 市價）vs App（股數、價格），標出差在價格還是股數。只列差 ≥1 元。"""
+    tw = df[df["asset_type"].astype(str) == "台股"].copy()
+    if tw.empty or not ledger:
+        return pd.DataFrame()
+    tw["_code"] = tw["ticker"].astype(str).str.upper().str.replace(r"\.(TW|TWO)$", "", regex=True)
+    tw["units"] = pd.to_numeric(tw["units"], errors="coerce").fillna(0)
+    tw["台幣市值"] = pd.to_numeric(tw["台幣市值"], errors="coerce").fillna(0)
+    rows = []
+    for code, part in tw.groupby("_code", sort=False):
+        app_units = float(part["units"].sum())
+        app_price = part["即時價格/淨值"].dropna().iloc[0] if part["即時價格/淨值"].notna().any() else None
+        app_value = float(part["台幣市值"].sum())
+        sh = ledger.get(code)
+        if sh is None:
+            if app_units > 0:
+                rows.append({"名稱": part["name"].iloc[0], "代號": code, "總帳股數": None, "App 股數": app_units,
+                             "總帳市價": None, "App 價格": app_price, "總帳市值": None, "App 市值": app_value,
+                             "差額": None, "差在哪裡": "股票總帳台股工作表沒有這檔"})
+            continue
+        sheet_value = sh["units"] * sh["price"]
+        diff = app_value - sheet_value
+        if abs(diff) < TOLERANCE:
+            continue
+        reasons = []
+        if app_price is not None and abs(app_price - sh["price"]) > 1e-6:
+            reasons.append(f"價格不同（影響約 {(app_price - sh['price']) * app_units:+,.0f}）")
+        if abs(app_units - sh["units"]) > 1e-6:
+            reasons.append(f"股數不同（影響約 {(app_units - sh['units']) * sh['price']:+,.0f}）")
+        rows.append({"名稱": part["name"].iloc[0], "代號": code, "總帳股數": sh["units"], "App 股數": app_units,
+                     "總帳市價": sh["price"], "App 價格": app_price, "總帳市值": sheet_value, "App 市值": app_value,
+                     "差額": diff, "差在哪裡": "；".join(reasons) or "四捨五入"})
+    app_codes = set(tw["_code"])
+    for code, sh in ledger.items():
+        if code not in app_codes and sh["units"] > 0:
+            rows.append({"名稱": "", "代號": code, "總帳股數": sh["units"], "App 股數": None, "總帳市價": sh["price"],
+                         "App 價格": None, "總帳市值": sh["units"] * sh["price"], "App 市值": None, "差額": None,
+                         "差在哪裡": "App 沒有這檔持倉"})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["_abs"] = out["差額"].abs().fillna(float("inf"))
+    out = out.sort_values("_abs", ascending=False).drop(columns="_abs").reset_index(drop=True)
+    for col in ("總帳市價", "App 價格"):
+        out[col] = out[col].map(lambda v: f"{v:,.2f}" if isinstance(v, (int, float)) and pd.notna(v) else "")
+    return out
+
+
+def load_tw_ledger() -> dict[str, dict[str, float]]:
+    """讀股票總帳「台股」工作表 C7:J（需要「知道連結的人可檢視」）。"""
+    import csv
+    import io
+
+    import requests
+    response = requests.get(f"https://docs.google.com/spreadsheets/d/{STOCK_LEDGER_ID}/gviz/tq",
+                            params={"tqx": "out:csv", "gid": STOCK_LEDGER_GID, "range": LEDGER_RANGE,
+                                    "headers": "0", "tq": "options no_format"}, timeout=30)
+    response.raise_for_status()
+    if "<html" in response.text[:200].lower():
+        raise RuntimeError("股票總帳沒有開放「知道連結的人可檢視」，App 讀不到")
+    return ledger_stocks(list(csv.reader(io.StringIO(response.text))))
+
+
 def load_tw_sheet_values() -> dict[str, float]:
     """總帳（2025Jenny-總帳）「台股」分頁 A/B 欄，用分頁名稱讀（gviz CSV）。"""
     import csv
@@ -327,6 +412,15 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
             st.caption(f"以上分類合計 {explained:+,.0f}，還有 {rest:+,.0f} 對不到分類（總覽 B1 公式或其他列）。")
         for label in diff["分類"]:
             if label.lower().startswith("台股"):
+                try:
+                    stocks = tw_ledger_diff(load_tw_ledger(), enriched)
+                    if not stocks.empty:
+                        st.markdown(f"**{label}：差在這 {len(stocks)} 檔**（股票總帳台股工作表 I 股數 × J 市價 vs App；差額＝App−總帳）")
+                        st.markdown(html_table(stocks, ["總帳股數", "App 股數", "總帳市值", "App 市值", "差額"]),
+                                    unsafe_allow_html=True)
+                        continue
+                except Exception as exc:
+                    st.caption(f"讀不到股票總帳台股工作表（{exc}），改用總帳台股分頁 A/B 欄比對")
                 try:
                     stocks = tw_stock_diff(load_tw_sheet_values(), enriched)
                 except Exception as exc:
