@@ -5,12 +5,14 @@
 趨勢：收盤 > 20 日線 > 60 日線＝多頭；收盤 < 20 日線 < 60 日線＝空頭；其餘＝盤整。
 建議（依序判斷，先符合先用）：
   RSI ≥ 80                              → 過熱減碼（分批獲利了結）
+  空頭且 RSI ≤ 20                        → 超跌勿追殺（等反彈再減碼）
   空頭                                   → 賣出／避開
   多頭＋法人買超＋RSI < 70               → 買進
   多頭（RSI 70–80 或法人賣超）           → 拉回再買（續抱）
   盤整且站上 20 日線＋法人買超           → 觀望偏多
   其餘                                   → 觀望
-停損參考：多頭／偏多用 20 日線與近 20 日低點較高者；其他用近 20 日低點。
+關鍵價位：偏多（買進／拉回再買／觀望偏多）＝停損，20 日線與近 20 日低點較高者，跌破出場；
+          其他＝壓力，20 日線，站回才轉觀望。
 只是統計規則，不是投資建議。
 """
 from __future__ import annotations
@@ -19,7 +21,11 @@ from typing import Any
 
 import pandas as pd
 
-from stock_radar.pipeline import INST_URL, PRICE_URL, _get_json, _institution_frame, _num, _pick
+import requests
+
+from stock_radar.pipeline import HEADERS, INST_URL, PRICE_URL, _get_json, _institution_frame, _num, _pick
+
+T86_RWD_URL = "https://www.twse.com.tw/rwd/zh/fund/T86"
 
 TOP_TURNOVER = 80
 PICK = 20
@@ -38,6 +44,29 @@ def turnover_frame(rows: list[dict]) -> pd.DataFrame:
         out.append({"代號": code, "名稱": str(_pick(r, "Name", "證券名稱") or "").strip(),
                     "收盤價": close, "成交金額": value})
     return pd.DataFrame(out)
+
+
+def institution_rows(today) -> list[dict]:
+    """三大法人買賣超：先用 OpenAPI，失敗或空的就用證交所網站 rwd 版往前找最近一個交易日。"""
+    try:
+        rows = _get_json(INST_URL)
+        if rows:
+            return rows
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARN 三大法人 OpenAPI 抓不到，改用證交所網站：{exc}")
+    from datetime import timedelta
+    for back in range(0, 8):
+        day = (today - timedelta(days=back)).strftime("%Y%m%d")
+        try:
+            resp = requests.get(T86_RWD_URL, params={"date": day, "selectType": "ALLBUT0999", "response": "json"},
+                                headers=HEADERS, timeout=45)
+            payload = resp.json()
+        except Exception:  # noqa: BLE001
+            continue
+        if payload.get("stat") == "OK" and payload.get("data"):
+            fields = [str(f).strip() for f in payload["fields"]]
+            return [dict(zip(fields, row)) for row in payload["data"]]
+    return []
 
 
 def pick_hot(prices: pd.DataFrame, inst: pd.DataFrame, n: int = PICK) -> pd.DataFrame:
@@ -85,6 +114,8 @@ def classify(close: float, ma20: float | None, ma60: float | None, rsi_v: float 
 
     if rsi_v is not None and rsi_v >= 80:
         action = "過熱減碼"
+    elif trend == "空頭" and rsi_v is not None and rsi_v <= 20:
+        action = "超跌勿追殺"
     elif trend == "空頭":
         action = "賣出／避開"
     elif trend == "多頭" and inst_buy and (rsi_v is None or rsi_v < 70):
@@ -97,10 +128,10 @@ def classify(close: float, ma20: float | None, ma60: float | None, rsi_v: float 
         action = "觀望"
 
     if action in {"買進", "拉回再買", "觀望偏多"} and ma20 is not None:
-        stop = max(ma20, low20) if low20 is not None else ma20
+        level, kind = (max(ma20, low20) if low20 is not None else ma20), "停損"
     else:
-        stop = low20
-    return {"趨勢": trend, "建議": action, "停損參考": stop, "理由": "，".join(why)}
+        level, kind = ma20, "壓力"
+    return {"趨勢": trend, "建議": action, "關鍵價位": level, "價位類型": kind, "理由": "，".join(why)}
 
 
 def analyze(code: str, hist: pd.DataFrame, inst_net: float | None) -> dict[str, Any]:
@@ -122,11 +153,10 @@ def build_hot_stocks() -> list[dict[str, Any]]:
     import yfinance as yf
 
     prices = turnover_frame(_get_json(PRICE_URL))
-    try:
-        inst = _institution_frame(_get_json(INST_URL))
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARN 三大法人買賣超抓不到：{exc}")
-        inst = pd.DataFrame()
+    from night_futures.pipeline import tw_now
+    inst = _institution_frame(institution_rows(tw_now()))
+    if inst.empty:
+        print("WARN 三大法人買賣超抓不到，熱門股只依成交金額排名")
     hot = pick_hot(prices, inst)
     symbols = [f"{c}.TW" for c in hot["代號"]]
     raw = yf.download(symbols, period="6mo", interval="1d", auto_adjust=False, progress=False, group_by="ticker")

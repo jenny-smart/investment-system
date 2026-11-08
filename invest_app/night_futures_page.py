@@ -278,6 +278,7 @@ ACTION_STYLE = {  # 台股慣例：紅＝偏多、綠＝偏空
     "觀望偏多": "background-color:#fef9c3;color:#a16207",
     "觀望": "color:#64748b",
     "賣出／避開": "background-color:#dcfce7;color:#15803d;font-weight:700",
+    "超跌勿追殺": "background-color:#e0f2fe;color:#0369a1;font-weight:600",
     "過熱減碼": "background-color:#ede9fe;color:#6d28d9;font-weight:700",
 }
 
@@ -307,7 +308,9 @@ def _render_hot_stocks(hot: list[dict[str, Any]], enriched: pd.DataFrame) -> Non
         "近20日走勢": df.get("近20日走勢", pd.Series([[]] * len(df))),
         "趨勢": df["趨勢"],
         "建議": df["建議"],
-        "停損參考": df.get("停損參考", pd.Series(dtype=float)).map(numf),
+        "關鍵價位": [("-" if v is None or pd.isna(v) else f"{k} {v:,.1f}")
+                     for v, k in zip(df.get("關鍵價位", pd.Series([None] * len(df))),
+                                     df.get("價位類型", pd.Series([""] * len(df))))],
         "RSI": df.get("RSI", pd.Series(dtype=float)).map(lambda v: numf(v, 0)),
         "外資(張)": df["外資買賣超張"].map(lambda v: numf(v, 0)),
         "投信(張)": df["投信買賣超張"].map(lambda v: numf(v, 0)),
@@ -320,7 +323,8 @@ def _render_hot_stocks(hot: list[dict[str, Any]], enriched: pd.DataFrame) -> Non
         column_config={"近20日走勢": st.column_config.LineChartColumn("近20日走勢", width="small")},
     )
     st.caption("挑選：前一交易日成交金額前 80 名上市股，依成交金額＋三大法人買賣超金額排名取 20 檔。"
-               "建議為規則式技術面判斷（20／60 日線排列、RSI、法人買賣超），停損參考＝20 日線或近 20 日低點；"
+               "建議為規則式技術面判斷（20／60 日線排列、RSI、法人買賣超）；關鍵價位：偏多標「停損」（跌破出場），"
+               "偏空標「壓力」（站回 20 日線才轉觀望）；RSI ≤ 20 的空頭股標「超跌勿追殺」。"
                "只是統計規則，不是投資建議，進出場請搭配上方夜盤劇本與自己的部位控管。")
 
 
