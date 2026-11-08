@@ -128,6 +128,72 @@ def detail(label: str, df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def sheet_name_values(grid: list[list[Any]]) -> dict[str, float]:
+    """總帳「台股」分頁 A 欄名稱、B 欄市值 → {名稱: 市值合計}（同名多列相加）。"""
+    out: dict[str, float] = {}
+    for row in grid:
+        name = str(row[0]).strip() if row else ""
+        value = _num(row[1]) if len(row) > 1 else None
+        if name and value is not None and not name.lower().startswith(("加總", "total")):
+            out[name] = out.get(name, 0.0) + value
+    return out
+
+
+def tw_stock_diff(sheet_values: dict[str, float], df: pd.DataFrame) -> pd.DataFrame:
+    """逐檔：總帳台股分頁市值 vs App 台幣市值（同名合併），只列差 1 元以上，差最多的在前。"""
+    tw = df[df["asset_type"].astype(str) == "台股"].copy()
+    if tw.empty or not sheet_values:
+        return pd.DataFrame()
+    tw["台幣市值"] = pd.to_numeric(tw["台幣市值"], errors="coerce").fillna(0)
+    tw["units"] = pd.to_numeric(tw["units"], errors="coerce").fillna(0)
+    rows = []
+    for name, part in tw.groupby(tw["name"].astype(str).str.strip(), sort=False):
+        app = float(part["台幣市值"].sum())
+        units = float(part["units"].sum())
+        if name not in sheet_values:
+            if units > 0:
+                rows.append({"名稱": name, "總帳市值": None, "App 市值": app, "差額": None, "股數": units,
+                             "App 價格": part["即時價格/淨值"].dropna().iloc[0] if part["即時價格/淨值"].notna().any() else None,
+                             "總帳推算價格": None, "價格來源": "、".join(part["價格來源"].astype(str).unique()) if "價格來源" in part else "",
+                             "說明": "總帳台股分頁找不到這個名稱"})
+            continue
+        sheet = sheet_values[name]
+        if abs(app - sheet) < TOLERANCE:
+            continue
+        price = part["即時價格/淨值"].dropna().iloc[0] if part["即時價格/淨值"].notna().any() else None
+        rows.append({"名稱": name, "總帳市值": sheet, "App 市值": app, "差額": app - sheet, "股數": units,
+                     "App 價格": price, "總帳推算價格": sheet / units if units else None,
+                     "價格來源": "、".join(part["價格來源"].astype(str).unique()) if "價格來源" in part else "",
+                     "說明": ""})
+    for name, sheet in sheet_values.items():
+        if name not in set(tw["name"].astype(str).str.strip()) and abs(sheet) >= TOLERANCE:
+            rows.append({"名稱": name, "總帳市值": sheet, "App 市值": None, "差額": None, "股數": None,
+                         "App 價格": None, "總帳推算價格": None, "價格來源": "", "說明": "App 沒有這檔持倉"})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["_abs"] = out["差額"].abs().fillna(float("inf"))
+    out = out.sort_values("_abs", ascending=False).drop(columns="_abs").reset_index(drop=True)
+    for col in ("App 價格", "總帳推算價格"):
+        out[col] = out[col].map(lambda v: f"{v:,.2f}" if isinstance(v, (int, float)) and pd.notna(v) else "")
+    return out
+
+
+def load_tw_sheet_values() -> dict[str, float]:
+    """總帳（2025Jenny-總帳）「台股」分頁 A/B 欄，用分頁名稱讀（gviz CSV）。"""
+    import csv
+    import io
+    from urllib.parse import quote
+
+    import requests
+    from invest_app.core import MAIN_GOOGLE_SHEET_ID
+    url = (f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv"
+           f"&sheet={quote('台股')}&range=A:B")
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    return sheet_name_values(list(csv.reader(io.StringIO(response.text))))
+
+
 def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
     import streamlit as st
     from invest_app.core import OVERVIEW_SHEET_GID, html_table, load_sheet_grid, money
@@ -152,6 +218,16 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
         if abs(rest) >= TOLERANCE:
             st.caption(f"以上分類合計 {explained:+,.0f}，還有 {rest:+,.0f} 對不到分類（總覽 B1 公式或其他列）。")
         for label in diff["分類"]:
+            if label.lower().startswith("台股"):
+                try:
+                    stocks = tw_stock_diff(load_tw_sheet_values(), enriched)
+                except Exception as exc:
+                    stocks = pd.DataFrame()
+                    st.caption(f"讀不到總帳台股分頁：{exc}")
+                if not stocks.empty:
+                    st.markdown(f"**{label}：差在這 {len(stocks)} 檔**（總帳台股分頁 A/B 欄 vs App；差額＝App−總帳）")
+                    st.markdown(html_table(stocks, ["總帳市值", "App 市值", "差額", "股數"]), unsafe_allow_html=True)
+                    continue
             part = detail(label, enriched)
             if part.empty:
                 continue
