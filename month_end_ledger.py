@@ -145,7 +145,7 @@ def first_weekday(month, closed=()):
     return day
 
 
-def cell_date(value):
+def cell_date(value, strict=False):
     """Sheet date: serial number (unformatted read) or 'YYYY/MM/DD' text."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return date(1899, 12, 30) + timedelta(days=int(value)) if 30000 < value < 80000 else None
@@ -155,8 +155,10 @@ def cell_date(value):
         return None
     try:
         return date(int(match[1]), int(match[2]), int(match[3]))
-    except ValueError:   # 例如 2026/11/31：不是有效日期，當成不是月份欄（印警告），不要讓整支程式停掉
-        print(f"WARN 標題「{text}」不是有效日期，略過這欄")
+    except ValueError:   # 例如 2026/11/31：不是有效日期
+        if strict:
+            raise
+        print(f"WARN「{text}」不是有效日期，略過")
         return None
 
 
@@ -438,7 +440,11 @@ def month_columns(row1):
     """{(year, month): 0-based column} for dated cells in a header row."""
     found = {}
     for col, value in enumerate(row1):
-        d = parse_date(value) or cell_date(value)
+        try:
+            d = parse_date(value) or cell_date(value, strict=True)
+        except ValueError:
+            print(f"WARN 第 1 列 {col_letters(col)} 欄「{value}」不是有效日期，略過這欄")
+            continue
         if d and (d.year, d.month) not in found:
             found[(d.year, d.month)] = col
     return found
