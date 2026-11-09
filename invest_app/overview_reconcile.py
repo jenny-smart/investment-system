@@ -181,8 +181,7 @@ def tw_stock_diff(sheet_values: dict[str, float], df: pd.DataFrame) -> pd.DataFr
 
 STOCK_LEDGER_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"   # 股票總帳
 STOCK_LEDGER_GID = "0"                                               # 「台股」工作表
-LEDGER_RANGE = "C7:X600"                                             # C 代碼、D 名稱、I 股數、J 市價、U:X 持有勾選
-HOLD_FLAG_COLS = range(18, 22)                                       # U:X 相對 C 欄的位置
+LEDGER_RANGE = "C7:J600"                                             # C 代碼、D 名稱、I 股數、J 市價
 
 
 def _code(value: Any) -> str:
@@ -192,14 +191,13 @@ def _code(value: Any) -> str:
 def ledger_stocks(rows: list[list[Any]]) -> dict[str, dict[str, Any]]:
     """股票總帳台股工作表 C7:X → {代碼: {"units": I 欄合計, "price": J 欄, "name": D 欄}}。
 
-    只算 U:X 任一欄是 TRUE 的列（目前持有）；沒有任何勾選的列是已賣出或不列入，不比對。
+    同一代號所有列的 I 欄全部加總，跟總覽「台股total」同一基準。
+    2026-11-09：拿掉「U:X 有勾才算」—— U:X 是分帳勾選，不是持有與否；
+    例如元大金 Jenny2 那列 693 股 U:X 都沒勾，但總覽台股total 有算，排除後會誤報股數不同。
     """
     out: dict[str, dict[str, Any]] = {}
     for row in rows:
         if len(row) < 8:
-            continue
-        if len(row) > HOLD_FLAG_COLS.start and not any(
-                str(row[i]).strip().upper() == "TRUE" for i in HOLD_FLAG_COLS if i < len(row)):
             continue
         code = _code(row[0])
         units, price = _num(row[6]), _num(row[7])
@@ -506,7 +504,7 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
         if tables:
             merged = pd.concat(tables, ignore_index=True)
             st.markdown(f"**逐檔比對：差在這 {len(merged)} 檔**（總帳 vs App；差額＝App−總帳；"
-                        "台股用代號對股票總帳台股工作表 U:X 有勾的列，I 股數 × J 價格；美股／基金看總覽）")
+                        "台股用代號對股票總帳台股工作表，I 股數 × J 價格；美股／基金看總覽）")
             st.markdown(html_table(merged, UNIFIED_NUMBERS), unsafe_allow_html=True)
         for note in notes:
             st.caption(note)
