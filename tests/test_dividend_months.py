@@ -73,8 +73,42 @@ class PlanTests(unittest.TestCase):
     def test_dividend_month(self):
         self.assertEqual(dividend_month({"pay_date": "2026/11/10"}), (2026, 10))
         self.assertEqual(dividend_month({"pay_date": "2027-01-08"}), (2026, 12))
-        self.assertEqual(dividend_month({"ex_date": "2026/10/31"}), (2026, 10))
+        # 沒有發放日、沒有歷史發放天數 → 不知道，不勾
+        self.assertIsNone(dividend_month({"ex_date": "2026/11/01"}))
         self.assertIsNone(dividend_month({}))
+        # 有歷史天數：11/01 除息＋6 天＝11/07 發放 → 10 月配息
+        lags = {("x", "ZAR"): 6}
+        self.assertEqual(dividend_month({"fund_name": "x", "currency": "ZAR", "ex_date": "2026/11/01"}, lags),
+                         (2026, 10))
+
+    def test_never_ticks_current_month(self):
+        name = "東方匯理新興市場債券U南非幣（月配）"
+        records = [
+            self.rec(name, "台新基金", "ZAR", "2026/12/07"),   # 發放日在 12 月 → 11 月配息，本月不能勾
+            dict(self.rec(name, "台新基金", "ZAR", ""), ex_date="2026/11/30"),
+        ]
+        updates, _ = plan(grid({("2026/11", 12): "FALSE"}), records, self.TODAY)
+        self.assertEqual(updates, [])
+        # 本月格子已被勾的，排程也不去動它（由你自己處理）
+        updates, _ = plan(grid({("2026/11", 12): "TRUE"}), records, self.TODAY)
+        self.assertEqual(updates, [])
+
+    def test_missing_pay_date_uses_fund_history(self):
+        name = "東方匯理新興市場債券U南非幣（月配）"
+        records = [
+            dict(self.rec(name, "台新基金", "ZAR", "2026/10/07"), ex_date="2026/10/01", is_paid=True),
+            dict(self.rec(name, "台新基金", "ZAR", ""), ex_date="2026/11/01"),   # 推算 11/07 發放 → 10 月
+        ]
+        updates, problems = plan(grid(), records, self.TODAY)
+        self.assertEqual(problems, [])
+        self.assertEqual({u["cell"]: u["value"] for u in updates}, {"M6": True})
+
+    def test_missing_pay_date_without_history_leaves_column_alone(self):
+        name = "東方匯理新興市場債券U南非幣（月配）"
+        records = [dict(self.rec(name, "台新基金", "ZAR", ""), ex_date="2026/11/01")]
+        updates, problems = plan(grid({("2026/10", 12): "TRUE"}), records, self.TODAY)
+        self.assertEqual(updates, [])   # 不勾也不取消原本的勾
+        self.assertEqual(len(problems), 1)
 
     def test_cancelled_confirmation_unticks_but_old_months_stay(self):
         g = grid({("2026/10", 1): "TRUE", ("2026/08", 2): "TRUE"})
