@@ -98,7 +98,7 @@ class TwLedgerTests(unittest.TestCase):
                 ["1560", "", "", "", "", "", 1000, 650.0], ["1560", "", "", "", "", "", 1000, 650.0],
                 ["9999", "", "", "", "", "", 500, 10.0], ["代碼", "", "", "", "", "", "股數", "市價"]]
         ledger = ledger_stocks(rows)
-        self.assertEqual(ledger["1560"], {"units": 2000.0, "price": 650.0})
+        self.assertEqual(ledger["1560"], {"units": 2000.0, "price": 650.0, "name": ""})
         df = pd.DataFrame([
             {"asset_type": "台股", "ticker": "2317.TW", "name": "鴻海", "units": 10000, "即時價格/淨值": 224.5, "台幣市值": 2245000},
             {"asset_type": "台股", "ticker": "6505.TW", "name": "台塑化", "units": 1100, "即時價格/淨值": 85.7, "台幣市值": 94270},
@@ -109,6 +109,24 @@ class TwLedgerTests(unittest.TestCase):
         self.assertIn("股數不同", out.loc["6505", "差在哪裡"])
         self.assertNotIn("1560", out.index)
         self.assertEqual(out.loc["9999", "差在哪裡"], "App 沒有這檔持倉")
+
+
+    def test_only_held_rows_and_text_codes(self):
+        from invest_app.overview_reconcile import ledger_stocks, tw_ledger_diff
+        blank = [""] * 10
+        def row(code, name, units, price, *flags):
+            return [code, name, "", "", "", "", units, price, *blank, *flags]
+        rows = [row("0050", "元大台灣50", "20,000", "98.80", "TRUE", "FALSE", "FALSE", "FALSE"),
+                row("2883B", "凱基金乙特", "3,004", "8.45", "FALSE", "FALSE", "TRUE", "FALSE"),
+                row("2547", "日勝生", "1,000", "9.33", "FALSE", "FALSE", "FALSE", "FALSE")]   # 沒勾：不比對
+        ledger = ledger_stocks(rows)
+        self.assertEqual(set(ledger), {"0050", "2883B"})
+        self.assertEqual(ledger["0050"]["units"], 20000.0)
+        df = pd.DataFrame([
+            {"asset_type": "台股", "ticker": "0050.TW", "name": "元大台灣50", "units": 20000, "即時價格/淨值": 98.8, "台幣市值": 1976000},
+            {"asset_type": "台股", "ticker": "2883B", "name": "凱基金乙特", "units": 3004, "即時價格/淨值": 8.45, "台幣市值": 25384},
+        ])
+        self.assertTrue(tw_ledger_diff(ledger, df).empty)
 
 
 class UnifyTests(unittest.TestCase):
