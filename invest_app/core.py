@@ -29,7 +29,7 @@ except Exception:
 from asset_summary import sheet_other_assets
 
 
-APP_VERSION = "2026-10-14-v117-future-dividend-estimates"
+APP_VERSION = "2026-11-09-v118-tw-limit-price"
 
 
 GAS_FUND_NAV_URL = "https://script.google.com/macros/s/AKfycbx2tregTV1NlYpUkOvy9UpRu3YDMP5r9wQEQuiB7qj_Y9HGa8yON4isAUIke30XF23p/exec"
@@ -642,6 +642,38 @@ def tw_stock_plain_code(ticker: str) -> str:
     return ticker.replace(".TW", "").replace(".TWO", "")
 
 
+def mis_number(q: dict[str, Any], key: str) -> float | None:
+    """MIS 欄位轉數字；b / a 是 '12.30_12.25_' 這種多檔價位，取第一個；'-' 或空白回 None。"""
+    raw = normalize_text(q.get(key, ""))
+    if not raw or raw == "-":
+        return None
+    val = to_float(raw.split("_")[0].replace(",", ""))
+    return float(val) if val is not None and 0 < val < 100000 else None
+
+
+def pick_mis_price(q: dict[str, Any]) -> tuple[float | None, str]:
+    """MIS 報價取價順序：最新成交 z → 最近成交 pz → 漲跌停鎖死（買價＝漲停 u／賣價＝跌停 w）→ 買賣價。
+
+    2026-11-09：漲停鎖死時 z 常是 '-'，原本退到昨收 y，App 顯示成昨天收盤（例：中砂 669，實際漲停 735）。
+    昨收不在這裡用，抓不到時交給 Yahoo 盤中價，最後才用昨收。
+    """
+    price = mis_number(q, "z")
+    if price is not None:
+        return price, "TWSE即時"
+    price = mis_number(q, "pz")
+    if price is not None:
+        return price, "TWSE最近成交"
+    bid, ask = mis_number(q, "b"), mis_number(q, "a")
+    up, down = mis_number(q, "u"), mis_number(q, "w")
+    if up is not None and bid is not None and abs(bid - up) < 1e-9:
+        return up, "TWSE漲停"
+    if down is not None and ask is not None and abs(ask - down) < 1e-9:
+        return down, "TWSE跌停"
+    if bid is not None or ask is not None:
+        return (bid if bid is not None else ask), "TWSE買賣價備援"
+    return None, ""
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
     """
@@ -677,26 +709,8 @@ def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
             return {"price": None, "date": "—", "time": "—", "status": f"TWSE無資料:{ex_ch}"}
         q = items[0]
 
-        def pick_number(*keys: str) -> float | None:
-            for key in keys:
-                raw = normalize_text(q.get(key, ""))
-                if not raw or raw == "-":
-                    continue
-                # b / a 可能是 '12.30_'，取第一個價位
-                raw = raw.split("_")[0].replace(",", "")
-                val = to_float(raw)
-                if val is not None and 0 < val < 100000:
-                    return float(val)
-            return None
-
-        price = pick_number("z")
-        source_note = "TWSE即時"
-        if price is None:
-            price = pick_number("b", "a")
-            source_note = "TWSE買賣價備援"
-        if price is None:
-            price = pick_number("y")
-            source_note = "TWSE昨收備援"
+        price, source_note = pick_mis_price(q)
+        prev_close = mis_number(q, "y")
 
         raw_date = normalize_text(q.get("d", ""))
         raw_time = normalize_text(q.get("t", ""))
@@ -705,14 +719,16 @@ def fetch_twse_realtime_quote(ticker: str) -> dict[str, Any]:
             date_str = f"{int(raw_date[4:6])}/{int(raw_date[6:8]):02d}"
 
         if price is None:
-            return {"price": None, "date": date_str, "time": raw_time or "—", "status": f"TWSE無價格:{ex_ch}"}
+            # 沒有成交價也沒有買賣價（例如漲跌停鎖死）：不在這裡用昨收，交給 Yahoo 抓盤中價
+            return {"price": None, "prev_close": prev_close, "date": date_str, "time": raw_time or "—",
+                    "status": f"TWSE無成交價:{ex_ch}"}
 
-        return {"price": price, "date": date_str, "time": raw_time or "—", "status": source_note}
+        return {"price": price, "prev_close": prev_close, "date": date_str, "time": raw_time or "—",
+                "status": source_note}
     except Exception as e:
         return {"price": None, "date": "—", "time": "—", "status": f"TWSE錯誤:{str(e)[:40]}"}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def tw_market_open(now: datetime | None = None) -> bool:
     """台股盤中（週一到週五 09:00–13:30）；盤後、週末用正式收盤價，不用即時買賣價。"""
     now = now or tw_now()
@@ -762,6 +778,9 @@ def fetch_stock_price(ticker: str, asset_type: str = "") -> tuple[float | None, 
         g_price, g_status = fetch_google_finance_price(ticker, TW_STOCK_EXCHANGES.get(ticker))
         if g_price is not None:
             return g_price, "Google備援"
+
+        if tw_quote.get("prev_close") is not None:
+            return float(tw_quote["prev_close"]), "TWSE昨收備援"
 
         return None, f"Yahoo:{y_status}; TWSE:{tw_quote.get('status')}"
 
