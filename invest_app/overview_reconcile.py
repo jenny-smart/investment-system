@@ -181,23 +181,36 @@ def tw_stock_diff(sheet_values: dict[str, float], df: pd.DataFrame) -> pd.DataFr
 
 STOCK_LEDGER_ID = "17HPytZKOPR_9Od_wor-xEx9kpccJlPS2v6B0Dz6MRYc"   # 股票總帳
 STOCK_LEDGER_GID = "0"                                               # 「台股」工作表
-LEDGER_RANGE = "C7:J600"                                             # C 代碼、I 股數、J 市價
+LEDGER_RANGE = "C7:X600"                                             # C 代碼、D 名稱、I 股數、J 市價、U:X 持有勾選
+HOLD_FLAG_COLS = range(18, 22)                                       # U:X 相對 C 欄的位置
 
 
-def ledger_stocks(rows: list[list[Any]]) -> dict[str, dict[str, float]]:
-    """股票總帳台股工作表 C7:J → {代碼: {"units": I 欄合計, "price": J 欄}}。"""
-    out: dict[str, dict[str, float]] = {}
+def _code(value: Any) -> str:
+    return re.sub(r"\.(TW|TWO)$", "", str(value or "").strip().upper())
+
+
+def ledger_stocks(rows: list[list[Any]]) -> dict[str, dict[str, Any]]:
+    """股票總帳台股工作表 C7:X → {代碼: {"units": I 欄合計, "price": J 欄, "name": D 欄}}。
+
+    只算 U:X 任一欄是 TRUE 的列（目前持有）；沒有任何勾選的列是已賣出或不列入，不比對。
+    """
+    out: dict[str, dict[str, Any]] = {}
     for row in rows:
         if len(row) < 8:
             continue
-        code = re.sub(r"\.(TW|TWO)$", "", str(row[0]).strip().upper())
+        if len(row) > HOLD_FLAG_COLS.start and not any(
+                str(row[i]).strip().upper() == "TRUE" for i in HOLD_FLAG_COLS if i < len(row)):
+            continue
+        code = _code(row[0])
         units, price = _num(row[6]), _num(row[7])
         if not re.fullmatch(r"[0-9]{4,6}[A-Z]?", code) or units is None:
             continue
-        item = out.setdefault(code, {"units": 0.0, "price": 0.0})
+        item = out.setdefault(code, {"units": 0.0, "price": 0.0, "name": str(row[1]).strip()})
         item["units"] += units
         if price:
             item["price"] = price
+        if not item["name"]:
+            item["name"] = str(row[1]).strip()
     return out
 
 
@@ -206,7 +219,7 @@ def tw_ledger_diff(ledger: dict[str, dict[str, float]], df: pd.DataFrame) -> pd.
     tw = df[df["asset_type"].astype(str) == "台股"].copy()
     if tw.empty or not ledger:
         return pd.DataFrame()
-    tw["_code"] = tw["ticker"].astype(str).str.upper().str.replace(r"\.(TW|TWO)$", "", regex=True)
+    tw["_code"] = tw["ticker"].map(_code)
     tw["units"] = pd.to_numeric(tw["units"], errors="coerce").fillna(0)
     tw["台幣市值"] = pd.to_numeric(tw["台幣市值"], errors="coerce").fillna(0)
     rows = []
@@ -236,7 +249,7 @@ def tw_ledger_diff(ledger: dict[str, dict[str, float]], df: pd.DataFrame) -> pd.
     app_codes = set(tw["_code"])
     for code, sh in ledger.items():
         if code not in app_codes and sh["units"] > 0:
-            rows.append({"名稱": "", "代號": code, "總帳股數": sh["units"], "App 股數": None, "總帳市價": sh["price"],
+            rows.append({"名稱": sh.get("name", ""), "代號": code, "總帳股數": sh["units"], "App 股數": None, "總帳市價": sh["price"],
                          "App 價格": None, "總帳市值": sh["units"] * sh["price"], "App 市值": None, "差額": None,
                          "差在哪裡": "App 沒有這檔持倉"})
     out = pd.DataFrame(rows)
@@ -246,7 +259,7 @@ def tw_ledger_diff(ledger: dict[str, dict[str, float]], df: pd.DataFrame) -> pd.
     return out.sort_values("_abs", ascending=False).drop(columns="_abs").reset_index(drop=True)
 
 
-UNIFIED = ["分類", "名稱", "總帳價格／淨值", "App 價格／淨值", "總帳匯率", "App 匯率", "總帳股數／單位",
+UNIFIED = ["分類", "代號", "名稱", "總帳價格／淨值", "App 價格／淨值", "總帳匯率", "App 匯率", "總帳股數／單位",
            "App 股數／單位", "總帳市值", "App 市值", "差額", "差在哪裡"]
 UNIFIED_NUMBERS = {"總帳價格／淨值": 4, "App 價格／淨值": 4, "總帳匯率": 4, "App 匯率": 4,
                    "總帳股數／單位": 4, "App 股數／單位": 4, "總帳市值": 0, "App 市值": 0, "差額": 0}
@@ -259,6 +272,7 @@ def unify(label: str, table: pd.DataFrame) -> pd.DataFrame:
     pick = (lambda *names: next((table[n] for n in names if n in table), pd.Series([None] * len(table))))
     out = pd.DataFrame({
         "分類": label,
+        "代號": pick("代號"),
         "名稱": pick("名稱"),
         "總帳價格／淨值": pick("總帳市價", "總覽淨值"),
         "App 價格／淨值": pick("App 價格", "App 淨值"),
@@ -276,15 +290,20 @@ def unify(label: str, table: pd.DataFrame) -> pd.DataFrame:
     return out[UNIFIED]
 
 
-def load_tw_ledger() -> dict[str, dict[str, float]]:
-    """讀股票總帳「台股」工作表 C7:J（需要「知道連結的人可檢視」）。"""
+def load_tw_ledger() -> dict[str, dict[str, Any]]:
+    """讀股票總帳「台股」工作表 C7:X（需要「知道連結的人可檢視」）。
+
+    用 CSV 匯出（畫面顯示文字），不用 gviz：gviz 會把 C 欄當數字欄，0050 變 50、006208 變 6208，
+    2883B、00740B 這類有英文字的代號直接變空白，造成整批對不到。
+    """
     import csv
     import io
+    from datetime import datetime
 
     import requests
-    response = requests.get(f"https://docs.google.com/spreadsheets/d/{STOCK_LEDGER_ID}/gviz/tq",
-                            params={"tqx": "out:csv", "gid": STOCK_LEDGER_GID, "range": LEDGER_RANGE,
-                                    "headers": "0", "tq": "options no_format"}, timeout=30)
+    response = requests.get(f"https://docs.google.com/spreadsheets/d/{STOCK_LEDGER_ID}/export",
+                            params={"format": "csv", "gid": STOCK_LEDGER_GID, "range": LEDGER_RANGE,
+                                    "t": int(datetime.now().timestamp())}, timeout=30)
     response.raise_for_status()
     if "<html" in response.text[:200].lower():
         raise RuntimeError("股票總帳沒有開放「知道連結的人可檢視」，App 讀不到")
@@ -487,7 +506,7 @@ def render(enriched: pd.DataFrame, other: dict[str, Any] | None) -> None:
         if tables:
             merged = pd.concat(tables, ignore_index=True)
             st.markdown(f"**逐檔比對：差在這 {len(merged)} 檔**（總帳 vs App；差額＝App−總帳；"
-                        "台股看股票總帳台股工作表 I 股數 × J 價格，美股／基金看總覽）")
+                        "台股用代號對股票總帳台股工作表 U:X 有勾的列，I 股數 × J 價格；美股／基金看總覽）")
             st.markdown(html_table(merged, UNIFIED_NUMBERS), unsafe_allow_html=True)
         for note in notes:
             st.caption(note)
