@@ -3,7 +3,9 @@
 App 配息記錄頁按「💾 套用確認狀態」只寫進 Supabase；這支由 fund-nav 排程（每 10 分鐘）一起跑：
 讀 fund_dividends、dividend_log 裡 is_paid 的記錄，依發放日期的月份、基金對到「配息月份」的格子，
 列＝配息月份（發放日的前一個月：11 月發放的勾 2026/10）。
-從 SYNC_FROM（2026/10）起到本月：有已確認記錄就勾 TRUE，取消確認就改回 FALSE；更早的月份不動。
+從 SYNC_FROM（2026/10）起到「上個月」：有已確認記錄就勾 TRUE，取消確認就改回 FALSE；
+更早的月份不動，本月和之後的月份也不動（本月領的是上個月的配息，本月的格子永遠不會由排程勾）。
+沒有發放日的記錄：用同一檔基金過去「除息日→發放日」的天數推算發放日；推不出來就不勾、那一欄不動並提醒。
 
 分頁格式：第 1 列平台（基富通-台、渣打-美金…）、第 2 列基金名稱、第 3 列配息日，A 欄 YYYY/MM。
 基金對欄：幣別相同、級別（A／U／Y）相同的欄裡，名稱最像的那一欄（東方匯理＝鋒裕匯理），平台相同加分；
@@ -114,14 +116,44 @@ def _year_month(text):
     return (int(m[1]), int(m[2])) if m else None
 
 
-def dividend_month(record):
+def _date(text):
+    m = re.match(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})", str(text or ""))
+    try:
+        return date(int(m[1]), int(m[2]), int(m[3])) if m else None
+    except ValueError:
+        return None
+
+
+def _previous(year, month):
+    return (year - 1, 12) if month == 1 else (year, month - 1)
+
+
+def fund_key(record):
+    return (norm_name(record.get("fund_name")), str(record.get("currency") or "").upper())
+
+
+def pay_lags(records):
+    """{基金: 除息日→發放日天數}，取這檔基金所有同時有兩個日期的記錄的中位數。"""
+    lags = {}
+    for rec in records:
+        ex, pay = _date(rec.get("ex_date")), _date(rec.get("pay_date"))
+        if ex and pay and 0 <= (pay - ex).days <= 45:
+            lags.setdefault(fund_key(rec), []).append((pay - ex).days)
+    return {k: sorted(v)[len(v) // 2] for k, v in lags.items()}
+
+
+def dividend_month(record, lags=None):
     """配息月份＝發放日的前一個月（11/10 發的是 10 月的配息 → 勾 2026/10）。
-    沒有發放日時用除息日的月份（除息在配息當月）。"""
+    沒有發放日：除息日＋這檔基金過去的發放天數推算發放日；沒有依據就回傳 None（不勾）。"""
     paid = _year_month(record.get("pay_date"))
     if paid:
-        year, month = paid
-        return (year - 1, 12) if month == 1 else (year, month - 1)
-    return _year_month(record.get("ex_date"))
+        return _previous(*paid)
+    ex = _date(record.get("ex_date"))
+    lag = (lags or {}).get(fund_key(record))
+    if ex is None or lag is None:
+        return None
+    pay = ex + timedelta(days=lag)
+    return _previous(pay.year, pay.month)
 
 
 pay_month = dividend_month  # 舊名稱
@@ -135,13 +167,23 @@ def plan(grid, records, today):
     """Returns (updates [{"cell", "value", "old", "why"}], problems)."""
     columns = sheet_columns(grid)
     rows = month_rows(grid)
-    this = (today.year, today.month)
-    want, problems = {}, []
+    last = _previous(today.year, today.month)  # 最多勾到上個月
+    lags = pay_lags(records)
+    want, problems, frozen = {}, [], set()
     for rec in records:
         if not rec.get("is_paid"):
             continue
-        month = dividend_month(rec)
-        if not month or month < SYNC_FROM or month > this:
+        month = dividend_month(rec, lags)
+        if month is None:
+            ex = _year_month(rec.get("ex_date"))
+            if ex and ex >= SYNC_FROM:
+                col = match_column(columns, rec.get("platform"), rec.get("currency"), rec.get("fund_name"))
+                if col is not None:
+                    frozen.add(col)  # 不知道是哪個月，這一欄先都不動
+                problems.append(f"{rec.get('platform')} {rec.get('fund_name')} 除息 {rec.get('ex_date')}："
+                                "已確認但沒有發放日、也推算不出來，配息月份不勾")
+            continue
+        if month < SYNC_FROM or month > last:
             continue
         col = match_column(columns, rec.get("platform"), rec.get("currency"), rec.get("fund_name"))
         if col is None:
@@ -154,9 +196,11 @@ def plan(grid, records, today):
         want.setdefault((rows[month], col), []).append(str(rec.get("fund_name") or ""))
     updates = []
     for month, r in sorted(rows.items()):
-        if month < SYNC_FROM or month > this:
+        if month < SYNC_FROM or month > last:
             continue
         for col, _plat, _cur, name in columns:
+            if col in frozen:
+                continue
             line = grid[r - 1]
             current = line[col] if col < len(line) else ""
             paid = (r, col) in want
