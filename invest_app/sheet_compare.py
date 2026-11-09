@@ -179,8 +179,7 @@ def _ledger_candidates(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
     for idx, row in records.iterrows():
         if bool(row.get("_確認前")) or row.get("_確認前") in ("True", "true", 1):
             continue
-        when = row.get("_sort_date")
-        if not when or (getattr(when, "year", None), getattr(when, "month", None)) != month:
+        if _record_month(row) != month:
             continue
         for label, amount in filled.items():
             if _matches_rule(row.get("平台"), row.get("幣別"), row.get("基金名稱"), MONTHLY_ESTIMATE_RULES[label]):
@@ -192,6 +191,49 @@ def _ledger_candidates(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
 def amount_tolerance(amount: float) -> float:
     """總帳台幣 vs 記錄原幣×總覽匯率：匯率小數位不同會差幾塊錢，容許 0.2%（至少 2 元）。"""
     return max(2.0, abs(amount) * 0.002)
+
+
+def _record_month(row) -> tuple[int, int] | None:
+    """入帳月份：有 _ledger_date（發放日，或除息日＋配息月份表的每月發放日推算）就用它，沒有才用 _sort_date。"""
+    when = row.get("_ledger_date")
+    if when is None or (isinstance(when, float) and when != when) or getattr(when, "year", 1) <= 1:
+        when = row.get("_sort_date")
+    if not when or getattr(when, "year", 1) <= 1:
+        return None
+    return (getattr(when, "year", None), getattr(when, "month", None))
+
+
+def _best_choice(amount: float, options: dict[int, list[float]]) -> tuple[dict[int, int], float]:
+    """每筆記錄可以不選、或選它其中一個金額（例：除息日單位數 vs 現在單位數），找加總最接近總帳的組合。
+
+    回傳 ({記錄 index: 選第幾個金額}, 合計)。筆數相同時取第一個金額（現在的估算）。"""
+    idxs = list(options)
+    combos = 1
+    for i in idxs:
+        combos *= len(options[i]) + 1
+    if combos > 600000:
+        return {i: 0 for i in idxs}, sum(options[i][0] for i in idxs)
+    best: tuple[float, int, dict[int, int], float] | None = None
+
+    def walk(pos: int, chosen: dict[int, int], total: float) -> None:
+        nonlocal best
+        if pos == len(idxs):
+            if not chosen:
+                return
+            gap = abs(total - amount)
+            alt = sum(chosen.values())
+            if best is None or gap < best[0] - 1e-9 or (abs(gap - best[0]) <= 1e-9 and alt < best[1]):
+                best = (gap, alt, dict(chosen), total)
+            return
+        i = idxs[pos]
+        walk(pos + 1, chosen, total)
+        for k, value in enumerate(options[i]):
+            chosen[i] = k
+            walk(pos + 1, chosen, total + value)
+            del chosen[i]
+
+    walk(0, {}, 0.0)
+    return (best[2], best[3]) if best else ({}, 0.0)
 
 
 def _best_subset(amount: float, values: dict[int, float]) -> tuple[list[int], float]:
@@ -210,11 +252,14 @@ def _best_subset(amount: float, values: dict[int, float]) -> tuple[list[int], fl
 
 
 def ledger_confirm_plan(records: pd.DataFrame, ledger_rows: list[dict[str, Any]], month: tuple[int, int],
-                        twd_of: Callable[[int], float]) -> list[dict[str, Any]]:
+                        twd_of: Callable[[int], float],
+                        options_of: Callable[[int], list[float]] | None = None) -> list[dict[str, Any]]:
     """每一列總帳金額 → 哪幾筆記錄加起來對得上（例：台新-南非兩筆待確認、只入帳一筆）。
 
-    回傳 [{"label", "amount", "candidates", "matched", "matched_twd", "ok"}]；
-    ok＝最接近的組合在容許誤差內，只有 ok 的 matched 會預先選好。
+    同一平台同一幣別可能有好幾筆；每筆待確認記錄可以有多個候選金額（options_of：第一個是現在的估算，
+    其餘例如「上次入帳的單位數」× 每單位配息），挑加總最接近總帳的組合。
+    回傳 [{"label", "amount", "candidates", "matched", "matched_twd", "choice", "ok"}]；
+    choice＝{記錄 index: 用第幾個候選金額}；ok＝最接近的組合在容許誤差內，只有 ok 的 matched 會預先選好。
     """
     plan = []
     confirmed = _ledger_confirmed(records, ledger_rows, month)
@@ -225,12 +270,19 @@ def ledger_confirm_plan(records: pd.DataFrame, ledger_rows: list[dict[str, Any]]
         tolerance = amount_tolerance(float(amount))
         if remaining <= tolerance:
             plan.append({"label": label, "amount": float(amount), "candidates": idxs, "matched": [],
-                         "matched_twd": 0.0, "paid_twd": paid, "ok": abs(remaining) <= tolerance})
+                         "matched_twd": 0.0, "paid_twd": paid, "choice": {}, "ok": abs(remaining) <= tolerance})
             continue
-        values = {i: float(twd_of(i) or 0) for i in idxs}
-        matched, total = _best_subset(remaining, values)
+        options = {}
+        for i in idxs:
+            base = float(twd_of(i) or 0)
+            extra = [float(v) for v in (options_of(i) if options_of else []) or []
+                     if v and abs(float(v) - base) > 0.5]
+            options[i] = [base] + extra
+        choice, total = _best_choice(remaining, options)
+        matched = [i for i in idxs if i in choice]
         plan.append({"label": label, "amount": float(amount), "candidates": idxs, "matched": matched,
-                     "matched_twd": total, "paid_twd": paid, "ok": abs(total - remaining) <= tolerance})
+                     "matched_twd": total, "paid_twd": paid, "choice": choice,
+                     "ok": abs(total - remaining) <= tolerance})
     return plan
 
 
@@ -244,8 +296,7 @@ def _ledger_confirmed(records: pd.DataFrame, ledger_rows: list[dict[str, Any]],
     for idx, row in records.iterrows():
         if not (bool(row.get("_確認前")) or row.get("_確認前") in ("True", "true", 1)):
             continue
-        when = row.get("_sort_date")
-        if not when or (getattr(when, "year", None), getattr(when, "month", None)) != month:
+        if _record_month(row) != month:
             continue
         for label in labels:
             if _matches_rule(row.get("平台"), row.get("幣別"), row.get("基金名稱"), MONTHLY_ESTIMATE_RULES[label]):

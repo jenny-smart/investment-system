@@ -1194,13 +1194,100 @@ def ledger_plan_for(df: pd.DataFrame) -> list[dict[str, Any]]:
     # 總覽金額都是台幣，記錄原幣用總覽 R 欄匯率換算後比對
     sheet_fx = sheet_fx_rates(ledger_grid)
 
+    def rate_of(i: int) -> float | None:
+        return sheet_fx.get(normalize_text(df.loc[i].get("幣別", "")).upper())
+
     def twd_of(i: int) -> float:
         rec = df.loc[i]
-        rate = sheet_fx.get(normalize_text(rec.get("幣別", "")).upper())
+        rate = rate_of(i)
         original = normalize_number(rec.get("實際配息原幣", 0), 0)
         return original * rate if rate else normalize_number(rec.get("_實際配息台幣", 0), 0)
 
-    return ledger_confirm_plan(df, ledger_rows, (now.year, now.month), twd_of)
+    alt_units = _last_confirmed_units(df)
+
+    def options_of(i: int) -> list[float]:
+        """待確認記錄的第二個候選金額：上次入帳的單位數 × 每單位配息（之後才買的單位數，除息日還沒有）。"""
+        units = alt_units.get(i)
+        div = normalize_number(df.loc[i].get("每單位配息", 0), 0)
+        rate = rate_of(i)
+        return [units * div * rate] if units and div > 0 and rate else []
+
+    with_dates = df.copy()
+    with_dates["_ledger_date"] = _ledger_dates(df)
+    plan = ledger_confirm_plan(with_dates, ledger_rows, (now.year, now.month), twd_of, options_of)
+    for p in plan:
+        p["units"] = {i: alt_units[i] for i, k in p.get("choice", {}).items() if k == 1 and i in alt_units}
+    return plan
+
+
+def _fund_group_key(row: pd.Series) -> tuple[str, str, str]:
+    from sync_dividend_months import norm_name
+    return (normalize_text(row.get("_platform", row.get("平台", ""))),
+            normalize_text(row.get("_currency", row.get("幣別", ""))).upper(),
+            norm_name(row.get("_fund_name", row.get("基金名稱", ""))))
+
+
+def _last_confirmed_units(df: pd.DataFrame) -> dict[int, float]:
+    """{待確認記錄 index: 同平台同幣別同基金、最近一筆已確認記錄的配息單位數}（跟現在不同才列）。"""
+    latest: dict[tuple[str, str, str], tuple[Any, float]] = {}
+    for _, row in df.iterrows():
+        if not normalize_bool(row.get("_確認前", False), False):
+            continue
+        units = normalize_number(row.get("配息單位數", 0), 0)
+        when = row.get("_sort_date")
+        key = _fund_group_key(row)
+        if units > 0 and (key not in latest or when > latest[key][0]):
+            latest[key] = (when, units)
+    out: dict[int, float] = {}
+    for idx, row in df.iterrows():
+        if normalize_bool(row.get("_確認前", False), False):
+            continue
+        hit = latest.get(_fund_group_key(row))
+        units = normalize_number(row.get("配息單位數", 0), 0)
+        if hit and abs(hit[1] - units) > 1e-4:
+            out[int(idx)] = hit[1]
+    return out
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_pay_day_grid() -> list[list[Any]]:
+    """股票總帳「配息月份」第 1–3 列（平台、基金名稱、每月發放日）。"""
+    from invest_app.core import FUND_TRADE_SHEET_ID, gviz_values
+    return gviz_values(FUND_TRADE_SHEET_ID, "2033264385", "A1:Z3")
+
+
+def _ledger_dates(df: pd.DataFrame) -> list[Any]:
+    """每筆記錄的入帳日：發放日；沒有就除息日之後第一個「每月 N 日」（配息月份第 3 列），再不行用同基金過去的天數。"""
+    from sync_dividend_months import estimated_pay_date, match_column, pay_days, pay_lags, sheet_columns
+    try:
+        grid = _load_pay_day_grid()
+    except Exception:
+        grid = []
+    columns, days = sheet_columns(grid), pay_days(grid)
+    recs = [{"fund_name": r.get("_fund_name", r.get("基金名稱", "")), "currency": r.get("幣別", ""),
+             "platform": r.get("_platform", r.get("平台", "")),
+             "ex_date": r.get("_ex_date", ""), "pay_date": r.get("_pay_date", "")} for _, r in df.iterrows()]
+    lags = pay_lags(recs)
+    out = []
+    for rec in recs:
+        col = match_column(columns, rec["platform"], rec["currency"], rec["fund_name"]) if columns else None
+        when = estimated_pay_date(rec, days.get(col) if col is not None else None, lags)
+        out.append(pd.Timestamp(when) if when else None)
+    return out
+
+
+def apply_plan_units(df: pd.DataFrame, plan: list[dict[str, Any]], indexes: set[int] | None = None) -> None:
+    """總帳對上的是「上次入帳單位數」那個金額 → 確認前把這筆的配息單位數、原幣金額改成那個單位數。"""
+    for p in plan:
+        if not p.get("ok"):
+            continue
+        for i, units in (p.get("units") or {}).items():
+            if indexes is not None and i not in indexes:
+                continue
+            div = normalize_number(df.loc[i].get("每單位配息", 0), 0)
+            df.loc[i, "配息單位數"] = units
+            df.loc[i, "實際配息原幣"] = units * div
+            df.loc[i, "實際配息台幣"] = None
 
 
 @st.cache_resource(show_spinner=False)
@@ -1232,6 +1319,7 @@ def auto_confirm_from_ledger(enriched_df: pd.DataFrame, force: bool = False) -> 
         pending = {int(i) for i, row in df.iterrows()
                    if not normalize_bool(row.get("_確認前", row.get("確認入帳", False)), False)}
         changes = {i: True for p in plan if p["ok"] for i in p["matched"] if i in pending}
+        apply_plan_units(df, plan, set(changes))
         state["waiting"] = sum(len(p["candidates"]) - (len(p["matched"]) if p["ok"] else 0) for p in plan)
         state["mismatch"] = [p["label"] for p in plan if not p["ok"]]
         if changes:
@@ -1281,6 +1369,8 @@ def apply_dividend_confirmations(df: pd.DataFrame, changes: dict[int, bool],
             "actual_div_amount": actual_div,
             "twd_total": round(total_amount * fx, 0) if total_amount > 0 else 0,
         }
+        if new_confirmed and units > 0:
+            payload["units_at_ex"] = units  # 對總帳時改用除息日單位數的，要一起存
         if source_table == "dividend_log_candidate":
             if not new_confirmed:
                 continue
@@ -1371,15 +1461,19 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
     # 總帳「總覽」每月加總已填本月金額的基金類別 → 對應的本月待確認記錄預先選好（仍需按套用）
     suggested: list[str] = []
     matched_ok: set[int] = set()   # 總帳金額對得上的記錄，才能直接確認（也才會勾配息月份）
+    plan_for_units: list[dict[str, Any]] = []
     try:
         plan = ledger_plan_for(df)
+        plan_for_units = plan
         index_to_label = {v: k for k, v in pending_options.items()}
         matched_ok = {i for p in plan if p["ok"] for i in p["matched"]}
         suggested = [index_to_label[i] for i in matched_ok if i in index_to_label]
         if plan:
             lines = []
             for p in plan:
-                names = "、".join(normalize_text(df.loc[i].get("基金名稱", ""))[:12] for i in p["matched"])
+                names = "、".join(normalize_text(df.loc[i].get("基金名稱", ""))[:12]
+                                  + (f"（{p['units'][i]:,.4f} 單位）" if i in p.get("units", {}) else "")
+                                  for i in p["matched"])
                 rest = len(p["candidates"]) - len(p["matched"])
                 if p["ok"]:
                     tail = f"，另 {rest} 筆還沒入帳、不選" if rest else ""
@@ -1413,6 +1507,8 @@ def render_actual_dividend_table(df: pd.DataFrame, height_cap: int = 520) -> Non
         if not changes and not recompute_submitted:
             st.info("沒有選擇需要更新的記錄。")
             return
+        if plan_for_units:
+            apply_plan_units(df, plan_for_units, {i for i, v in changes.items() if v and i in matched_ok})
         updated, warnings = apply_dividend_confirmations(df, changes, recompute_all=recompute_submitted)
         if warnings:
             st.warning("\n".join(warnings))
