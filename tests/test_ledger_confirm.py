@@ -71,6 +71,38 @@ class LedgerConfirmTests(unittest.TestCase):
         plan = ledger_confirm_plan(df, [{"項目": "配息-台新-南非", "金額": 67021}], (2026, 11), twd.get)[0]
         self.assertEqual((plan["matched"], plan["ok"]), ([1], True))
 
+    def test_taishin_zar_november(self):
+        # 2026/11 實際：東方匯理 U南非 22,423.43（已確認、沒有發放日、10/31 除息 → 11/07 入帳）
+        #               高盛 Y南非 840.89 單位 × 14 = 11,772.46（待確認；現在 986.63 單位是之後才買的）
+        rate = 1.9715
+        df = pd.DataFrame([
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "東方匯理 U南非幣", "_確認前": True,
+             "_sort_date": pd.Timestamp("2026-10-31"), "_ledger_date": pd.Timestamp("2026-11-07")},
+            {"平台": "台新基金", "幣別": "ZAR", "基金名稱": "高盛 Y南非幣對沖", "_確認前": False,
+             "_sort_date": pd.Timestamp("2026-11-08"), "_ledger_date": pd.Timestamp("2026-11-08")},
+        ])
+        twd = {0: 22423.43 * rate, 1: 986.63 * 14 * rate}
+        alt = {1: [840.89 * 14 * rate]}
+        ledger = [{"項目": "配息-台新-南非", "金額": round(34195.89 * rate)}]
+        plan = ledger_confirm_plan(df, ledger, (2026, 11), twd.get, lambda i: alt.get(i, []))[0]
+        self.assertTrue(plan["ok"])
+        self.assertEqual((plan["matched"], plan["choice"]), ([1], {1: 1}))
+        # 沒有第二個候選金額（舊算法）就對不上
+        self.assertFalse(ledger_confirm_plan(df, ledger, (2026, 11), twd.get)[0]["ok"])
+        # 只用 _sort_date（10/31）的話東方匯理不算 11 月 → 也對不上
+        old = df.drop(columns=["_ledger_date"])
+        self.assertFalse(ledger_confirm_plan(old, ledger, (2026, 11), twd.get, lambda i: alt.get(i, []))[0]["ok"])
+
+    def test_same_platform_currency_several_records(self):
+        # 同一家同幣別三筆，只入帳兩筆，其中一筆要用上次單位數
+        df = pd.DataFrame([{"平台": "基富通", "幣別": "TWD", "基金名稱": n, "_確認前": False,
+                            "_sort_date": pd.Timestamp("2026-11-10")} for n in ("富蘭克林華美", "柏瑞", "富蘭克林華美B")])
+        twd = {0: 1000.0, 1: 2000.0, 2: 3000.0}
+        alt = {1: [1500.0]}
+        plan = ledger_confirm_plan(df, [{"項目": "配息-基富通-台", "金額": 2500}], (2026, 11), twd.get,
+                                   lambda i: alt.get(i, []))[0]
+        self.assertEqual((plan["ok"], plan["matched"], plan["choice"]), (True, [0, 1], {0: 0, 1: 1}))
+
     def test_sheet_fx_rates_first_occurrence(self):
         pad = [""] * 16
         grid = [pad + ["匯率", "賣出"], pad + ["美金", "31.9614"], pad + ["南非", "1.9334"],

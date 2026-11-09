@@ -103,10 +103,29 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual({u["cell"]: u["value"] for u in updates}, {"M6": True})
 
+    def test_missing_pay_date_uses_pay_day_row(self):
+        # 第 3 列「每月7日」：10/31 除息 → 11/07 發放 → 10 月；11/01 除息 → 11/07 → 也是 10 月；11/10 除息 → 12/07 → 11 月
+        name = "東方匯理新興市場債券U南非幣（月配）"
+        for ex, cell in (("2026/10/31", "M6"), ("2026/11/01", "M6")):
+            with self.subTest(ex=ex):
+                records = [dict(self.rec(name, "台新基金", "ZAR", ""), ex_date=ex)]
+                updates, problems = plan(grid(), records, self.TODAY)
+                self.assertEqual((problems, {u["cell"]: u["value"] for u in updates}), ([], {cell: True}))
+        records = [dict(self.rec(name, "台新基金", "ZAR", ""), ex_date="2026/11/10")]
+        self.assertEqual(plan(grid(), records, date(2026, 12, 9))[0][0]["cell"], "M7")
+
+    def test_next_pay_date(self):
+        from sync_dividend_months import next_pay_date
+        self.assertEqual(next_pay_date(date(2026, 10, 31), 7), date(2026, 11, 7))
+        self.assertEqual(next_pay_date(date(2026, 11, 7), 7), date(2026, 11, 7))
+        self.assertEqual(next_pay_date(date(2026, 1, 31), 30), date(2026, 2, 28))
+
     def test_missing_pay_date_without_history_leaves_column_alone(self):
         name = "東方匯理新興市場債券U南非幣（月配）"
         records = [dict(self.rec(name, "台新基金", "ZAR", ""), ex_date="2026/11/01")]
-        updates, problems = plan(grid({("2026/10", 12): "TRUE"}), records, self.TODAY)
+        g = grid({("2026/10", 12): "TRUE"})
+        g[2] = [""] * len(g[2])   # 第 3 列沒有每月發放日
+        updates, problems = plan(g, records, self.TODAY)
         self.assertEqual(updates, [])   # 不勾也不取消原本的勾
         self.assertEqual(len(problems), 1)
 
