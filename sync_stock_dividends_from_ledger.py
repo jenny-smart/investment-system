@@ -11,7 +11,7 @@
             在 2%（至少 30 元）內 → 勾確認現金入帳、實際現金股利＝備註金額
   金額待核  有應入帳記錄但跟預估差太多 → 只列出，到 App 台股股利頁核對後手動確認
   補登      找不到記錄 → 新增一筆已入帳記錄（發放日記為該月 1 日，來源 ledger_note）
-只寫股利記錄，不動持倉「累計股利」（那欄原本就含今年，加上去會重複）。
+寫完股利記錄後，持倉「累計股利」對齊＝已入帳股利記錄合計（不是累加，所以不會重複）。
   已一致    已確認且金額相同 → 不動
   金額不同  已確認但金額不同 → 只列出，不改
   無法對應  名稱對不到股票（例如「折讓」）→ 只列出
@@ -677,6 +677,11 @@ def main(argv=None):
         print(f"\n預覽：{todo} 筆會寫入；確認無誤後用 apply 執行")
     if args.reconcile:
         reconcile(sb, records, years, args.apply)
+    else:
+        # 2026-11-13：排程（--apply）原本只寫股利記錄，持倉累計股利只有手動 --reconcile 才更新，
+        # 首頁「台股配息」一直停在舊數字。每次都把持倉累計股利對齊＝已入帳股利記錄合計。
+        _stocks, records = load_stocks_and_records(sb)
+        set_position_totals(sb, position_targets(records), args.apply)
     clean_stale_candidates(sb, records, years, args.apply)
     return 0
 

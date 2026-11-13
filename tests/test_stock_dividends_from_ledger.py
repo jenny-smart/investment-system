@@ -172,3 +172,23 @@ class PlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PositionTotalsOnScheduleTests(unittest.TestCase):
+    def test_apply_without_reconcile_syncs_position_totals(self):
+        from unittest import mock
+        import sync_stock_dividends_from_ledger as m
+        records = [{"ticker": "0056.TW", "is_cash_received": True, "actual_cash_total": 8590, "currency": "TWD"},
+                   {"ticker": "0056.TW", "is_cash_received": False, "estimated_cash_total": 999, "currency": "TWD"}]
+        with mock.patch.object(m, "supabase", return_value=object()), \
+                mock.patch.object(m, "scan_expected"), \
+                mock.patch.object(m, "load_stocks_and_records", return_value=([], records)), \
+                mock.patch.object(m, "read_ledger", side_effect=RuntimeError("skip")), \
+                mock.patch.object(m, "apply", return_value=(0, [])), \
+                mock.patch.object(m, "clean_stale_candidates"), \
+                mock.patch.object(m, "set_position_totals") as spt, \
+                mock.patch("builtins.print"):
+            m.main(["--year", "2026", "--apply"])
+        spt.assert_called_once()
+        self.assertEqual(spt.call_args[0][1], {"0056": 8590.0})
+        self.assertTrue(spt.call_args[0][2])
