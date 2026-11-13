@@ -118,13 +118,14 @@ class TwLedgerTests(unittest.TestCase):
             return [code, name, "", "", "", "", units, price, *blank, *flags]
         rows = [row("0050", "元大台灣50", "20,000", "98.80", "TRUE", "FALSE", "FALSE", "FALSE"),
                 row("2883B", "凱基金乙特", "3,004", "8.45", "FALSE", "FALSE", "TRUE", "FALSE"),
-                row("2547", "日勝生", "1,000", "9.33", "FALSE", "FALSE", "FALSE", "FALSE")]   # 沒勾：不比對
+                row("2883B", "凱基金乙特", "100", "8.45", "FALSE", "FALSE", "FALSE")]   # U:X 沒勾也要算
         ledger = ledger_stocks(rows)
         self.assertEqual(set(ledger), {"0050", "2883B"})
+        self.assertEqual(ledger["2883B"]["units"], 3104.0)
         self.assertEqual(ledger["0050"]["units"], 20000.0)
         df = pd.DataFrame([
             {"asset_type": "台股", "ticker": "0050.TW", "name": "元大台灣50", "units": 20000, "即時價格/淨值": 98.8, "台幣市值": 1976000},
-            {"asset_type": "台股", "ticker": "2883B", "name": "凱基金乙特", "units": 3004, "即時價格/淨值": 8.45, "台幣市值": 25384},
+            {"asset_type": "台股", "ticker": "2883B", "name": "凱基金乙特", "units": 3104, "即時價格/淨值": 8.45, "台幣市值": 26229},
         ])
         self.assertTrue(tw_ledger_diff(ledger, df).empty)
 
