@@ -58,3 +58,15 @@ def test_plan_cells_appends_terms():
     assert errors == []
     assert values == {"L38": "=1000-100", "L2": "=100"}
     assert "測試早餐" in notes["L38"][0]
+
+
+def test_fullwidth_uncle_and_linebank_interest():
+    from bank_sync.bank_ledger import _to_tx
+    e = classify([tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 3, -500, "CD轉出", "轉帳 Ｕｎｃｌｅ")], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(47, -500), (95, 500)]
+    blk = {"account": "主帳戶 ****612", "ledger_row": "連線"}
+    row = ["整列 2026年11月8日", "整列", "2026年11月8日 02:03", "20261108-1.25%", "存入 NT$12"]
+    t = _to_tx("linebank", blk, ["日期", "時間", "摘要", "金額"], row)
+    assert t.amount == 12 and t.summary.startswith("利息")
+    e = classify([t], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(52, 12), (53, 12)]

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -163,13 +164,17 @@ def _to_tx(bank: str, block: dict, head: list, row: list) -> Tx | None:
         return Tx(bank, account, "元大", day, (in_ or 0) - (out_ or 0), "TWD", get(_col(head, "交易說明")),
                   get(_col(head, "備註")), key)
     if bank == "linebank":
-        raw = get(_col(head, "金額"))
+        # 表格每列前面多一格「整列文字」，欄位跟表頭差一格：一律取最後三格＝時間／摘要／金額
+        raw = row[-1] if row else ""
+        summary = row[-2] if len(row) >= 2 else ""
         amount = _num(re.sub(r"[^\d.,\-]", "", raw))
         if amount is None:
             return None
         if any(w in raw for w in ("支出", "轉出", "提款", "扣款")) or raw.strip().startswith("-"):
             amount = -abs(amount)
-        return Tx(bank, account, "連線", day, amount, "TWD", get(_col(head, "摘要")), "", key)
+        if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
+            summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
+        return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)
     if bank == "next":
         amount = _num(get(_col(head, "金額")))
         if amount is None:
@@ -231,7 +236,8 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
     out = []
     for t in txs:
         e = Entry(t)
-        text, low = t.text, t.text.lower()
+        text = unicodedata.normalize("NFKC", t.text)  # 全形 Ｕｎｃｌｅ → Uncle
+        low = text.lower()
         if t.ledger == "台新外幣":
             own = FX_ROWS.get(t.currency)
             if own is None:

@@ -187,6 +187,9 @@ def _read(page, bank: TableBank, before: str, timeout_s: float = 20) -> dict:
     else:
         return {"head": (result or {}).get("head", []), "rows": []}
     head = result["head"]
+    n = len(head)
+    # 有些表格每列前面多一格（例：LINE Bank 第一格是整列文字）：比表頭多的格子從前面去掉
+    result["rows"] = [r[-n:] if len(r) > n else r for r in result["rows"]]
     di = head.index(bank.date_col) if bank.date_col in head else 0
     rows = [[r[di]] + r for r in result["rows"] if di < len(r) and parse_day(r[di])]
     for _ in range(30):  # 下一頁
