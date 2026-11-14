@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .credentials import BANK_DIR
-from .taishin_tx import CLICK_JS, _logged_out, keep_new, parse_day, shape_report
+from .taishin_tx import CLICK_JS, _logged_out, _short, keep_new, parse_day, shape_report
 
 TX_DIR = BANK_DIR / "transactions" / "fubon"
 STATE_FILE = TX_DIR / "_state.json"
@@ -171,45 +171,87 @@ def _save_state(state: dict) -> None:
     os.chmod(STATE_FILE, 0o600)
 
 
+ACCOUNT_JS = r"""
+([index]) => {
+  // 帳號下拉：原生 select（可能被美化元件蓋住、本身不可見），選項第一個是 ==請選擇==
+  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => /請選擇/.test(o.text)) && s.options.length > 1);
+  if (!sel) return null;
+  const opts = [...sel.options].map(o => o.text.replace(/\s+/g, ' ').trim());
+  if (index < 0) return opts;
+  sel.selectedIndex = index;
+  for (const ev of ['input', 'change']) sel.dispatchEvent(new Event(ev, {bubbles: true}));
+  if (window.jQuery) { try { const $s = window.jQuery(sel); $s.trigger('change'); if ($s.selectmenu) $s.selectmenu('refresh'); } catch (e) {} }
+  return opts[index];
+}
+"""
+
+ALL_SELECTS_JS = r"""
+() => [...document.querySelectorAll('select')].map(s => ({id: s.id, name: s.name, visible: s.getClientRects().length > 0,
+  options: [...s.options].slice(0, 15).map(o => o.text.replace(/\d[\d,\-]{3,}\d/g, m => '****' + m.replace(/\D/g, '').slice(-3)).trim())}))
+"""
+
+
+def _accounts(page):
+    for frame in page.frames:
+        try:
+            opts = frame.evaluate(ACCOUNT_JS, [-1])
+        except Exception:
+            continue
+        if opts:
+            return frame, opts
+    return None, []
+
+
 def fetch_all(page, state: dict, since: date) -> list[dict]:
     frame = _goto_query(page)
-    starts = [parse_day(v.get("last_date", "")) for v in state.values() if v.get("last_date")]
-    start = min(starts) if len(starts) == 2 else since  # 台幣、外幣都有進度才用進度
-    start = max(start, date.today() - timedelta(days=180))  # 一次最多六個月
-    print(f"  查詢 {start:%Y/%m/%d} ～ {date.today():%Y/%m/%d}")
-    msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), date.today().strftime("%Y/%m/%d")])
-    if msg != "ok":
-        raise RuntimeError(f"填日期失敗：{msg}")
-    if not frame.evaluate(LINK_JS, "開始查詢") and not frame.evaluate(CLICK_JS, ["開始查詢", "查詢"]):
-        raise RuntimeError("找不到「開始查詢」")
-    page.wait_for_timeout(3000)
-    frame = _eval_any(page, READY_JS) or frame
-    try:
-        filled = frame.evaluate("() => [document.getElementById('form1:startDate')?.value, document.getElementById('form1:endDate')?.value]")
-        print(f"  送出後日期欄：{filled}")
-    except Exception:
-        pass
+    frame, options = _accounts(page)
+    if not options:
+        dump = []
+        for f in page.frames:
+            try:
+                dump += f.evaluate(ALL_SELECTS_JS)
+            except Exception:
+                pass
+        raise RuntimeError(f"找不到帳號下拉選單（頁面上的選單：{json.dumps(dump, ensure_ascii=False)[:800]}）")
+    accounts = [(i, t) for i, t in enumerate(options) if i > 0 and "請選擇" not in t]
+    print(f"  帳號下拉共 {len(accounts)} 個帳號")
+    today = date.today()
     out = []
-    for kind, tab in (("TWD", "臺幣活期存款"), ("FX", "外幣活期存款")):
-        before = "null"
+    for i, label in accounts:
+        name = _short(label)
+        kind = "FX" if any(k in label for k in ("外幣", "外匯", "美元", "USD")) else "TWD"
+        key = f"{kind}:{name}"
+        start = parse_day(state.get(key, {}).get("last_date", "")) or since
+        start = max(start, today - timedelta(days=180))  # 一次最多六個月
+        frame = _goto_query(page)
+        frame, _ = _accounts(page)
+        frame.evaluate(ACCOUNT_JS, [i])
+        frame.wait_for_timeout(800)  # 選帳號後頁面可能重整
+        frame = _eval_any(page, READY_JS) or frame
+        frame2, _ = _accounts(page)
+        if frame2 is not None:
+            frame = frame2
+            frame.evaluate(ACCOUNT_JS, [i]) if frame.evaluate(
+                "() => { const s=[...document.querySelectorAll('select')].find(s=>[...s.options].some(o=>/請選擇/.test(o.text))); return s ? s.selectedIndex : -1; }") != i else None
+        msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")])
+        if msg != "ok":
+            raise RuntimeError(f"填日期失敗：{msg}")
         try:
-            before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False)
+            before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False) if out else "null"
         except Exception:
-            pass
-        if kind == "FX":
-            if not frame.evaluate(LINK_JS, tab):
-                continue  # 沒有外幣帳戶
-            page.wait_for_timeout(1500)
-            frame = _eval_any(page, READY_JS) or frame
-        data = _read_table(frame, before=before if kind == "FX" else "null")
+            before = "null"
+        if not frame.evaluate(LINK_JS, "開始查詢") and not frame.evaluate(CLICK_JS, ["開始查詢", "查詢"]):
+            raise RuntimeError("找不到「開始查詢」")
+        page.wait_for_timeout(3000)
+        frame = _eval_any(page, READY_JS) or frame
+        data = _read_table(frame, before=before)
         if not data["rows"]:
             _debug_snapshot(page, kind)
-        key = f"{kind}:富邦"
         total = len(data["rows"])
         data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), start)
-        out.append({"type": kind, "account": f"富邦{tab}", "ledger_row": "富邦" if kind == "TWD" else "",
+        out.append({"type": kind, "account": name, "ledger_row": "富邦" if kind == "TWD" else "",
                     "from": start.isoformat(), **data})
-        print(f"  {tab}：共 {total} 筆，新的 {len(data['rows'])} 筆")
+        print(f"  {name}：{start:%m/%d}～{today:%m/%d} 共 {total} 筆，新的 {len(data['rows'])} 筆{'  ' + data['note'] if data.get('note') else ''}")
     return out
 
 
