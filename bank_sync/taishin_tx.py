@@ -122,7 +122,10 @@ def _goto(page, url: str, link_text: str, marker: str, timeout_s: float = 25) ->
             page.evaluate("t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) a.click(); }", link_text)
             clicked = True
         page.wait_for_timeout(500)
-    raise RuntimeError(f"找不到「{link_text}」頁面的選單（目前網址 {page.url.split('?')[0]}）")
+    print(f"  自動切換到「{link_text}」沒成功（目前網址 {page.url.split('?')[0]}）")
+    input(f"  請在 Chrome 手動點到「{link_text}」頁，出現帳號選單後回到這裡按 Enter：")
+    if not page.evaluate(SELECT_JS, [marker, -1, ""]):
+        raise RuntimeError(f"找不到「{link_text}」頁面的選單（目前網址 {page.url.split('?')[0]}）")
 
 
 def _logged_out(page) -> bool:
@@ -130,7 +133,8 @@ def _logged_out(page) -> bool:
         body = page.evaluate("() => document.body.innerText")
     except Exception:
         return False
-    return any(k in body for k in ("已登出", "請重新登入", "登入逾時", "連線逾時"))
+    has_password = page.evaluate("() => [...document.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length > 0)")
+    return has_password and any(k in body for k in ("登入", "登出", "逾時"))
 
 
 def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20) -> dict:
