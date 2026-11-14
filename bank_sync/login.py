@@ -256,17 +256,24 @@ def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[st
 # ---------- 判斷是否已登入 ----------
 
 def _fubon_logged_in(page) -> bool:
-    # 參照 tool-system open_login.is_fubon_logged_in：富邦未登入頁首也有「登出」，不能單看文字
+    # 參照 tool-system open_login.is_fubon_logged_in：先看「已登入」的正向訊號，再看未登入訊號。
+    # 富邦未登入頁首也有「登出」，不能單看文字；登入後可能換到新分頁、網址仍是 /common/Index.faces。
     urls = [f.url for f in page.frames]
     if _text_visible(page, "您已成功登出"):
         return False
+    if any("/Logout.faces" in u for u in urls) or _text_visible(page, "您上次登入系統時間為"):
+        return True
+    for ctx in _contexts(page):
+        try:
+            if ctx.evaluate("() => !!document.getElementById('form1:startDate')"):
+                return True  # 已在交易明細查詢頁
+        except Exception:
+            continue
     try:  # 頁首「登入」按鈕看得到 = 還沒登入（登出後回到首頁時，頁面裡仍可能留著 /B2C/ 的 iframe）
         if _first_visible(page.locator('[id="header_form:header_login"]')) is not None:
             return False
     except Exception:
         pass
-    if any("/Logout.faces" in u for u in urls) or _text_visible(page, "您上次登入系統時間為"):
-        return True
     if any("/PreLogin.faces" in u for u in urls):
         return False
     return any("/B2C/" in u and "/B2C/common/" not in u for u in urls if u.startswith("http"))
