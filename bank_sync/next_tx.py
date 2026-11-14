@@ -64,18 +64,18 @@ def _wait_lines(page, before: list, timeout_ms: int = 15000) -> list:
 def _goto_details(page) -> None:
     """只用點選切頁，不重新載入網址（重新載入會被將來銀行登出）。"""
     from .login import open_menu
-    names = ["主帳戶明細查詢", "交易明細查詢", "交易明細", "明細查詢"]
+    # 首頁「功能清單」→ 新臺幣帳戶總覽（/transaction-details）→ 主帳戶明細查詢（/transaction-details/main）
     for step in range(4):
         if "/transaction-details/main" in page.url:
             return
-        if page.evaluate(CLICK_TEXT_JS, names):
+        if page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢"]):
             page.wait_for_timeout(2500)
             continue
-        if step == 0 and open_menu(page):  # 三橫線選單 → 新臺幣帳戶總覽 → 明細
-            page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"])
+        if page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"]):
             page.wait_for_timeout(2500)
-        elif "/transaction-details" in page.url:
-            page.evaluate(CLICK_TEXT_JS, ["主帳戶"])
+            continue
+        if open_menu(page):  # 不在首頁時，從右上角三橫線選單找
+            page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"])
             page.wait_for_timeout(2500)
     if "/transaction-details/main" not in page.url:
         input("  請在 Chrome 點到「主帳戶明細查詢」頁，回到這裡按 Enter：")
