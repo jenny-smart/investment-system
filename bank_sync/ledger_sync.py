@@ -414,6 +414,36 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
                            f"【細帳(含信用卡)】{items[0].file.statement.ledger_month} {items[0].row_label} +{sum(s.charge.amount for s in items):,}",
                            f"{copy_title}!{cell}：{formula or '（空白）'} → {new}\n" + "\n".join(lines)
                            + f"\n加註日期：{stamp:%Y-%m-%d}"))
+        # 第 25 列「零用金」同額 +，現金餘額不變（照 Jenny 記銀行支出的規則）；只算加進零用金各項的刷卡
+        cash_terms = _cash_offsets(pending)
+        if cash_terms:
+            labels = [r[0] if r else "" for r in formulas]
+            cols = month_columns(formulas[0] if formulas else [])
+            cash_row = find_row(labels, CASH_ROW)
+            card_sum_row = _ensure_summary_rows(copy, formulas, labels, cols, log, copy_title)
+            if cash_row is None:
+                log.append(f"⚠️ {copy_title} 找不到「{CASH_ROW}」列，沒有加抵銷金額")
+            for month, (total, count) in sorted(cash_terms.items()):
+                col = cols.get(month)
+                if cash_row is None or col is None:
+                    continue
+                for row, label, note_text_ in ((cash_row, CASH_ROW, f"信用卡消費合計 +{total:,}（{count} 筆；抵銷，現金不變）"),
+                                               (card_sum_row, CARD_SUM_ROW, f"信用卡消費合計 +{total:,}（{count} 筆）")):
+                    if row is None:
+                        continue
+                    cell = a1(row, col)
+                    formula = formulas[row][col] if row < len(formulas) and col < len(formulas[row]) else ""
+                    new = add_term(formula, total)
+                    block = f"【信用卡 {month}】{note_text_}\n加註日期：{stamp:%Y-%m-%d}（bank_sync）"
+                    existing = notes[row][col] if row < len(notes) and col < len(notes[row]) else ""
+                    copy.update(range_name=cell, values=[[new]], value_input_option="USER_ENTERED")
+                    copy.update_note(cell, (existing + "\n" + block).strip() if existing else block)
+                    log.append(f"{copy_title}!{cell} {label} {formula or '（空白）'} → {new}")
+                    if label == CASH_ROW:
+                        events.append((f"{copy_title}!{cell}:{stamp}:cash:{month}",
+                                       f"【細帳(含信用卡)】{month} {CASH_ROW} +{total:,}（信用卡抵銷）",
+                                       f"{copy_title}!{cell}：{formula or '（空白）'} → {new}\n{count} 筆刷卡加進零用金各項，"
+                                       f"25 列同額加回，現金餘額不變\n加註日期：{stamp:%Y-%m-%d}"))
     for s in pending:
         applied[s.file.key] = stamp.isoformat()  # 含信用卡表已加過這份帳單
 
@@ -421,6 +451,49 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
         for key, title, body in events:
             calendar(key, stamp, title, body)
     return log
+
+
+CASH_ROW = "零用金"
+TOTAL_ROW = "零用金--總支出"
+CARD_SUM_ROW = "零用金-信用卡消費"
+CASH_SUM_ROW = "零用金-現金消費"
+
+
+def _cash_offsets(pending: list) -> dict[str, tuple[int, int]]:
+    """每個月加進零用金各項的刷卡合計：{月份: (金額, 筆數)}。只算 零用金- 開頭的列（保費支出等不算）。"""
+    out: dict[str, list[int]] = {}
+    for s in pending:
+        if s.row_label.startswith("零用金-"):
+            out.setdefault(s.file.statement.ledger_month, []).append(s.charge.amount)
+    return {m: (sum(v), len(v)) for m, v in out.items()}
+
+
+def _ensure_summary_rows(copy, formulas: list, labels: list, cols: dict, log: list, copy_title: str):
+    """在含信用卡表加「零用金-信用卡消費」「零用金-現金消費」兩列（第一次才加）。回傳信用卡消費列（0-based）。"""
+    existing = find_row(labels, CARD_SUM_ROW)
+    if existing is not None:
+        return existing
+    total_row = find_row(labels, TOTAL_ROW)
+    if total_row is None or not cols:
+        log.append(f"⚠️ {copy_title} 找不到「{TOTAL_ROW}」列，沒有加統計列")
+        return None
+    # 放在總支出後面第一個「連續兩列空白」的位置（28 列淨值之後）；找不到就接在最後
+    insert_at = next((r for r in range(total_row + 1, min(total_row + 8, len(labels) - 1))
+                      if not labels[r] and not labels[r + 1]), len(formulas))
+    first, last = min(cols.values()), max(cols.values())
+    card_cells = ["" for _ in range(first, last + 1)]
+    cash_cells = [f"={a1(0, c)[:-1]}{total_row + 1}-{a1(0, c)[:-1]}{insert_at + 1}" for c in range(first, last + 1)]
+    rows = [[CARD_SUM_ROW] + [""] * (first - 1) + card_cells,
+            [CASH_SUM_ROW] + [""] * (first - 1) + cash_cells]
+    copy.update(range_name=f"A{insert_at + 1}:{a1(0, last)[:-1]}{insert_at + 2}", values=rows,
+                value_input_option="USER_ENTERED")
+    while len(formulas) < insert_at + 2:
+        formulas.append([])
+        labels.append("")
+    formulas[insert_at], formulas[insert_at + 1] = list(rows[0]), list(rows[1])
+    labels[insert_at], labels[insert_at + 1] = CARD_SUM_ROW, CASH_SUM_ROW
+    log.append(f"{copy_title} 新增「{CARD_SUM_ROW}」「{CASH_SUM_ROW}」兩列（第 {insert_at + 1}–{insert_at + 2} 列）")
+    return insert_at
 
 
 def _rc(cell: str) -> tuple[int, int]:

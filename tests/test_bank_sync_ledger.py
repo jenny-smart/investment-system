@@ -200,8 +200,14 @@ class FakeSheet:
 
     def update(self, range_name, values, value_input_option=None):
         from bank_sync.ledger_sync import _rc
-        r, c = _rc(range_name)
-        self.values[r][c] = values[0][0]
+        r, c = _rc(range_name.split(":")[0])
+        for i, row in enumerate(values):
+            while len(self.values) <= r + i:
+                self.values.append([""] * len(self.values[0]))
+            for j, v in enumerate(row):
+                while len(self.values[r + i]) <= c + j:
+                    self.values[r + i].append("")
+                self.values[r + i][c + j] = v
 
 
 class FakeBook:
@@ -227,12 +233,17 @@ class ApplyTest(unittest.TestCase):
               ["零用金-餐費", "", "100"],
               ["零用金-其他", "", ""],
               ["零用金-交通1", "", "=1000"],
+              ["零用金", "5000", "=4000+1000"],
+              ["零用金--總支出", "=SUM(B2:B4)", "=SUM(C2:C4)"],
+              ["零用金-淨值", "=B5-B6", "=C5-C6"],
+              ["", "", ""],
+              ["", "", ""],
               ["信用卡-星展 08", "780", "260"]]
 
     def test_apply_notes_only_on_detail_and_terms_on_copy(self):
         from bank_sync.ledger_sync import apply_plan
         detail = FakeSheet("2026細帳", self.VALUES)
-        detail.notes[(4, 2)] = "我自己的備註"
+        detail.notes[(9, 2)] = "我自己的備註"
         book = FakeBook(detail)
         files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
         stamp = date(2026, 11, 14)
@@ -241,19 +252,28 @@ class ApplyTest(unittest.TestCase):
         apply_plan(plan, book, stamp, applied, lambda *a: events.append(a))
         # 2026細帳：金額不動，只加備註（保留原備註）
         self.assertEqual(detail.values, self.VALUES)
-        self.assertIn("我自己的備註", detail.notes[(4, 2)])
-        self.assertIn("加註日期：2026-11-14", detail.notes[(4, 2)])
+        self.assertIn("我自己的備註", detail.notes[(9, 2)])
+        self.assertIn("加註日期：2026-11-14", detail.notes[(9, 2)])
         # 含信用卡表：餐費 100 + 60；其他 + 200
         copy = book.worksheet("2026細帳(含信用卡)")
         self.assertEqual(copy.values[1][2], "=100+60")
         self.assertEqual(copy.values[2][2], "=200")
         self.assertIn("範例早午餐", copy.notes[(1, 2)])
-        self.assertEqual(len(events), 3)
+        # 25 列同額加回（現金不變）；新增兩列統計
+        self.assertEqual(copy.values[4][2], "=4000+1000+260")
+        self.assertIn("抵銷，現金不變", copy.notes[(4, 2)])
+        self.assertEqual(copy.values[7][0], "零用金-信用卡消費")
+        self.assertEqual(copy.values[7][2], "=260")
+        self.assertEqual(copy.values[8][0], "零用金-現金消費")
+        self.assertEqual(copy.values[8][2], "=C6-C8")
+        self.assertEqual(len(events), 4)
         # 重跑：同一份帳單不會再加一次
         plan2 = build_plan(files, detail.get_values(), stamp, applied)
         apply_plan(plan2, book, stamp, applied, lambda *a: events.append(a))
         self.assertEqual(copy.values[1][2], "=100+60")
-        self.assertEqual(detail.notes[(4, 2)].count("【星展"), 1)
+        self.assertEqual(copy.values[4][2], "=4000+1000+260")
+        self.assertEqual(copy.values[7][2], "=260")
+        self.assertEqual(detail.notes[(9, 2)].count("【星展"), 1)
 
 
 class NotesOnlyTest(unittest.TestCase):
@@ -266,7 +286,7 @@ class NotesOnlyTest(unittest.TestCase):
         plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
         apply_plan(plan, book, date(2026, 11, 14), applied, None, notes_only=True)
         self.assertEqual([s.title for s in book.sheets], ["2026細帳"])
-        self.assertIn("加註日期", detail.notes[(4, 2)])
+        self.assertIn("加註日期", detail.notes[(9, 2)])
         self.assertEqual(applied, {})  # 含信用卡表還沒加過，之後 --apply 仍會加
         # 之後完整 apply 時含信用卡表照常加
         plan2 = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
