@@ -31,13 +31,14 @@ class TableBank:
     date_col: str               # 哪一欄是日期
     custom_dates: tuple = ()    # (點「自選」的文字, 起日 CSS, 迄日 CSS)
     max_days: int = 365
+    only_accounts: tuple = ()   # 只抓帳號名稱含這些字的帳戶
 
 
 BANKS = {
     "linebank": TableBank("linebank", "LINE Bank", "連線", ("帳戶交易明細查詢",), "#account-dropdown", ("查詢",),
-                          ("時間", "摘要", "金額"), "時間"),
+                          ("時間", "摘要", "金額"), "時間", only_accounts=("主帳戶",)),
     "yuanta": TableBank("yuanta", "元大銀行", "元大", ("臺幣交易明細查詢",), "#acctno", ("確認送出",),
-                        ("帳務日期", "交易說明"), "帳務日期", ("自選", "#sdate", "#edate"), 365),
+                        ("帳務日期", "交易說明"), "帳務日期", ("自選", "#sdate", "#edate"), 365, only_accounts=("大同",)),
 }
 
 TABLE_JS = r"""
@@ -108,9 +109,26 @@ def _click_text(page, names) -> bool:
             except Exception:
                 continue
     try:
-        return bool(page.evaluate(CLICK_JS, list(names)))
+        return bool(page.evaluate(CLICK_JS, list(names)) or page.evaluate(CONTAINS_JS, list(names)))
     except Exception:
         return False
+
+
+CONTAINS_JS = r"""
+(names) => {
+  // 文字被換行或拆成好幾段（例：元大首頁圖示「臺幣交易明 / 細查詢」）：去掉空白後「包含」就算，挑最小的那個元素
+  const vis = e => e.getClientRects().length > 0;
+  const norm = t => (t || '').replace(/\s+/g, '');
+  for (const n of names) {
+    const want = norm(n);
+    const hits = [...document.querySelectorAll('a,button,[role=button],[onclick],li,div,span,p')]
+      .filter(e => vis(e) && norm(e.innerText).includes(want) && norm(e.innerText).length <= want.length + 12);
+    hits.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length);
+    if (hits.length) { (hits[0].closest('a,button,[role=button],[onclick]') || hits[0]).click(); return n; }
+  }
+  return null;
+}
+"""
 
 
 def _goto(page, bank: TableBank) -> None:
@@ -162,7 +180,8 @@ def _read(page, bank: TableBank, before: str, timeout_s: float = 20) -> dict:
 def fetch_accounts(page, bank: TableBank, state: dict, since: date) -> list[dict]:
     _goto(page, bank)
     options = page.evaluate(SELECT_JS, [bank.account_select, -1]) or []
-    accounts = [(i, t) for i, t in enumerate(options) if t and "請選擇" not in t]
+    accounts = [(i, t) for i, t in enumerate(options) if t and "請選擇" not in t
+                and (not bank.only_accounts or any(k in t for k in bank.only_accounts))]
     print(f"  帳號下拉共 {len(accounts)} 個帳號")
     today = date.today()
     out = []
@@ -221,6 +240,12 @@ def fetch(code: str, since: date = None, keep_open: bool = False) -> Path:
                 raise SystemExit(f"{bank.name}沒有登入成功，停止。")
             page = state.page
             page.wait_for_timeout(2000)
+            from .banks import WEB_BANKS
+            host = WEB_BANKS[code].host
+            live = [pg for pg in context.pages if not pg.is_closed() and host in pg.url and "login" not in pg.url.lower()]
+            if live:
+                page = live[-1]
+                page.bring_to_front()
             try:
                 print("查詢交易明細…")
                 results = fetch_accounts(page, bank, progress, since)
