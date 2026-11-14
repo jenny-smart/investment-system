@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fcntl
+import re
 import time
 from dataclasses import dataclass
 from typing import Iterable, TextIO
@@ -185,10 +186,26 @@ def _type_like_user(page, item, value: str) -> None:
     item.evaluate(f"e => {{ e.dataset.{MARK} = '1'; }}")
 
 
+def _next_input_after(previous):
+    """上一個填好的欄位後面第一個可填、且不是驗證碼的輸入框（欄位名稱抓不到時用）。"""
+    if previous is None:
+        return None
+    for item in _unclaimed_inputs(previous.locator("xpath=following::input")):
+        try:
+            hint = " ".join(filter(None, (item.get_attribute(a) for a in ("name", "id", "placeholder", "aria-label", "title"))))
+        except Exception:
+            hint = ""
+        if re.search(r"captcha|verify|驗證|檢核|vcode|chk", hint, re.I):
+            return None
+        return item
+    return None
+
+
 def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[str], list[str]]:
     # 部分銀行（如富邦）登入框開啟後才初始化安全鍵盤，太早填會被清空
     page.wait_for_timeout(800)
     filled, missing = [], []
+    previous = None
     for field in FIELD_ORDER:
         value = creds.get(field)
         if not value:
@@ -200,12 +217,15 @@ def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[st
                 break
         if item is None and field == "password":
             item = next(iter(_unclaimed_inputs(ctx.locator('input[type="password"]'))), None)
+        if item is None and field == "password":
+            item = _next_input_after(previous)
         if item is None:
             missing.append(field)
             continue
         try:
             _type_like_user(page, item, value)
             filled.append(field)
+            previous = item
         except Exception:
             missing.append(field)
     for hint in CAPTCHA_HINTS:
@@ -319,8 +339,8 @@ def launch_context(playwright):
         return playwright.chromium.launch_persistent_context(**options)
 
 
-def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_s: float = 900) -> list[LoginState]:
-    """targets: [(登入名稱, 銀行代碼)]。全部開好、預填後，等本人輸入驗證碼登入。"""
+def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_s: float = 300) -> list[LoginState]:
+    """targets: [(登入名稱, 銀行代碼)]。一次一家：開好、預填，等本人登入完成才開下一家。"""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -332,8 +352,15 @@ def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_
     try:
         with sync_playwright() as playwright:
             context = launch_context(playwright)
-            states = [open_bank(context, key, code) for key, code in targets]
-            wait_for_logins(context, [s for s in states if not s.error], timeout_s)
+            states = []
+            for index, (key, code) in enumerate(targets, 1):
+                print(f"\n[{index}/{len(targets)}] {WEB_BANKS[code].name}")
+                state = open_bank(context, key, code)
+                states.append(state)
+                if not state.error and not state.logged_in:
+                    wait_for_logins(context, [state], timeout_s)
+                    if not state.logged_in:
+                        print(f"✗ {state.bank.name}：{int(timeout_s // 60)} 分鐘內沒有完成登入，先跳到下一家")
             print("\n登入結果：")
             for s in states:
                 mark = "✓" if s.logged_in else "✗"

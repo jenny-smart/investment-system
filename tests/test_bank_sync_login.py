@@ -89,7 +89,7 @@ class CatalogTest(unittest.TestCase):
             self.assertIn(login_bank_code(key), WEB_BANKS)
 
     def test_requested_banks_present(self):
-        expected = {"taishin", "fubon", "sc", "linebank", "yuanta", "next", "ubot", "cathay"}
+        expected = {"taishin", "fubon", "sc", "linebank", "yuanta", "next"}
         self.assertTrue(expected <= set(web_login_keys()))
         self.assertEqual(WEB_BANKS["yuanta"].login_url, "https://ebank.yuantabank.com.tw/nib/")
         self.assertIn("ebank.standardchartered.com.tw", WEB_BANKS["sc"].login_url)

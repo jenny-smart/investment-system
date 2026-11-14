@@ -8,7 +8,7 @@
   "yuanta":   {"id_number": "", "user_code": "", "password": ""},
   "next":     {"id_number": "", "user_code": "", "password": ""},
   "ubot":     {"id_number": "", "user_code": "", "password": "", "pdf_password": ""},
-  "cathay":   {"id_number": "", "user_code": "", "password": "", "pdf_password": ""},
+  "cathay":   {"pdf_password": ""},
   "dbs":      {"pdf_password": ""},
   "hsbc":     {"pdf_password": ""}
 }

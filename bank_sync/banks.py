@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 ID_HINTS = ("身分證字號", "身分證號", "身分證")
 USER_HINTS = ("使用者代號", "使用者代碼", "使用者名稱", "用戶代號", "用戶名稱")
-PASSWORD_HINTS = ("使用者密碼", "網銀密碼", "用戶密碼", "網路密碼", "密碼")
+PASSWORD_HINTS = ("使用者密碼", "網銀密碼", "用戶密碼", "網路密碼", "登入密碼", "密碼")
 
 
 @dataclass(frozen=True)
