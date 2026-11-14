@@ -30,6 +30,7 @@ TWD_ACCOUNTS = {
     "Richart二類": "台新-Richard",
     "Richart子帳戶": "台新-子帳戶",
     "內湖綜活": "台新-內湖新轉",
+    "中和綜活": "台新-建北",  # Jenny：中和綜活比照建北登記
 }
 FX_CURRENCIES = {"人民幣": "台新人民幣", "日圓": "台新日幣", "美元": "台新美金", "南非幣": "台新南非"}
 
@@ -100,21 +101,33 @@ def _ledger_row(name: str) -> str:
     return next((row for key, row in TWD_ACCOUNTS.items() if key in name), "")
 
 
-def _goto(page, url: str, link_text: str, marker: str, timeout_s: float = 20) -> None:
-    try:
-        page.goto(url)
-    except Exception:
-        pass
+def _goto(page, url: str, link_text: str, marker: str, timeout_s: float = 25) -> None:
+    """在網銀單頁程式裡切換頁面：只改 #hash 或點選單，不重新載入（重新載入會被台新登出）。"""
+    route = url.split("#", 1)[1] if "#" in url else ""
+    if route and "/svc/rwd/" in page.url:
+        page.evaluate("h => { window.location.hash = h; }", route)
+    else:
+        page.evaluate("t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) a.click(); }", link_text)
     deadline = time.time() + timeout_s
     clicked = False
     while time.time() < deadline:
+        if _logged_out(page):
+            raise RuntimeError("台新已登出")
         if page.evaluate(SELECT_JS, [marker, -1, ""]):
             return
         if not clicked and time.time() > deadline - timeout_s / 2:
             page.evaluate("t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) a.click(); }", link_text)
             clicked = True
         page.wait_for_timeout(500)
-    raise RuntimeError(f"找不到「{link_text}」頁面的選單")
+    raise RuntimeError(f"找不到「{link_text}」頁面的選單（目前網址 {page.url.split('?')[0]}）")
+
+
+def _logged_out(page) -> bool:
+    try:
+        body = page.evaluate("() => document.body.innerText")
+    except Exception:
+        return False
+    return any(k in body for k in ("已登出", "請重新登入", "登入逾時", "連線逾時"))
 
 
 def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20) -> dict:
@@ -125,6 +138,8 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
     result = None
     while time.time() < deadline:
         page.wait_for_timeout(700)
+        if _logged_out(page):
+            raise RuntimeError("台新已登出")
         result = page.evaluate(TABLE_JS, need)
         body = page.evaluate("() => document.body.innerText")
         if result and json.dumps(result, ensure_ascii=False) != before:
@@ -158,6 +173,8 @@ def fetch_twd(page, period: str = "2個月") -> list[dict]:
         try:
             data = _query(page, ["查詢"], ["交易日", "摘要"])
         except Exception as exc:
+            if "登出" in str(exc):
+                raise
             data = {"head": [], "rows": [], "error": str(exc)}
         name = _short(label)
         out.append({"type": "TWD", "account": name, "ledger_row": _ledger_row(name), **data})
@@ -181,6 +198,8 @@ def fetch_fx(page, period: str = "2個月") -> list[dict]:
         try:
             data = _query(page, ["確認查詢"], ["交易日", "幣別", "摘要"])
         except Exception as exc:
+            if "登出" in str(exc):
+                raise
             data = {"head": [], "rows": [], "error": str(exc)}
         name = _short(label)
         out.append({"type": "FX", "account": name, **data})
@@ -221,10 +240,15 @@ def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
                 raise SystemExit("台新沒有登入成功，停止。")
             page = state.page
             page.wait_for_timeout(2000)
-            print("查詢台幣交易明細…")
-            results = fetch_twd(page, period)
-            print("查詢外幣交易明細…")
-            results += fetch_fx(page, period)
+            print(f"登入後網址：{page.url.split('?')[0]}")
+            results = []
+            try:
+                print("查詢台幣交易明細…")
+                results += fetch_twd(page, period)
+                print("查詢外幣交易明細…")
+                results += fetch_fx(page, period)
+            except Exception as exc:
+                print(f"⚠️ 中斷：{exc}（目前網址 {page.url.split('?')[0]}）")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
             context.close()
