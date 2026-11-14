@@ -260,6 +260,11 @@ def _fubon_logged_in(page) -> bool:
     urls = [f.url for f in page.frames]
     if _text_visible(page, "您已成功登出"):
         return False
+    try:  # 頁首「登入」按鈕看得到 = 還沒登入（登出後回到首頁時，頁面裡仍可能留著 /B2C/ 的 iframe）
+        if _first_visible(page.locator('[id="header_form:header_login"]')) is not None:
+            return False
+    except Exception:
+        pass
     if any("/Logout.faces" in u for u in urls) or _text_visible(page, "您上次登入系統時間為"):
         return True
     if any("/PreLogin.faces" in u for u in urls):
