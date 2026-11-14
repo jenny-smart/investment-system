@@ -51,5 +51,5 @@ def log_run(function: str, since: date | None, target: Path | str, results: list
             return
         sheet.append_row(row, value_input_option="USER_ENTERED")
         print(f"📝 已寫入執行記錄（investment-system執行Log）：{function}")
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:  # 沒有 Google 授權時 credentials() 會 SystemExit
         print(f"⚠️ 執行記錄沒寫進去（不影響明細）：{type(exc).__name__}: {exc}")
