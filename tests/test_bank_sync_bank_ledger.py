@@ -202,3 +202,41 @@ def test_simulate_balance_check():
     got = {r[0]: r for r in rows[1:]}
     assert got[43][4] == 18590 and got[43][8] == "✓ 相符"         # 只記 116，43 透過公式 +8590
     assert got[47][4] == 15104 and got[47][8] == "⚠️ 不相符"      # 47 透過公式 −4896
+
+
+def test_mark_recorded_by_balance():
+    from bank_sync.bank_ledger import mark_recorded, simulate
+    def b(t, bal, when):
+        t.balance, t.when = bal, when
+        return t
+    t1 = b(tx("fubon", "****990 (新店分行)", "富邦", 2, -100, "行動自轉", "早餐"), 900, "2026-11-02 08:00")
+    t2 = b(tx("fubon", "****990 (新店分行)", "富邦", 4, 1000, "網路自轉", "11月LINE"), 1900, "2026-11-04 09:00")
+    t3 = b(tx("fubon", "****871 (營業部)", "富邦", 10, 500, "行動自轉", "某某"), 500, "2026-11-10 15:00")
+    labels = [""] * 60
+    labels[37], labels[1] = "富邦", "零用金-餐費"
+    numbers = [[""] * 13 for _ in range(60)]
+    numbers[37][11] = 1900          # 你已經記到 11/04 那筆
+    formulas = [[""] * 13 for _ in range(60)]
+    formulas[37][11] = "=1000-100+1000"
+    entries = classify([t1, t2, t3], RULES)
+    assert mark_recorded(entries, [t1, t2, t3], numbers, labels, {"2026-11": 11}) == 2
+    assert [e.skip for e in entries] == [True, True, False]
+    rows = simulate(entries, [t1, t2, t3], formulas, numbers, labels, {"2026-11": 11})
+    got = {r[0]: r for r in rows[1:]}
+    assert got[38][4] == 2400 and got[38][5] == 2400 and got[38][8] == "✓ 相符"
+
+
+def test_mark_recorded_fx_time_deposit():
+    from bank_sync.bank_ledger import mark_recorded
+    def b(t, bal, when):
+        t.balance, t.when = bal, when
+        return t
+    g = b(tx("taishin", "****867 古亭外幣綜存", "台新外幣", 5, -1000, "支出", "轉出", "南非幣"), 0, "2026-11-05 10:00")
+    d_in = b(tx("taishin", "****313 敦南Richart外幣綜存", "台新外幣", 5, 1000, "存入", "古亭", "南非幣", True), 1000, "2026-11-05 10:01")
+    d_td = b(tx("taishin", "****313 敦南Richart外幣綜存", "台新外幣", 9, -1000, "支出", "88872B0RC170", "南非幣", True), 0, "2026-11-09 10:00")
+    labels = [""] * 100
+    numbers = [[""] * 13 for _ in range(100)]
+    numbers[91][11] = 1000  # 細帳 92 列：古亭＋敦南＋定存本金
+    entries = classify([g, d_in, d_td], RULES)
+    mark_recorded(entries, [g, d_in, d_td], numbers, labels, {"2026-11": 11})
+    assert all("已記過" in e.reason for e in entries)

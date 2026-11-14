@@ -536,11 +536,11 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
     except Exception:
         ws = book.add_worksheet(REVIEW_TITLE, rows=500, cols=len(REVIEW_HEAD))
     rows = [REVIEW_HEAD]
-    order = sorted(entries, key=lambda e: (not needs_check(e), e.tx.day))
+    order = sorted(entries, key=lambda e: ("已記過（細帳" in e.reason, not needs_check(e), e.tx.day))
     for e in order:
         t = e.tx
         choice, target = answers.get(_code(t), ("", ""))
-        state = "⚠️ 請確認" if needs_check(e) else ("略過" if e.skip else "自動")
+        state = ("已記過" if "已記過（細帳" in e.reason else "⚠️ 請確認" if needs_check(e) else ("略過" if e.skip else "自動"))
         who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE"}.get(t.bank, t.bank)
         money = t.amount if t.currency != "TWD" else int(round(t.amount))
         rows.append([state, t.day.isoformat(), f"{who} {t.account}", t.ledger + ("" if t.currency == "TWD" else f"（{t.currency}）"),
@@ -589,15 +589,19 @@ def review(year: int) -> str:
     detail = book.worksheet(f"{year}細帳")
     shown = detail.get_values()
     labels = [r[0] if r else "" for r in shown]
-    dup = mark_existing(entries, detail.get_values(value_render_option="FORMULA"), labels, month_columns(shown[0] if shown else []))
+    formulas = detail.get_values(value_render_option="FORMULA")
+    numbers = detail.get_values(value_render_option="UNFORMATTED_VALUE")
+    cols = month_columns(shown[0] if shown else [])
+    rec = mark_recorded(entries, txs, numbers, labels, cols)
+    if rec:
+        print(f"✓ {rec} 筆你已經記過（細帳金額＝銀行該筆之後的餘額），不會重複寫")
+    dup = mark_existing(entries, formulas, labels, cols)
     if dup:
         print(f"⚠️ {dup} 筆在細帳那一格已有相同金額，可能你已手動記過，標成要確認")
     answers = read_review(book)
     url = write_review(book, entries, labels, answers)
-    sim_entries = apply_review(classify([t for t in txs if t.key not in applied]), answers)
-    mark_existing(sim_entries, detail.get_values(value_render_option="FORMULA"), labels, month_columns(shown[0] if shown else []))
-    sim = simulate(sim_entries, txs, detail.get_values(value_render_option="FORMULA"),
-                   detail.get_values(value_render_option="UNFORMATTED_VALUE"), labels, month_columns(shown[0] if shown else []))
+    sim_entries = apply_review(entries, answers)
+    sim = simulate(sim_entries, txs, formulas, numbers, labels, cols)
     print("\n模擬記入後的餘額核對（只算已確認／自動的項目）：")
     bad = print_balance(sim)
     print(f"餘額核對表：{write_balance_sheet(book, sim)}")
@@ -618,18 +622,73 @@ def review(year: int) -> str:
 BALANCE_TITLE = "銀行餘額核對"
 
 
+def ledger_row_of(t: Tx) -> int | None:
+    if t.ledger == "台新外幣":
+        return FX_ROWS.get(t.currency)
+    return ACCOUNT_ROWS.get(t.ledger, (None,))[0]
+
+
+def _is_time_deposit(t: Tx) -> bool:
+    """敦南外幣轉入定存：銀行活存少了，但細帳那列不變（定存本金還在）。"""
+    if t.ledger != "台新外幣" or not t.interest_only or t.amount >= 0:
+        return False
+    text = unicodedata.normalize("NFKC", t.text).upper()
+    return not re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", text) and not re.search(r"\bINT|利息", text)
+
+
+def mark_recorded(entries: list[Entry], all_txs: list[Tx], numbers: list, labels: list, cols: dict) -> int:
+    """用銀行餘額找出「你已經手動記到哪一筆」：
+    依時間順序算各帳戶加總餘額，細帳那一格目前的金額等於哪個時間點的餘額，那個時間點以前的交易就是已記過。"""
+    by_row = {}
+    for t in all_txs:
+        r = ledger_row_of(t)
+        if r is not None and t.balance is not None:
+            by_row.setdefault(r, []).append(t)
+    done = set()
+    for row_no, txs in by_row.items():
+        txs.sort(key=lambda t: t.when)
+        months = sorted({f"{t.day:%Y-%m}" for t in txs})
+        for month in months:
+            c = cols.get(month)
+            if c is None or row_no - 1 >= len(numbers) or c >= len(numbers[row_no - 1]):
+                continue
+            current = _num(str(numbers[row_no - 1][c]))
+            if current is None:
+                continue
+            latest, adj, cut, started = {}, 0.0, None, False
+            for t in txs:  # 各帳戶第一筆之前的餘額
+                name = t.account + t.currency
+                latest.setdefault(name, t.balance - t.amount)
+            for t in txs:
+                if f"{t.day:%Y-%m}" > month:
+                    break
+                if f"{t.day:%Y-%m}" == month and not started:
+                    started = True
+                    if abs(sum(latest.values()) + adj - current) < 0.5:
+                        cut = ""  # 這個月一筆都還沒記
+                latest[t.account + t.currency] = t.balance
+                if _is_time_deposit(t):
+                    adj += -t.amount
+                if f"{t.day:%Y-%m}" == month and abs(sum(latest.values()) + adj - current) < 0.5:
+                    cut = t.when
+            if cut:
+                done.update(t.key for t in txs if f"{t.day:%Y-%m}" == month and t.when <= cut)
+    n = 0
+    for e in entries:
+        if e.tx.key in done and not e.skip:
+            e.skip, e.reason, n = True, "已記過（細帳目前金額＝銀行這筆之後的餘額）", n + 1
+        elif e.tx.key in done:
+            e.reason += "（已記過）"
+    return n
+
+
 def bank_balances(txs: list[Tx]) -> dict:
     """{(細帳列號): {帳戶: (時間, 餘額)}}：每個帳戶最後一筆交易後的銀行餘額。"""
     out = {}
     for t in txs:
         if t.balance is None:
             continue
-        if t.ledger == "台新外幣":
-            if t.interest_only:
-                continue  # 敦南外幣不在細帳列裡
-            row = FX_ROWS.get(t.currency)
-        else:
-            row = ACCOUNT_ROWS[t.ledger][0]
+        row = ledger_row_of(t)  # 外幣列＝古亭＋敦南（錢在台新外幣帳戶之間移動，細帳那列不變）
         if row is None:
             continue
         acct = out.setdefault(row, {})
@@ -684,8 +743,11 @@ def simulate(entries: list[Entry], all_txs: list[Tx], formulas: list, numbers: l
                 rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, "", "", "沒有銀行餘額資料", "⚠️ 無法核對"])
             continue
         total = sum(v for _, v in bank.values())
+        td = sum(-t.amount for t in all_txs if _is_time_deposit(t) and ledger_row_of(t) == row_no)
+        if td:
+            total += td  # 定存本金：銀行活存沒有、細帳那列還在
         diff = round(sim - total, 2)
-        src = "；".join(f"{k}：{w[:16]}" for k, (w, _) in bank.items())
+        src = "；".join(f"{k}：{w[:16]}" for k, (w, _) in bank.items()) + (f"；＋定存 {td:,.2f}" if td else "")
         ok = abs(diff) < 0.5
         rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, total, diff, src,
                      "✓ 相符" if ok else "⚠️ 不相符"])
@@ -729,8 +791,9 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
     book = open_book(creds)
     detail_title = f"{year}細帳"
     _shown = book.worksheet(detail_title).get_values()
-    mark_existing(entries, book.worksheet(detail_title).get_values(value_render_option="FORMULA"),
-                  [r[0] if r else "" for r in _shown], month_columns(_shown[0] if _shown else []))
+    _labels, _cols = [r[0] if r else "" for r in _shown], month_columns(_shown[0] if _shown else [])
+    mark_recorded(entries, txs, book.worksheet(detail_title).get_values(value_render_option="UNFORMATTED_VALUE"), _labels, _cols)
+    mark_existing(entries, book.worksheet(detail_title).get_values(value_render_option="FORMULA"), _labels, _cols)
     entries = apply_review(entries, read_review(book))
     ws = book.worksheet(detail_title)
     shown = ws.get_values()
