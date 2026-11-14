@@ -99,6 +99,16 @@ class ParserTest(unittest.TestCase):
         self.assertIn("09/21 連支＊範例早午餐 60", note)
 
 
+class ScTest(unittest.TestCase):
+    def test_sc_uses_purchase_total(self):
+        u = lambda txt: "".join(f"/UNIC{ord(ch):04X}" for ch in txt)
+        lines = [u("$ 12,719"), u("$ 12,719"), u("$ 0"), u("$ 14,292"), u("$ 9"), u("$ 14,301"), u("$ 14,301"),
+                 u("2026"), u("04"), u("06"), u("NT$14,301")]
+        st = parse("sc", "\n".join(lines))
+        self.assertEqual(st.total_due, 14292)
+        self.assertEqual(st.ledger_month, "2026-04")
+
+
 class LedgerTest(unittest.TestCase):
     def test_add_term(self):
         self.assertEqual(add_term("", 120), "=120")

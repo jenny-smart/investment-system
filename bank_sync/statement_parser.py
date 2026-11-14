@@ -179,11 +179,16 @@ def decode_unic(text: str) -> str:
 def parse_sc(text: str) -> Statement:
     st = Statement("sc")
     t = decode_unic(text)
-    m = re.search(r"NT\$\s*(" + NUM + ")", t)
-    st.total_due = _int(m.group(1)) if m else None
+    # 頁首金額依序為：上期、已繳、調整、本期消費合計、利息費用、本期應繳…；細帳記的是「本期消費金額合計」
+    dollars = re.findall(r"^\$ ?(" + NUM + r")$", t, re.M)
+    if len(dollars) >= 4:
+        st.total_due = _int(dollars[3])
+    else:
+        m = re.search(r"NT\$\s*(" + NUM + ")", t)
+        st.total_due = _int(m.group(1)) if m else None
     d = re.search(r"^(20\d{2})\n(\d{2})\n(\d{2})$", t, re.M)  # 第一組「年/月/日」是繳款截止日
     st.due = date(int(d.group(1)), int(d.group(2)), int(d.group(3))) if d else None
-    st.warnings.append("渣打帳單的中文字讀不出來（只有數字），金額可對，消費商店名稱需另外處理")
+    st.warnings.append("渣打帳單讀不到逐筆明細（PDF 文字只有數字）：細帳只記本期消費合計，含信用卡表不分類")
     return st
 
 
