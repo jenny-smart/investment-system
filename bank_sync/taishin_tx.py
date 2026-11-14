@@ -104,37 +104,74 @@ def _ledger_row(name: str) -> str:
     return next((row for key, row in TWD_ACCOUNTS.items() if key in name), "")
 
 
-def _goto(page, url: str, link_text: str, marker: str, timeout_s: float = 25) -> None:
-    """在網銀單頁程式裡切換頁面：只改 #hash 或點選單，不重新載入（重新載入會被台新登出）。"""
-    route = url.split("#", 1)[1] if "#" in url else ""
-    if route and "/svc/rwd/" in page.url:
-        page.evaluate("h => { window.location.hash = h; }", route)
-    else:
-        page.evaluate("t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) a.click(); }", link_text)
+def _app_frame(page):
+    """台新網銀的功能頁在 iframe 裡（網址含 /svc/rwd/），主頁網址一直是 /TIBNetBank/。"""
+    for frame in page.frames:
+        if "/svc/rwd/" in (frame.url or ""):
+            return frame
+    return None
+
+
+def _find_select_frame(page, marker: str):
+    for frame in page.frames:
+        try:
+            if frame.evaluate(SELECT_JS, [marker, -1, ""]):
+                return frame
+        except Exception:
+            continue
+    return None
+
+
+CLICK_LINK_JS = "t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) { a.click(); return true; } return false; }"
+
+
+def _click_link_any(page, text: str) -> bool:
+    for frame in page.frames:
+        try:
+            if frame.evaluate(CLICK_LINK_JS, text):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _goto(page, url: str, link_text: str, marker: str, timeout_s: float = 25):
+    """切到功能頁（只改 iframe 的 #hash 或點選單，不重新載入），回傳有選單的那個 frame。"""
+    route = "#" + url.split("#", 1)[1] if "#" in url else ""
     deadline = time.time() + timeout_s
-    clicked = False
+    tried_hash = tried_link = False
     while time.time() < deadline:
         if _logged_out(page):
             raise RuntimeError("台新已登出")
-        if page.evaluate(SELECT_JS, [marker, -1, ""]):
-            return
-        if not clicked and time.time() > deadline - timeout_s / 2:
-            page.evaluate("t => { const a = [...document.querySelectorAll('a')].find(x => x.innerText.trim() === t); if (a) a.click(); }", link_text)
-            clicked = True
-        page.wait_for_timeout(500)
-    print(f"  自動切換到「{link_text}」沒成功（目前網址 {page.url.split('?')[0]}）")
+        frame = _find_select_frame(page, marker)
+        if frame is not None:
+            return frame
+        app = _app_frame(page)
+        if app is not None and route and not tried_hash:
+            try:
+                app.evaluate("h => { window.location.hash = h; }", route)
+            except Exception:
+                pass
+            tried_hash = True
+        elif not tried_link and time.time() > deadline - timeout_s * 0.6:
+            _click_link_any(page, link_text)
+            tried_link = True
+        page.wait_for_timeout(700)
+    print(f"  自動切換到「{link_text}」沒成功")
     input(f"  請在 Chrome 手動點到「{link_text}」頁，出現帳號選單後回到這裡按 Enter：")
-    if not page.evaluate(SELECT_JS, [marker, -1, ""]):
-        raise RuntimeError(f"找不到「{link_text}」頁面的選單（目前網址 {page.url.split('?')[0]}）")
+    frame = _find_select_frame(page, marker)
+    if frame is None:
+        raise RuntimeError(f"找不到「{link_text}」頁面的選單（各 frame：{[f.url.split('?')[0] for f in page.frames]}）")
+    return frame
 
 
 def _logged_out(page) -> bool:
+    main = getattr(page, "main_frame", None) or page
     try:
-        body = page.evaluate("() => document.body.innerText")
+        has_password = main.evaluate("() => [...document.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length > 0)")
     except Exception:
         return False
-    has_password = page.evaluate("() => [...document.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length > 0)")
-    return has_password and any(k in body for k in ("登入", "登出", "逾時"))
+    return bool(has_password)
 
 
 def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20) -> dict:
@@ -167,7 +204,7 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
 
 
 def fetch_twd(page, period: str = "2個月") -> list[dict]:
-    _goto(page, TWD_URL, "查詢交易明細", "請選擇帳號")
+    page = _goto(page, TWD_URL, "查詢交易明細", "請選擇帳號")
     options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""])
     out = []
     for i, label in enumerate(options):
@@ -190,7 +227,7 @@ def fetch_twd(page, period: str = "2個月") -> list[dict]:
 
 
 def fetch_fx(page, period: str = "2個月") -> list[dict]:
-    _goto(page, FX_URL, "查詢外幣交易明細", "請選擇查詢帳號")
+    page = _goto(page, FX_URL, "查詢外幣交易明細", "請選擇查詢帳號")
     options = page.evaluate(SELECT_JS, ["請選擇查詢帳號", -1, ""])
     out = []
     for i, label in enumerate(options):
@@ -255,7 +292,7 @@ def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
                 print("查詢外幣交易明細…")
                 results += fetch_fx(page, period)
             except Exception as exc:
-                print(f"⚠️ 中斷：{exc}（目前網址 {page.url.split('?')[0]}）")
+                print(f"⚠️ 中斷：{exc}")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
             logout_all(context)
