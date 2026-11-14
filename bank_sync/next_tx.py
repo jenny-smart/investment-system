@@ -59,14 +59,12 @@ def _wait_lines(page, before: list, timeout_ms: int = 15000) -> list:
 
 
 def _goto_details(page) -> None:
-    if "/transaction-details/main" in page.url:
-        return
-    if not page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢", "交易明細查詢", "交易明細", "明細查詢"]):
-        page.goto(HOST + "/transaction-details")
-    page.wait_for_timeout(2000)
-    if "/transaction-details/main" not in page.url:
-        page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢", "主帳戶", "臺幣主帳戶"])
-        page.wait_for_timeout(2000)
+    """只用點選切頁，不重新載入網址（重新載入會被將來銀行登出）。"""
+    for _ in range(2):
+        if "/transaction-details/main" in page.url:
+            return
+        page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢", "交易明細查詢", "交易明細", "明細查詢", "主帳戶"])
+        page.wait_for_timeout(2500)
     if "/transaction-details/main" not in page.url:
         input("  請在 Chrome 點到「主帳戶明細查詢」頁，回到這裡按 Enter：")
 
