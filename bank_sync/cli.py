@@ -65,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("logins", nargs="*", metavar="登入名稱")
     login.add_argument("--close", action="store_true", help="全部登入後直接關閉 Chrome")
     login.add_argument("--timeout", type=float, default=15, help="等待輸入驗證碼的分鐘數（預設 15）")
+    fetch = sub.add_parser("fetch-statements", help="從信箱下載信用卡電子帳單 PDF 並試開")
+    fetch.add_argument("--months", type=int, default=3, help="往回抓幾個月（預設 3）")
+    sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     imp = sub.add_parser("import-csv")
     imp.add_argument("account"); imp.add_argument("input", type=Path)
     imp.add_argument("--currency", default="TWD")
@@ -80,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
         if unknown:
             parser.error(f"不認得的登入名稱：{', '.join(unknown)}（可用：{', '.join(web_login_keys())}）")
         _login(args.logins, keep_open=not args.close, timeout_min=args.timeout)
+    elif args.command == "fetch-statements":
+        from .mail_statements import check_statements, fetch_statements
+        fetch_statements(args.months)
+        check_statements()
+    elif args.command == "check-statements":
+        from .mail_statements import check_statements
+        check_statements()
     else:
         _import(args)
     return 0

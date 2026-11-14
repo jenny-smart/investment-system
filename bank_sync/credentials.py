@@ -55,6 +55,20 @@ def load_credentials(login_key: str, path: Path = DEFAULT_CREDENTIALS_FILE) -> d
     return values
 
 
+def load_section(key: str, required: tuple[str, ...], path: Path = DEFAULT_CREDENTIALS_FILE) -> dict[str, str]:
+    """讀帳密檔裡的任一組設定（例如 "mail" 或某家的 pdf_password）。"""
+    if not path.exists():
+        raise FileNotFoundError(f"找不到帳密檔：{path}")
+    row = _read(path).get(key)
+    if not isinstance(row, dict):
+        raise KeyError(f"帳密檔沒有「{key}」")
+    values = {k: str(v) for k, v in row.items() if str(v).strip()}
+    missing = [k for k in required if k not in values]
+    if missing:
+        raise ValueError(f"{key} 缺少 {'、'.join(missing)}")
+    return values
+
+
 def has_credentials(login_key: str, path: Path = DEFAULT_CREDENTIALS_FILE) -> bool:
     try:
         load_credentials(login_key, path)
@@ -70,7 +84,9 @@ def configured_logins(path: Path = DEFAULT_CREDENTIALS_FILE) -> list[str]:
 def save_credentials(login_key: str, values: dict[str, str], path: Path = DEFAULT_CREDENTIALS_FILE) -> None:
     """寫入（或覆蓋）一組登入，檔案權限固定為 600。"""
     data = _read(path)
-    data[login_key] = {field: values.get(field, "") for field in FIELDS}
+    row = data.get(login_key) if isinstance(data.get(login_key), dict) else {}
+    row.update({field: values.get(field, "") for field in FIELDS})  # 保留 pdf_password 等其他欄位
+    data[login_key] = row
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
