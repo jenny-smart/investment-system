@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import date, datetime
@@ -152,10 +153,18 @@ def render_statement_results() -> None:
 def render_bank_page() -> None:
     st.subheader("銀行帳戶與信用卡")
     if not is_local():
-        st.info("這一頁要在你的 Mac 本機開 App 才能用（帳密只存在 ~/Bank account/，也要開本機的 Chrome）。\n\n"
-                "在 Mac 終端機執行：\n\n`cd ~/Documents/codex-workspace/investment-system-bank && git pull && "
-                "python3 -m streamlit run bank_app.py`")
+        st.link_button("🏦 開啟本機銀行頁", "http://localhost:8502", type="primary")
+        st.caption("銀行帳密和登入用的 Chrome 都只在你的 Mac 上，所以操作在本機頁面進行；這個按鈕只有在你的 Mac 上點才打得開。\n\n"
+                   "還沒安裝本機服務的話，在 Mac 終端機執行一次："
+                   "`cd ~/Documents/codex-workspace/investment-system-bank && git pull && python3 -m bank_sync app-install`")
         return
+    if os.environ.get("BANK_APP_SERVICE") == "1":
+        with st.sidebar:
+            st.caption("本機背景服務 http://localhost:8502")
+            if st.button("⬇️ 更新程式並重新啟動", help="git pull 後重新啟動，約 10 秒後重新整理頁面"):
+                st.info("更新中…約 10 秒後請重新整理頁面。")
+                from bank_sync.app_service import restart_self
+                restart_self()
 
     tab_bank, tab_card, tab_login = st.tabs(["台新明細", "信用卡帳單", "登入銀行"])
 

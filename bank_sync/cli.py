@@ -68,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     ftx = sub.add_parser("fetch-taishin", help="台新：自動查詢台幣／外幣交易明細，存在本機")
     ftx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01；平常不用給，會從上次最後一筆日期查到今天")
     ftx.add_argument("--keep-open", action="store_true")
+    sub.add_parser("app-install", help="把銀行帳戶頁裝成 Mac 背景服務（http://localhost:8502，只要做一次）")
+    sub.add_parser("app-status", help="看銀行帳戶頁背景服務狀態")
+    sub.add_parser("app-uninstall", help="移除銀行帳戶頁背景服務")
     exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
     exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
@@ -113,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
         from .taishin_tx import fetch
         from datetime import date as _date
         fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command in ("app-install", "app-status", "app-uninstall"):
+        from . import app_service
+        {"app-install": app_service.install, "app-status": app_service.status, "app-uninstall": app_service.uninstall}[args.command]()
     elif args.command == "explore":
         from .explore import explore
         explore(args.login, login_bank_code(args.login))
