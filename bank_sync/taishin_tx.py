@@ -378,6 +378,7 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
 
     TX_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    problem = ""
     lock = acquire_lock()
     try:
         with sync_playwright() as p:
@@ -398,8 +399,10 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 print("查詢外幣交易明細…")
                 results += fetch_fx(page, progress, since)
             except KeyboardInterrupt:
+                problem = "已中斷（Ctrl+C）"
                 print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
             except Exception as exc:
+                problem = f"中斷：{exc}"
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
@@ -416,4 +419,6 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
     shape_path.write_text(shape_report(results), "utf-8")
     print(f"\n明細（只存在本機）：{raw_path}")
     print(f"格式樣本（可上傳給 Claude）：{shape_path}")
+    from .progress_log import log_run
+    log_run('台新明細', since, TX_DIR, results, problem)
     return raw_path

@@ -435,6 +435,13 @@ def run(year: int, apply: bool = False) -> Path:
     for e in entries:
         applied.add(e.tx.key)
     save_applied(applied)
+    from .progress_log import log_run
+    banks_done = {}
+    for e in entries:
+        if not e.skip:
+            banks_done[e.tx.ledger] = banks_done.get(e.tx.ledger, 0) + 1
+    log_run("銀行明細→細帳", None, f"{year}細帳／{year}細帳(含信用卡)", [], message=
+            "寫入 " + "；".join(f"{k} {v} 筆" for k, v in banks_done.items()) + f"｜略過 {n_skip} 筆｜待確認 {n_todo} 筆")
     by_month = {}
     for e in entries:
         if not e.skip:
