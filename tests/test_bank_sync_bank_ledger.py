@@ -162,3 +162,24 @@ def test_plan_cells_note_only_and_linked_formula():
     assert errors == []
     assert values == {"L119": "=5000"}  # 38 列公式已帶入 119，不重複加；定存只加備註
     assert "L38" not in values and "只記備註" in notes["L92"][0]
+
+
+def test_mark_existing_and_dedupe(tmp_path, monkeypatch):
+    import json
+    import bank_sync.bank_ledger as bl
+    labels = [""] * 130
+    formulas = [[""] * 13 for _ in range(130)]
+    formulas[115][11] = "=1200+8590"
+    entries = classify([tx("taishin", "****159 建北綜活儲存款", "台新-建北", 11, 8590, "授權轉入", "基金配息 0056FUND")], RULES)
+    assert bl.mark_existing(entries, formulas, labels, {"2026-11": 11}) == 1
+    assert bl.needs_check(entries[0])
+    # 早期檔案把同一筆算在兩個帳戶：只留一筆（以同檔較後面的帳戶為準）
+    monkeypatch.setattr(bl, "TX_ROOT", tmp_path)
+    (tmp_path / "taishin").mkdir()
+    row = ["2026/11/09 10:00", "2026/11/09", "南非幣", "存入", "100.00", "100.00", "", "", "X1"]
+    head = ["交易日", "帳務日", "幣別", "摘要", "金額", "餘額", "轉換金額", "交易匯率", "備註"]
+    blocks = [{"type": "FX", "account": "****780 敦南外幣證券交割", "ledger_row": "台新外幣各幣別列（只取利息）", "head": head, "rows": [row]},
+              {"type": "FX", "account": "****313 敦南Richart外幣綜存", "ledger_row": "台新外幣各幣別列（只取利息）", "head": head, "rows": [row]}]
+    (tmp_path / "taishin" / "20261114_2146.json").write_text(json.dumps({"accounts": blocks}), "utf-8")
+    txs, _ = bl.load_transactions()
+    assert [t.account for t in txs] == ["****313 敦南Richart外幣綜存"]

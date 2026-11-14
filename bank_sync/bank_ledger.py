@@ -115,13 +115,15 @@ def _col(head: list, *names: str) -> int | None:
 # ---------------------------------------------------------------- 讀本機明細
 
 def _blocks(bank: str):
+    """新的檔案先讀；同一個檔案裡後面的帳戶先讀。
+    （早期版本查詢沒清空表格，會把下一個帳戶的明細也算到前一個帳戶，所以同樣內容以「較新／較後面」為準。）"""
     folder = TX_ROOT / bank
-    for path in sorted(folder.glob("2*.json")) if folder.exists() else []:
+    for path in sorted(folder.glob("2*.json"), reverse=True) if folder.exists() else []:
         try:
             data = json.loads(path.read_text("utf-8"))
         except Exception:
             continue
-        for block in data.get("accounts", []):
+        for block in reversed(data.get("accounts", [])):
             yield block
 
 
@@ -157,7 +159,7 @@ def _to_tx(bank: str, block: dict, head: list, row: list) -> Tx | None:
     if day is None:
         return None
     account = block.get("account", "")
-    key = f"{bank}|{account}|" + "|".join(row)
+    key = f"{bank}|" + "|".join(row)  # 同一筆交易不論被算在哪個帳戶，都只記一次
     if bank == "fubon":
         out_, in_ = _num(get(_col(head, "支出金額"))), _num(get(_col(head, "存入金額")))
         amount = (in_ or 0) - (out_ or 0)
@@ -424,7 +426,34 @@ CHOICES = ["確認", "略過"]
 
 
 def needs_check(e: Entry) -> bool:
-    return any(k in e.reason for k in ("待分類", "請確認", "另一邊請確認", "零用金減項"))
+    return any(k in e.reason for k in ("待分類", "請確認", "另一邊請確認", "零用金減項", "可能已記過"))
+
+
+def _has_term(formula: str, amount: float) -> bool:
+    """公式裡已經有這個金額（例：=1000+8590 裡的 8590）。"""
+    text = str(formula or "").replace(",", "")
+    num = f"{abs(amount):.2f}".rstrip("0").rstrip(".")
+    return re.search(rf"(?<![\d.]){re.escape(num)}(?![\d.])", text) is not None
+
+
+def mark_existing(entries: list[Entry], formulas: list, labels: list, cols: dict) -> int:
+    """細帳那一格已經有相同金額 → 可能你手動記過了，標「可能已記過」、要你確認才寫。"""
+    n = 0
+    for e in entries:
+        if e.skip or not e.postings:
+            continue
+        c = cols.get(f"{e.tx.day:%Y-%m}")
+        if c is None:
+            continue
+        for p in e.postings:
+            if p.note_only:
+                continue
+            r = _row_index(labels, p.row)
+            if r is not None and r < len(formulas) and c < len(formulas[r]) and _has_term(formulas[r][c], p.amount):
+                e.reason += f"（{p.row} 列這個月已有 {abs(p.amount):,.0f}，可能已記過）"
+                n += 1
+                break
+    return n
 
 
 def _describe(e: Entry, labels: list) -> str:
@@ -542,7 +571,12 @@ def review(year: int) -> str:
     entries = classify([t for t in txs if t.key not in applied])
     from .google_auth import credentials
     book = open_book(credentials())
-    labels = [r[0] if r else "" for r in book.worksheet(f"{year}細帳").get_values()]
+    detail = book.worksheet(f"{year}細帳")
+    shown = detail.get_values()
+    labels = [r[0] if r else "" for r in shown]
+    dup = mark_existing(entries, detail.get_values(value_render_option="FORMULA"), labels, month_columns(shown[0] if shown else []))
+    if dup:
+        print(f"⚠️ {dup} 筆在細帳那一格已有相同金額，可能你已手動記過，標成要確認")
     answers = read_review(book)
     url = write_review(book, entries, labels, answers)
     n_check = sum(needs_check(e) for e in entries)
@@ -567,8 +601,11 @@ def run(year: int, apply: bool = False) -> Path:
     from .google_auth import calendar_add_once, credentials
     creds = credentials()
     book = open_book(creds)
-    entries = apply_review(entries, read_review(book))
     detail_title = f"{year}細帳"
+    _shown = book.worksheet(detail_title).get_values()
+    mark_existing(entries, book.worksheet(detail_title).get_values(value_render_option="FORMULA"),
+                  [r[0] if r else "" for r in _shown], month_columns(_shown[0] if _shown else []))
+    entries = apply_review(entries, read_review(book))
     ws = book.worksheet(detail_title)
     shown = ws.get_values()
     labels = [r[0] if r else "" for r in shown]
