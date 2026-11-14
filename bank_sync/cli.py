@@ -74,6 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
     dump.add_argument("--bank", action="append", default=[])
+    led = sub.add_parser("ledger", help="信用卡帳單 → 2026細帳 備註＋2026細帳(含信用卡)；預設只比對")
+    led.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    led.add_argument("--apply", action="store_true", help="確認比對報表後才加：寫入總帳並發行事曆")
+    led.add_argument("--bank", action="append", default=[])
+    prev = sub.add_parser("preview-statements", help="列出每份帳單解析結果（不需要 Google 權限）")
+    prev.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     imp = sub.add_parser("import-csv")
     imp.add_argument("account"); imp.add_argument("input", type=Path)
     imp.add_argument("--currency", default="TWD")
@@ -96,6 +102,17 @@ def main(argv: list[str] | None = None) -> int:
         from .mail_statements import check_statements, fetch_statements
         fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
         check_statements(banks=tuple(args.bank))
+    elif args.command == "ledger":
+        from .ledger_sync import run
+        run(args.year, apply=args.apply, banks=tuple(args.bank))
+    elif args.command == "preview-statements":
+        from .ledger_sync import BANK_NAME, parsed_statements
+        for f in parsed_statements(args.year):
+            st = f.statement
+            spent = sum(c.amount for c in st.purchases)
+            print(f"{BANK_NAME[f.bank]:<5} {f.path.name[:40]:<40} 細帳月份={st.ledger_month or '?':<8} "
+                  f"應繳={st.total_due if st.total_due is not None else '?':>8} 消費 {len(st.purchases):>3} 筆 合計 {spent:>8,}"
+                  + (f"  ⚠️ {'；'.join(st.warnings)}" if st.warnings else ""))
     elif args.command == "dump-statements":
         from .mail_statements import dump_statements
         dump_statements(banks=tuple(args.bank))

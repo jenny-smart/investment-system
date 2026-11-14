@@ -51,3 +51,21 @@ python -m bank_sync check-statements          # 改了 pdf_password 後重新試
 信箱只讀不改；已下載過的信記在 `statements/_fetched.json`，不重抓。
 
 找不到欄位時程式會提示，請在瀏覽器手動補填；手動點到登入頁後程式也會接著填（每家等 90 秒）。
+
+## 信用卡 → 總帳
+
+細帳月份＝**繳款截止日**的月份，金額＝**本期應繳總額**（已用 2026細帳 既有數字核對：台新、富邦、星展相符）。
+
+```bash
+python3 -m bank_sync fetch-statements --months 12   # 抓今年全部帳單
+python3 -m bank_sync preview-statements             # 每份帳單解析結果（不需 Google 權限）
+python3 -m bank_sync ledger                         # 只比對：產生 statements/_細帳比對_YYYYMMDD.xlsx
+python3 -m bank_sync ledger --apply                 # 確認報表後才寫入
+```
+
+- **2026細帳**：金額不動，只在「信用卡-xx」列該月格子加備註（逐筆消費＋加註日期）；同一份帳單重跑會更新同一段備註。
+- **2026細帳(含信用卡)**：第一次 --apply 時整張複製 2026細帳；每筆刷卡依分類規則以「+金額」加進零用金各項並附備註；同一份帳單只加一次（記在 statements/_ledger_applied.json）。
+- 每改一格發一則行事曆事件到 jennytsai26888@gmail.com。
+- 分類規則：程式內建，另可在 `~/Bank account/category_rules.json` 加 `[["關鍵字", "零用金-餐費"], ...]`（優先）。對不到的放「零用金-其他」並標待分類。
+- 寫入權限：帳密檔加 `"google": {"service_account_file": "服務帳號金鑰 JSON 路徑"}`。需要 `pip3 install gspread google-auth openpyxl`。
+- 渣打 PDF 的中文字抽不出來（只有數字）：金額可對，商店名稱待處理。

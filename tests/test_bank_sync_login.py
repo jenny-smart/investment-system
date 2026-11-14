@@ -97,7 +97,7 @@ class CatalogTest(unittest.TestCase):
     def test_example_file_matches_logins(self):
         example = json.loads((Path(__file__).parents[1] / "bank_sync/personal_bank_accounts.example.json").read_text("utf-8"))
         from bank_sync.mail_statements import SOURCES
-        known = set(web_login_keys()) | {s.code for s in SOURCES} | {"mail"}
+        known = set(web_login_keys()) | {s.code for s in SOURCES} | {"mail", "google"}
         for key in example:
             if not key.startswith("_"):
                 self.assertIn(key, known)
