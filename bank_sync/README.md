@@ -28,7 +28,6 @@ python -m bank_sync login fubon sc     # 只開指定銀行
 | linebank | LINE Bank | 無圖形驗證碼，可能要在手機 App 確認 |
 | yuanta | 元大（個人網銀） | |
 | next | 將來銀行 | |
-| ubot | 聯邦（信用卡，平常不刷） | 從官網首頁進入；帳單也會從信箱檢查 |
 
 
 ## 信用卡帳單（從 jenny@hers.com.tw 信箱）

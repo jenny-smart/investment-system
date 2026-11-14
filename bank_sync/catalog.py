@@ -28,7 +28,7 @@ BANK_ACCOUNTS: tuple[BankAccountSpec, ...] = (
     BankAccountSpec("sc_jenny_fx", "渣打銀行", "Jenny", ("USD", "ZAR"), bank_code="sc"),
     BankAccountSpec("line_jenny_twd", "LINE Bank", "Jenny", ("TWD",), bank_code="linebank"),
     BankAccountSpec("next_jenny_twd", "將來銀行", "Jenny", ("TWD",), bank_code="next"),
-    BankAccountSpec("ubot_jenny_card", "聯邦銀行", "Jenny", ("TWD",), bank_code="ubot"),
+    BankAccountSpec("ubot_jenny_card", "聯邦銀行", "Jenny", ("TWD",), channel="statement_pdf"),  # 平常不刷，只檢查信箱帳單
     BankAccountSpec("cathay_jenny_card", "國泰世華", "Jenny", ("TWD",), channel="statement_pdf"),  # 只有信用卡，帳單從信箱抓
     BankAccountSpec("dbs_jenny_card", "星展銀行", "Jenny", ("TWD",), channel="statement_pdf"),
     BankAccountSpec("post_jenny_twd", "郵局", "Jenny", ("TWD",), bank_code="post", credential_key="post_jenny"),
