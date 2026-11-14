@@ -71,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--months", type=int, default=3, help="往回抓幾個月（預設 3）")
     fetch.add_argument("--bank", action="append", default=[], help="只抓這家（可重複）：fubon taishin sc dbs cathay hsbc ubot")
     fetch.add_argument("--force", action="store_true", help="已下載過的也重新下載")
+    fetch.add_argument("--no-notify", action="store_true", help="新帳單不發行事曆提醒")
+    fetch.add_argument("--due-reminder", action="store_true", help="另在繳款截止日前一天加一則提醒")
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
     dump.add_argument("--bank", action="append", default=[])
@@ -104,9 +106,11 @@ def main(argv: list[str] | None = None) -> int:
         from .native_chrome import inspect_page
         inspect_page(login_bank_code(args.login))
     elif args.command == "fetch-statements":
-        from .mail_statements import check_statements, fetch_statements
-        fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
+        from .mail_statements import check_statements, fetch_statements, notify_new_statements
+        saved = fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
         check_statements(banks=tuple(args.bank))
+        if not args.no_notify:
+            notify_new_statements(saved, due_reminder=args.due_reminder)
     elif args.command == "google-login":
         from .google_auth import login
         login(args.client_json)
