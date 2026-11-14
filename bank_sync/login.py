@@ -343,14 +343,21 @@ def wait_for_logins(context, states: list[LoginState], timeout_s: float = 900) -
 
 def launch_context(playwright):
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    options = dict(user_data_dir=str(PROFILE_DIR), headless=False, locale="zh-TW", no_viewport=True)
+    # 拿掉「自動化控制中」標記：渣打等銀行偵測到會回 403
+    options = dict(user_data_dir=str(PROFILE_DIR), headless=False, locale="zh-TW", no_viewport=True,
+                   ignore_default_args=["--enable-automation"],
+                   args=["--disable-blink-features=AutomationControlled"])
     try:
-        return playwright.chromium.launch_persistent_context(channel="chrome", **options)
+        context = playwright.chromium.launch_persistent_context(channel="chrome", **options)
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        return context
     except Exception as exc:
         if "ProcessSingleton" in str(exc) or "already in use" in str(exc):
             raise RuntimeError(f"個人銀行用的 Chrome 還開著（{PROFILE_DIR}），請先關掉再執行。") from exc
         print("找不到 Google Chrome，改用 Playwright Chromium。")
-        return playwright.chromium.launch_persistent_context(**options)
+        context = playwright.chromium.launch_persistent_context(**options)
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        return context
 
 
 def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_s: float = 300) -> list[LoginState]:
