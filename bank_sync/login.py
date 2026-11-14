@@ -408,6 +408,32 @@ CONFIRM_NAMES = ["直接登出", "確定登出", "確認登出", "確定", "確�
 FUBON_LOGOUT = ('[id="header_form:header_logout"]', 'a[onclick*="logout" i]', 'input[value="登出"]')
 
 
+MENU_JS = r"""
+() => {
+  // 右上角三橫線選單鈕：aria-label/title 寫選單、menu，或 class 含 menu/hamburger
+  const vis = e => e.getClientRects().length > 0;
+  const els = [...document.querySelectorAll('button,a,[role=button],div,span,i')].filter(vis);
+  const hit = els.find(e => /選單|menu|Menu|MENU|導覽/.test((e.getAttribute('aria-label') || '') + (e.getAttribute('title') || '')))
+           || els.find(e => /^(≡|☰|選單|MENU|Menu)$/.test((e.innerText || '').trim()))
+           || els.find(e => /hamburger|menu-btn|menu_btn|btn-menu|nav-toggle|navbar-toggler/i.test(e.className || ''));
+  if (hit) { hit.click(); return true; }
+  return false;
+}
+"""
+
+
+def open_menu(page) -> bool:
+    """點開右上角三橫線選單（將來銀行的登出、帳戶總覽都在裡面）。"""
+    for ctx in _contexts(page):
+        try:
+            if ctx.evaluate(MENU_JS):
+                page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _logout_fubon(page) -> bool:
     hit = False
     for ctx in _contexts(page):
@@ -456,6 +482,14 @@ def logout(page) -> bool:
                 hit = None
             if hit:
                 break
+        if not hit and open_menu(page):  # 登出藏在三橫線選單裡（將來銀行）
+            for ctx in _contexts(page):
+                try:
+                    hit = ctx.evaluate(LOGOUT_JS, LOGOUT_NAMES)
+                except Exception:
+                    hit = None
+                if hit:
+                    break
         if not hit:
             return False
         page.wait_for_timeout(1500)
