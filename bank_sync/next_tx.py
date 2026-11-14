@@ -41,6 +41,29 @@ CONTENT_JS = r"""
 """
 
 
+def _click(page, name: str) -> bool:
+    """用真的滑鼠點：依序試「按鈕名稱」「連結名稱」「完全相同文字」「包含文字」（無障礙網站常有隱藏說明字）。"""
+    tries = (lambda: page.get_by_role("button", name=name),
+             lambda: page.get_by_role("link", name=name),
+             lambda: page.get_by_text(name, exact=True),
+             lambda: page.get_by_text(name))
+    for make in tries:
+        try:
+            loc = make()
+            for i in range(min(loc.count(), 5)):
+                item = loc.nth(i)
+                if item.is_visible():
+                    item.scroll_into_view_if_needed(timeout=3000)
+                    item.click(timeout=4000)
+                    return True
+        except Exception:
+            continue
+    try:
+        return bool(page.evaluate(CLICK_TEXT_JS, [name]))
+    except Exception:
+        return False
+
+
 def _months(since: date, today: date) -> list[str]:
     out, y, m = [], today.year, today.month
     while (y, m) >= (since.year, since.month):
@@ -70,15 +93,17 @@ def _goto_details(page) -> None:
         page.wait_for_timeout(1000)
         if "/transaction-details/main" in page.url:
             return
-        if page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢"]):
+        if step in (5, 15):
+            print(f"  …還在找明細頁（目前網址 {page.url.split('?')[0]}，分頁數 {len(page.context.pages)}）")
+        if _click(page, "主帳戶明細查詢"):
             page.wait_for_timeout(2500)
             continue
-        if page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"]):
+        if _click(page, "新臺幣帳戶總覽"):
             page.wait_for_timeout(2500)
             continue
         if step >= 8 and not menu_tried and open_menu(page):  # 等了一陣子還找不到，再從右上角三橫線選單找
             menu_tried = True
-            page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"])
+            _click(page, "新臺幣帳戶總覽")
             page.wait_for_timeout(2500)
     if "/transaction-details/main" not in page.url:
         drain_stdin()
@@ -167,13 +192,17 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 raise SystemExit("將來銀行沒有登入成功，停止。")
             page = state.page
             page.wait_for_timeout(2000)
+            live = [pg for pg in context.pages if not pg.is_closed() and "nextbank.com.tw" in pg.url and "/login" not in pg.url]
+            if live:
+                page = live[-1]  # 登入後真正顯示功能清單的那個分頁
+                page.bring_to_front()
             try:
                 _goto_details(page)
                 for label in _months(since, date.today()):
                     before = page.evaluate(CONTENT_JS)
                     clicked = None
                     for _ in range(15):  # 按鈕可能還沒出現
-                        clicked = page.evaluate(CLICK_TEXT_JS, [label])
+                        clicked = _click(page, label)
                         if clicked:
                             break
                         page.wait_for_timeout(700)
