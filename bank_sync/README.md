@@ -6,7 +6,7 @@
 ## 第一次使用
 
 ```bash
-pip install playwright "pypdf[crypto]" && playwright install chrome
+pip install playwright "pypdf[crypto]" websocket-client && playwright install chrome
 python -m bank_sync setup taishin      # 逐家輸入帳密（輸入時不顯示），或照範本手動建檔
 python -m bank_sync list               # 看哪幾家已設定
 ```
@@ -24,7 +24,7 @@ python -m bank_sync login fubon sc     # 只開指定銀行
 |---|---|---|
 | taishin | 台新 | |
 | fubon | 富邦 | 先點右上「登入」開彈窗再填（參照 tool-system） |
-| sc | 渣打 | 用你平常的 Chrome（渣打會擋程式開的 Chrome）；需開啟 Chrome「允許來自 Apple 事件的 JavaScript」 |
+| sc | 渣打 | 渣打會擋程式控制的 Chrome：改開一個一般模式的專用 Chrome（~/Bank account/chrome_profile_native），不影響平常的 Chrome |
 | linebank | LINE Bank | 無圖形驗證碼，可能要在手機 App 確認 |
 | yuanta | 元大（個人網銀） | |
 | next | 將來銀行 | |

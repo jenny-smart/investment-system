@@ -1,17 +1,92 @@
-"""用本人平常的 Google Chrome 登入（做法同 tool-system native_chrome）。
+"""渣打這類會擋「程式控制的 Chrome」的銀行：開一個專用、一般模式的 Chrome 來登入。
 
-有些銀行（渣打）認得出 Playwright 開的 Chrome 而回 403；這裡改用 macOS AppleScript
-叫正常 Chrome 開頁面、執行 JavaScript 預填帳密。
-需要在 Chrome 開啟：顯示方式 → 開發人員 → 允許來自 Apple 事件的 JavaScript。
+不用 Playwright（渣打認得出來會回 403），也不用 AppleScript（同時開著好幾個 Chrome 時
+會送錯視窗，例如 ~/EI 那個 Chrome）。改成：
+  1. 用一般方式開 Google Chrome，設定資料夾 ~/Bank account/chrome_profile_native，
+     加上只在本機的除錯連接埠（不帶任何自動化標記）；
+  2. 透過該連接埠只執行預填帳密、判斷登入狀態的 JavaScript。
+需要：pip install websocket-client
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
 from .banks import WEB_BANKS, WebBank
-from .credentials import load_credentials
+from .credentials import BANK_DIR, load_credentials
+
+NATIVE_PROFILE = BANK_DIR / "chrome_profile_native"
+DEBUG_PORT = int(os.environ.get("BANK_SYNC_NATIVE_PORT", "9333"))
+CHROME_PATHS = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    "/usr/bin/google-chrome",
+)
+EXTRA_ARGS = [a for a in os.environ.get("BANK_SYNC_NATIVE_EXTRA_ARGS", "").split() if a]  # 測試用
+
+
+def _http(path: str, method: str = "GET"):
+    req = urllib.request.Request(f"http://127.0.0.1:{DEBUG_PORT}{path}", method=method)
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _running() -> bool:
+    try:
+        _http("/json/version")
+        return True
+    except Exception:
+        return False
+
+
+def open_native(url: str) -> None:
+    """在專用 Chrome 開網址；還沒開就先啟動。"""
+    if _running():
+        _http("/json/new?" + urllib.parse.quote(url, safe=""), method="PUT")
+        return
+    chrome = next((p for p in CHROME_PATHS if Path(p).exists()), None)
+    if chrome is None:
+        raise RuntimeError("找不到 Google Chrome（/Applications/Google Chrome.app）")
+    NATIVE_PROFILE.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [chrome, f"--user-data-dir={NATIVE_PROFILE}", f"--remote-debugging-port={DEBUG_PORT}",
+         "--no-first-run", "--no-default-browser-check",
+         *EXTRA_ARGS, url],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    deadline = time.time() + 20
+    while time.time() < deadline and not _running():
+        time.sleep(0.5)
+    if not _running():
+        raise RuntimeError("專用 Chrome 沒有啟動成功")
+
+
+def evaluate(host: str, javascript: str) -> str:
+    """在專用 Chrome 裡網址含 host 的分頁執行 JavaScript，回傳字串結果。"""
+    try:
+        import websocket
+    except ImportError as exc:
+        raise RuntimeError("請先安裝：pip install websocket-client") from exc
+    tabs = [t for t in _http("/json") if t.get("type") == "page" and host in t.get("url", "")]
+    if not tabs:
+        return "TAB_NOT_FOUND"
+    ws = websocket.create_connection(tabs[0]["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
+    try:
+        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                            "params": {"expression": javascript, "returnByValue": True}}))
+        while True:
+            message = json.loads(ws.recv())
+            if message.get("id") == 1:
+                value = message.get("result", {}).get("result", {}).get("value")
+                return "" if value is None else str(value)
+    finally:
+        ws.close()
+
 
 FILL_JS = r"""
 (() => { try {
@@ -106,53 +181,30 @@ STATE_JS = r"""
 """
 
 
-def _applescript(host: str, marker: str, javascript: str) -> str:
-    quoted = json.dumps(" ".join(line.strip() for line in javascript.splitlines() if line.strip()), ensure_ascii=False)
-    script = f"""
-tell application "Google Chrome"
-  repeat with pass from 1 to 2
-    repeat with wi from 1 to count of windows
-      repeat with ti from 1 to count of tabs of window wi
-        set u to URL of tab ti of window wi
-        if (pass = 1 and u contains "{marker}") or (pass = 2 and u contains "{host}") then
-          return execute tab ti of window wi javascript {quoted}
-        end if
-      end repeat
-    end repeat
-  end repeat
-  return "TAB_NOT_FOUND"
-end tell
-"""
-    result = subprocess.run(["osascript", "-"], input=script, text=True, capture_output=True, check=False)
-    if result.returncode:
-        message = (result.stderr or result.stdout).strip()
-        if "JavaScript" in message:
-            raise RuntimeError("請在 Chrome 開啟：顯示方式 → 開發人員 → 允許來自 Apple 事件的 JavaScript")
-        raise RuntimeError(message or "無法控制 Chrome")
-    return result.stdout.strip()
-
-
 def _logged_in(state: dict) -> bool:
     return not state.get("loggedOut") and not state.get("password") and bool(state.get("logout"))
 
 
 def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool:
-    """用正常 Chrome 開銀行、預填帳密，等本人輸入驗證碼登入。回傳是否登入完成。"""
+    """在專用 Chrome 開銀行、預填帳密，等本人輸入驗證碼登入。回傳是否登入完成。"""
     bank: WebBank = WEB_BANKS[bank_code]
     creds = load_credentials(login_key)
-    marker = f"bank-sync-{bank_code}"
-    subprocess.run(["open", "-a", "Google Chrome", f"{bank.login_url}#{marker}"], check=False)
-    print(f"→ {bank.name}：已用你平常的 Chrome 開啟")
+    try:
+        if _logged_in(json.loads(evaluate(bank.host, STATE_JS))):
+            print(f"✓ {bank.name}：已是登入狀態")
+            return True
+    except Exception:
+        pass
+    open_native(bank.login_url)
+    print(f"→ {bank.name}：已開在專用 Chrome 視窗")
     js = (FILL_JS.replace("__CREDS__", json.dumps(creds, ensure_ascii=False))
           .replace("__HINTS__", json.dumps(bank.field_hints, ensure_ascii=False)))
     deadline = time.time() + 60
     filled = None
     while time.time() < deadline:
         try:
-            output = _applescript(bank.host, marker, js)
-        except RuntimeError as exc:
-            if "允許來自 Apple 事件" in str(exc):
-                raise
+            output = evaluate(bank.host, js)
+        except Exception:
             output = "WAIT"
         if output.startswith("JS_ERROR:"):
             print(f"! {bank.name}：{output}")
@@ -162,19 +214,17 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
             break
         time.sleep(1)
     if filled is None:
-        print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫。"
-              "（若程式開的另一個 Chrome 還開著，請先把它關掉再試）")
+        print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫")
     else:
         extra = f"（找不到欄位：{'、'.join(filled['missing'])}，請手動填）" if filled["missing"] else ""
         print(f"   已預填 {len(filled['filled'])} 欄，請輸入驗證碼並按登入{extra}")
     end = time.time() + timeout_s
     while time.time() < end:
         try:
-            state = json.loads(_applescript(bank.host, marker, STATE_JS))
-            if _logged_in(state):
+            if _logged_in(json.loads(evaluate(bank.host, STATE_JS))):
                 print(f"✓ {bank.name}：登入完成")
                 return True
-        except (RuntimeError, ValueError):
+        except Exception:
             pass
         time.sleep(2)
     return False
@@ -204,12 +254,13 @@ INSPECT_JS = r"""
 def inspect_page(bank_code: str) -> list[dict]:
     """列出已開啟的銀行登入頁欄位（名稱、類型、位置），不讀取欄位內容。"""
     bank = WEB_BANKS[bank_code]
-    output = _applescript(bank.host, f"bank-sync-{bank_code}", INSPECT_JS)
+    if not _running():
+        raise SystemExit(f"專用 Chrome 沒有開著；請先執行 python3 -m bank_sync login {bank_code}")
+    output = evaluate(bank.host, INSPECT_JS)
     if output == "TAB_NOT_FOUND":
-        raise SystemExit(f"Chrome 裡找不到{bank.name}的分頁。若程式開的另一個 Chrome 還開著（login 還在等其他銀行），"
-                         "請先在那個終端機按 Control+C 關掉，再執行 inspect。")
+        raise SystemExit(f"專用 Chrome 裡找不到{bank.name}的分頁；請先執行 login 打開登入頁。")
     if not output.startswith("["):
-        raise SystemExit(f"{bank.name}分頁沒有回應正確結果：{output[:200] or '（空白，可能還在載入，或 Chrome 沒開啟 Apple 事件的 JavaScript）'}")
+        raise SystemExit(f"{bank.name}分頁沒有回應正確結果：{output[:200] or '（空白，可能還在載入）'}")
     rows = json.loads(output)
     for i, r in enumerate(rows):
         if r["type"] == "hidden":
