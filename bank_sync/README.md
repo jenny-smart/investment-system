@@ -24,7 +24,7 @@ python -m bank_sync login fubon sc     # 只開指定銀行
 |---|---|---|
 | taishin | 台新 | |
 | fubon | 富邦 | 先點右上「登入」開彈窗再填（參照 tool-system） |
-| sc | 渣打 | |
+| sc | 渣打 | 用你平常的 Chrome（渣打會擋程式開的 Chrome）；需開啟 Chrome「允許來自 Apple 事件的 JavaScript」 |
 | linebank | LINE Bank | 無圖形驗證碼，可能要在手機 App 確認 |
 | yuanta | 元大（個人網銀） | |
 | next | 將來銀行 | |

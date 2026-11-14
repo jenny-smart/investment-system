@@ -21,6 +21,7 @@ class WebBank:
     logged_in_markers: tuple[str, ...] = ("登出",)
     logged_out_markers: tuple[str, ...] = ("您已成功登出", "已登出")
     note: str = ""
+    native: bool = False                        # True = 用本人平常的 Chrome（認得出程式控制的銀行）
 
 
 WEB_BANKS: dict[str, WebBank] = {bank.code: bank for bank in (
@@ -30,7 +31,8 @@ WEB_BANKS: dict[str, WebBank] = {bank.code: bank for bank in (
             field_hints={"id_number": ("身分證字號",), "user_code": ("使用者代碼",), "password": ("使用者密碼",)},
             note="富邦登入框是彈出視窗，程式會先點右上角「登入」。"),
     WebBank("sc", "渣打銀行", "https://ebank.standardchartered.com.tw/scb/public/login?lang=tw",
-            "standardchartered.com.tw"),
+            "standardchartered.com.tw", native=True,
+            note="渣打會擋程式開的 Chrome，改用你平常的 Chrome。"),
     WebBank("linebank", "LINE Bank", "https://accessibility.linebank.com.tw/login", "linebank.com.tw",
             captcha=False, note="LINE Bank 可能需要在手機 App 按確認。"),
     WebBank("yuanta", "元大銀行", "https://ebank.yuantabank.com.tw/nib/", "yuantabank.com.tw"),

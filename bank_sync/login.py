@@ -376,6 +376,16 @@ def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_
             states = []
             for index, (key, code) in enumerate(targets, 1):
                 print(f"\n[{index}/{len(targets)}] {WEB_BANKS[code].name}")
+                if WEB_BANKS[code].native:
+                    from .native_chrome import native_login
+                    state = LoginState(key, WEB_BANKS[code])
+                    try:
+                        state.logged_in = native_login(key, code, timeout_s)
+                    except Exception as exc:
+                        state.error = f"{type(exc).__name__}: {exc}"
+                        print(f"! {state.bank.name}：{state.error}")
+                    states.append(state)
+                    continue
                 state = open_bank(context, key, code)
                 states.append(state)
                 if not state.error and not state.logged_in:

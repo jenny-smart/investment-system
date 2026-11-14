@@ -1,0 +1,156 @@
+"""用本人平常的 Google Chrome 登入（做法同 tool-system native_chrome）。
+
+有些銀行（渣打）認得出 Playwright 開的 Chrome 而回 403；這裡改用 macOS AppleScript
+叫正常 Chrome 開頁面、執行 JavaScript 預填帳密。
+需要在 Chrome 開啟：顯示方式 → 開發人員 → 允許來自 Apple 事件的 JavaScript。
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+
+from .banks import WEB_BANKS, WebBank
+from .credentials import load_credentials
+
+FILL_JS = r"""
+(() => {
+  const creds = __CREDS__;
+  const hints = __HINTS__;
+  const docs = [];
+  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  walk(document);
+  const visible = e => e && e.getClientRects().length > 0;
+  const fillable = e => visible(e) && !e.disabled && !['hidden','button','submit','checkbox','radio','image','reset'].includes((e.type || 'text').toLowerCase());
+  const isCaptcha = e => {
+    const a = [e.name, e.id, e.placeholder, e.getAttribute('aria-label'), e.title].join(' ');
+    if (/captcha|verify|vcode|pict|chkcode|驗證|檢核/i.test(a)) return true;
+    let n = e.parentElement;
+    for (let i = 0; n && i < 4; i++, n = n.parentElement) {
+      const t = (n.innerText || '').trim();
+      if (t) return /驗證|檢核碼/.test(t) && !/密碼|代號|代碼|名稱|身分證/.test(t.replace(/驗證碼|檢核碼/g, ''));
+    }
+    return false;
+  };
+  for (const d of docs) {
+    const inputs = [...d.querySelectorAll('input')].filter(fillable);
+    if (!inputs.some(e => (e.type || '').toLowerCase() === 'password') && inputs.length < 2) continue;
+    const used = new Set();
+    const result = {filled: [], missing: []};
+    const labels = [...d.querySelectorAll('label,span,div,td,th,p,dt')].filter(e => visible(e));
+    const findFor = words => {
+      for (const w of words) {
+        const ph = inputs.find(e => !used.has(e) && !isCaptcha(e) && ((e.placeholder || '').includes(w) || (e.getAttribute('aria-label') || '').includes(w)));
+        if (ph) return ph;
+        const label = labels.find(e => [...e.childNodes].some(c => c.nodeType === 3 && c.textContent.includes(w)));
+        if (!label) continue;
+        const after = inputs.find(e => !used.has(e) && !isCaptcha(e) && (label.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+        if (after) return after;
+      }
+      return null;
+    };
+    let previous = null;
+    for (const field of ['id_number', 'user_code', 'password']) {
+      if (!creds[field]) continue;
+      let input = findFor(hints[field] || []);
+      if (!input && field === 'password') input = inputs.find(e => !used.has(e) && (e.type || '').toLowerCase() === 'password');
+      if (!input && field === 'password' && previous) input = inputs.find(e => !used.has(e) && !isCaptcha(e) && (previous.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (!input) { result.missing.push(field); continue; }
+      used.add(input);
+      input.removeAttribute('readonly');
+      input.focus();
+      const setter = Object.getOwnPropertyDescriptor(input.ownerDocument.defaultView.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, creds[field]);
+      for (const t of ['input', 'change', 'keyup', 'blur']) input.dispatchEvent(new Event(t, {bubbles: true}));
+      result.filled.push(field);
+      previous = input;
+    }
+    if (!result.filled.length) continue;
+    const captcha = inputs.find(e => !used.has(e) && isCaptcha(e));
+    if (captcha) captcha.focus();
+    return JSON.stringify(result);
+  }
+  return 'WAIT';
+})()
+"""
+
+STATE_JS = r"""
+(() => {
+  const docs = [];
+  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  walk(document);
+  const text = docs.map(d => d.body ? d.body.innerText : '').join('\n');
+  const pwd = docs.some(d => [...d.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length));
+  return JSON.stringify({password: pwd, logout: text.includes('登出'), loggedOut: /您已成功登出|已登出/.test(text)});
+})()
+"""
+
+
+def _applescript(host: str, marker: str, javascript: str) -> str:
+    quoted = json.dumps(" ".join(line.strip() for line in javascript.splitlines() if line.strip()), ensure_ascii=False)
+    script = f"""
+tell application "Google Chrome"
+  repeat with pass from 1 to 2
+    repeat with wi from 1 to count of windows
+      repeat with ti from 1 to count of tabs of window wi
+        set u to URL of tab ti of window wi
+        if (pass = 1 and u contains "{marker}") or (pass = 2 and u contains "{host}") then
+          return execute tab ti of window wi javascript {quoted}
+        end if
+      end repeat
+    end repeat
+  end repeat
+  return "TAB_NOT_FOUND"
+end tell
+"""
+    result = subprocess.run(["osascript", "-"], input=script, text=True, capture_output=True, check=False)
+    if result.returncode:
+        message = (result.stderr or result.stdout).strip()
+        if "JavaScript" in message:
+            raise RuntimeError("請在 Chrome 開啟：顯示方式 → 開發人員 → 允許來自 Apple 事件的 JavaScript")
+        raise RuntimeError(message or "無法控制 Chrome")
+    return result.stdout.strip()
+
+
+def _logged_in(state: dict) -> bool:
+    return not state.get("loggedOut") and not state.get("password") and bool(state.get("logout"))
+
+
+def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool:
+    """用正常 Chrome 開銀行、預填帳密，等本人輸入驗證碼登入。回傳是否登入完成。"""
+    bank: WebBank = WEB_BANKS[bank_code]
+    creds = load_credentials(login_key)
+    marker = f"bank-sync-{bank_code}"
+    subprocess.run(["open", "-a", "Google Chrome", f"{bank.login_url}#{marker}"], check=False)
+    print(f"→ {bank.name}：已用你平常的 Chrome 開啟")
+    js = (FILL_JS.replace("__CREDS__", json.dumps(creds, ensure_ascii=False))
+          .replace("__HINTS__", json.dumps(bank.field_hints, ensure_ascii=False)))
+    deadline = time.time() + 60
+    filled = None
+    while time.time() < deadline:
+        try:
+            output = _applescript(bank.host, marker, js)
+        except RuntimeError as exc:
+            if "允許來自 Apple 事件" in str(exc):
+                raise
+            output = "WAIT"
+        if output not in ("WAIT", "TAB_NOT_FOUND", ""):
+            filled = json.loads(output)
+            break
+        time.sleep(1)
+    if filled is None:
+        print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫")
+    else:
+        extra = f"（找不到欄位：{'、'.join(filled['missing'])}，請手動填）" if filled["missing"] else ""
+        print(f"   已預填 {len(filled['filled'])} 欄，請輸入驗證碼並按登入{extra}")
+    end = time.time() + timeout_s
+    while time.time() < end:
+        try:
+            state = json.loads(_applescript(bank.host, marker, STATE_JS))
+            if _logged_in(state):
+                print(f"✓ {bank.name}：登入完成")
+                return True
+        except (RuntimeError, ValueError):
+            pass
+        time.sleep(2)
+    return False
