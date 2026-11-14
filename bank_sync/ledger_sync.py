@@ -276,15 +276,8 @@ def write_report(plan: Plan, target: Path) -> Path:
 
 # ---------------------------------------------------------------- 寫入
 
-def service_account_info(path: Path = DEFAULT_CREDENTIALS_FILE) -> dict:
-    file = load_section("google", ("service_account_file",), path)["service_account_file"]
-    return json.loads(Path(file).expanduser().read_text("utf-8"))
-
-
-def open_book(info: dict):
+def open_book(creds):
     import gspread
-    from google.oauth2.service_account import Credentials
-    creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     return gspread.authorize(creds).open_by_key(SPREADSHEET_ID)
 
 
@@ -379,8 +372,9 @@ def run(year: int, apply: bool = False, banks: tuple = ()) -> Path:
     files = parsed_statements(year, banks=banks)
     if not files:
         raise SystemExit(f"{STATEMENT_DIR} 裡沒有 {year} 年的帳單；先執行 fetch-statements --months 12")
-    info = service_account_info()
-    book = open_book(info)
+    from .google_auth import calendar_add_once, credentials
+    creds = credentials()
+    book = open_book(creds)
     values = book.worksheet(f"{year}細帳").get_values()
     applied = load_applied()
     plan = build_plan(files, values, stamp, applied)
@@ -392,16 +386,8 @@ def run(year: int, apply: bool = False, banks: tuple = ()) -> Path:
     if not apply:
         print("（只比對，沒有寫入。確認報表後加 --apply 才會寫入總帳。）")
         return report
-    calendar = None
-    try:
-        import os
-        import sys
-        os.environ.setdefault("INVESTMENT_GOOGLE_SERVICE_ACCOUNT_JSON", json.dumps(info))
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from calendar_note import add_once
-        calendar = lambda key, day, title, body: print("   行事曆：", title, "→", add_once("bank_sync:" + key, day, title, body))
-    except Exception as exc:  # 行事曆失敗不影響寫入
-        print(f"行事曆功能無法使用：{exc}")
+    calendar = lambda key, day, title, body: print(
+        "   行事曆：", title, "→", calendar_add_once(creds, "bank_sync:" + key, day, title, body))
     for line in apply_plan(plan, book, stamp, applied, calendar):
         print("✓", line)
     save_applied(applied)

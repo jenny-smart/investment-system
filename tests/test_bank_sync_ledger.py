@@ -147,3 +147,87 @@ class LedgerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeSheet:
+    def __init__(self, title, values, index=0, sid=1):
+        self.title, self.values, self.index, self.id = title, [list(r) for r in values], index, sid
+        self.notes = {}
+
+    def get_values(self, value_render_option=None):
+        return [list(r) for r in self.values]
+
+    def get_notes(self):
+        return [[self.notes.get((r, c), "") for c in range(len(row))] for r, row in enumerate(self.values)]
+
+    def update_note(self, cell, text):
+        from bank_sync.ledger_sync import _rc
+        self.notes[_rc(cell)] = text
+
+    def update(self, range_name, values, value_input_option=None):
+        from bank_sync.ledger_sync import _rc
+        r, c = _rc(range_name)
+        self.values[r][c] = values[0][0]
+
+
+class FakeBook:
+    def __init__(self, sheet):
+        self.sheets = [sheet]
+
+    def worksheets(self):
+        return self.sheets
+
+    def worksheet(self, title):
+        return next(s for s in self.sheets if s.title == title)
+
+    def duplicate_sheet(self, sid, insert_sheet_index, new_sheet_name):
+        src = next(s for s in self.sheets if s.id == sid)
+        copy = FakeSheet(new_sheet_name, src.values, insert_sheet_index, sid + 100)
+        copy.notes = dict(src.notes)
+        self.sheets.append(copy)
+        return copy
+
+
+class ApplyTest(unittest.TestCase):
+    VALUES = [["2026", "2026-10", "2026-11"],
+              ["零用金-餐費", "", "100"],
+              ["零用金-其他", "", ""],
+              ["零用金-交通1", "", "=1000"],
+              ["信用卡-星展 08", "780", "260"]]
+
+    def test_apply_notes_only_on_detail_and_terms_on_copy(self):
+        from bank_sync.ledger_sync import apply_plan
+        detail = FakeSheet("2026細帳", self.VALUES)
+        detail.notes[(4, 2)] = "我自己的備註"
+        book = FakeBook(detail)
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
+        stamp = date(2026, 11, 14)
+        applied, events = {}, []
+        plan = build_plan(files, detail.get_values(), stamp, applied)
+        apply_plan(plan, book, stamp, applied, lambda *a: events.append(a))
+        # 2026細帳：金額不動，只加備註（保留原備註）
+        self.assertEqual(detail.values, self.VALUES)
+        self.assertIn("我自己的備註", detail.notes[(4, 2)])
+        self.assertIn("加註日期：2026-11-14", detail.notes[(4, 2)])
+        # 含信用卡表：餐費 100 + 60；其他 + 200
+        copy = book.worksheet("2026細帳(含信用卡)")
+        self.assertEqual(copy.values[1][2], "=100+60")
+        self.assertEqual(copy.values[2][2], "=200")
+        self.assertIn("範例早午餐", copy.notes[(1, 2)])
+        self.assertEqual(len(events), 3)
+        # 重跑：同一份帳單不會再加一次
+        plan2 = build_plan(files, detail.get_values(), stamp, applied)
+        apply_plan(plan2, book, stamp, applied, lambda *a: events.append(a))
+        self.assertEqual(copy.values[1][2], "=100+60")
+        self.assertEqual(detail.notes[(4, 2)].count("【星展"), 1)
+
+
+class GoogleAuthTest(unittest.TestCase):
+    def test_refresh_token_credentials(self):
+        import json, tempfile
+        from bank_sync.google_auth import credentials
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "a.json"
+            p.write_text(json.dumps({"google": {"client_id": "x", "client_secret": "y", "refresh_token": "z"}}))
+            creds = credentials(p)
+            self.assertEqual(creds.refresh_token, "z")

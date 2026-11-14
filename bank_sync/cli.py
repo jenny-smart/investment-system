@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
     dump.add_argument("--bank", action="append", default=[])
     dump.add_argument("--file", default="", help="只轉檔名含這段文字的帳單（例：2026-04）；不給則每家最新一期")
+    gl = sub.add_parser("google-login", help="用 jennytsai26888@gmail.com 授權寫入總帳與行事曆（只要做一次）")
+    gl.add_argument("client_json", nargs="?", type=Path, help="OAuth 用戶端 JSON（不給則讀 ~/lemon/.streamlit/secrets.toml）")
     led = sub.add_parser("ledger", help="信用卡帳單 → 2026細帳 備註＋2026細帳(含信用卡)；預設只比對")
     led.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     led.add_argument("--apply", action="store_true", help="確認比對報表後才加：寫入總帳並發行事曆")
@@ -103,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
         from .mail_statements import check_statements, fetch_statements
         fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
         check_statements(banks=tuple(args.bank))
+    elif args.command == "google-login":
+        from .google_auth import login
+        login(args.client_json)
     elif args.command == "ledger":
         from .ledger_sync import run
         run(args.year, apply=args.apply, banks=tuple(args.bank))
