@@ -33,7 +33,8 @@ TWD_ACCOUNTS = {
     "中和綜活": "台新-建北",  # Jenny：中和綜活比照建北登記
 }
 TWD_SKIP = ("建北活儲存款-證券", "中和活儲存款-證券", "天母活儲存款-證券", "數位三類")  # Jenny：略過
-FX_LEDGER_ACCOUNT = "古亭"  # 細帳的台新人民幣/美金/日幣/南非都是古亭外幣綜存
+FX_LEDGER_ACCOUNT = "古亭"  # 細帳的台新人民幣/美金/日幣/南非：古亭外幣綜存全部進出
+FX_INTEREST_ONLY = "敦南"  # 敦南外幣帳戶只取「利息」，加到同幣別那一列
 FX_CURRENCIES = {"人民幣": "台新人民幣", "日圓": "台新日幣", "美元": "台新美金", "南非幣": "台新南非"}
 
 TABLE_JS = r"""
@@ -204,7 +205,7 @@ def fetch_fx(page, period: str = "2個月") -> list[dict]:
                 raise
             data = {"head": [], "rows": [], "error": str(exc)}
         name = _short(label)
-        out.append({"type": "FX", "account": name, "ledger_row": "古亭→台新外幣各幣別列" if FX_LEDGER_ACCOUNT in name else "", **data})
+        out.append({"type": "FX", "account": name, "ledger_row": "台新外幣各幣別列（全部）" if FX_LEDGER_ACCOUNT in name else ("台新外幣各幣別列（只取利息）" if FX_INTEREST_ONLY in name else ""), **data})
         print(f"  外幣 {name}：{len(data['rows'])} 筆{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 
