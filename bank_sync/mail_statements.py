@@ -251,5 +251,6 @@ def notify_new_statements(saved: list[dict], path: Path = DEFAULT_CREDENTIALS_FI
         print(f"   行事曆：{summary} → {calendar_add_once(creds, 'bank_sync:' + key, today, summary, body)}")
         if due_reminder and due and due > today:
             remind = max(due - timedelta(days=1), today)
-            print(f"   行事曆：⏰ {item['bank']} 繳款截止 → "
-                  f"{calendar_add_once(creds, 'bank_sync:due:' + key, remind, f"⏰ {item['bank']}信用卡 明天繳款截止", body)}")
+            due_title = "⏰ " + item["bank"] + "信用卡 明天繳款截止"
+            result = calendar_add_once(creds, "bank_sync:due:" + key, remind, due_title, body)
+            print(f"   行事曆：{due_title} → {result}")
