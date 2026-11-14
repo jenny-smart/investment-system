@@ -32,6 +32,8 @@ TWD_ACCOUNTS = {
     "內湖綜活": "台新-內湖新轉",
     "中和綜活": "台新-建北",  # Jenny：中和綜活比照建北登記
 }
+TWD_SKIP = ("建北活儲存款-證券", "中和活儲存款-證券", "天母活儲存款-證券", "數位三類")  # Jenny：略過
+FX_LEDGER_ACCOUNT = "古亭"  # 細帳的台新人民幣/美金/日幣/南非都是古亭外幣綜存
 FX_CURRENCIES = {"人民幣": "台新人民幣", "日圓": "台新日幣", "美元": "台新美金", "南非幣": "台新南非"}
 
 TABLE_JS = r"""
@@ -164,7 +166,7 @@ def fetch_twd(page, period: str = "2個月") -> list[dict]:
     options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""])
     out = []
     for i, label in enumerate(options):
-        if i == 0 or "請選擇" in label:
+        if i == 0 or "請選擇" in label or any(k in label for k in TWD_SKIP):
             continue
         page.evaluate(SELECT_JS, ["請選擇帳號", i, ""])
         page.evaluate(SELECT_JS, ["請選擇查詢期間", 0, period])
@@ -202,7 +204,7 @@ def fetch_fx(page, period: str = "2個月") -> list[dict]:
                 raise
             data = {"head": [], "rows": [], "error": str(exc)}
         name = _short(label)
-        out.append({"type": "FX", "account": name, **data})
+        out.append({"type": "FX", "account": name, "ledger_row": "古亭→台新外幣各幣別列" if FX_LEDGER_ACCOUNT in name else "", **data})
         print(f"  外幣 {name}：{len(data['rows'])} 筆{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 
