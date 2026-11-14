@@ -28,21 +28,77 @@ BANK_NAME = {"fubon": "富邦", "taishin": "台新", "sc": "渣打", "dbs": "星
 FALLBACK_ROW = "零用金-其他"
 
 # 摘要關鍵字 → 細帳列名（第一個對到的為準）。可在 ~/Bank account/category_rules.json 覆寫或新增。
+SKIP_ROW = "（不列零用金）"   # 只留在信用卡備註，不加進含信用卡表
+TRAVEL_HINTS = ("PUSAN", "BUSAN", "SEOUL", "MIYAZA", "EHIME", "TOKYO", "TOUKIY", "LONDON", "LUXEMB", "BRUSSE",
+                "GWACHE", "HONG K", "SINGAPORE", "WANCH", "OSAKA", "KYOTO", "FUKUOKA", "BANGKOK", "PARIS",
+                "JP ", "KR ", "GB ", "/ SGP", "TRIP.COM", "AIRPORT", "HOTEL")
+
+# 摘要關鍵字 → 細帳列名（第一個對到的為準，所以具體的放前面）。可在 ~/Bank account/category_rules.json 覆寫或新增。
 DEFAULT_RULES: list[tuple[str, str]] = [
+    # 不列零用金
+    ("綜所稅", SKIP_ROW),
+    # 公司代墊
+    ("彭園", "零用金-公司代墊"), ("星全安", "零用金-公司代墊"), ("一零四資訊", "零用金-公司代墊"),
+    ("ＬＩＮＥ 官方帳", "零用金-公司代墊"), ("LINE 官方帳", "零用金-公司代墊"),
+    # 保費
     ("保險", "保費支出"), ("保費", "保費支出"), ("新壽", "保費支出"),
+    # 其他（年費、折抵、退款、儲值、手續費）
+    ("年費", "零用金-其他"), ("折抵", "零用金-其他"), ("回饋", "零用金-其他"), ("退款", "零用金-其他"),
+    ("信用卡儲值", "零用金-其他"), ("繳費手續費", "零用金-其他"), ("Cofit", "零用金-其他"),
+    # 拜拜
+    ("華嚴寺", "零用金-拜拜"), ("寺", "零用金-拜拜"), ("宮", "零用金-拜拜"),
+    # 家用
+    ("有線電視", "零用金-家用"),
+    # 電話
     ("電話費", "零用金-電話"), ("電信", "零用金-電話"), ("中華電", "零用金-電話"), ("台灣大哥大", "零用金-電話"),
+    ("HINET", "零用金-電話"),
+    # 交通
+    ("重機養管", "零用金-交通2"),
     ("高鐵", "零用金-交通1"), ("台鐵", "零用金-交通1"), ("優步", "零用金-交通1"), ("UBER", "零用金-交通1"),
-    ("大車隊", "零用金-交通1"), ("YOXI", "零用金-交通1"), ("計程車", "零用金-交通1"), ("纜車", "零用金-交通1"), ("捷運", "零用金-交通1"),
-    ("停車", "零用金-交通1"), ("車旅", "零用金-交通1"), ("加油", "零用金-交通1"), ("悠遊", "零用金-交通1"),
-    ("藥局", "零用金-醫療"), ("診所", "零用金-醫療"), ("醫院", "零用金-醫療"),
+    ("大車隊", "零用金-交通1"), ("YOXI", "零用金-交通1"), ("計程車", "零用金-交通1"), ("纜車", "零用金-交通1"),
+    ("捷運", "零用金-交通1"), ("停車", "零用金-交通1"), ("車旅", "零用金-交通1"), ("加油", "零用金-交通1"),
+    ("悠遊", "零用金-交通1"), ("USPACE", "零用金-交通1"), ("旅電共享", "零用金-交通1"),
+    # 醫療
+    ("藥局", "零用金-醫療"), ("診所", "零用金-醫療"), ("醫院", "零用金-醫療"), ("愷達生醫", "零用金-醫療"),
+    ("眼鏡", "零用金-醫療"), ("YAKKYOKU", "零用金-醫療"),
+    # 化妝保養＋按摩（含醫美、皮拉提斯）
+    ("JEIRINMEDI", "零用金-化妝保養＋按摩"), ("整復", "零用金-化妝保養＋按摩"), ("足體", "零用金-化妝保養＋按摩"),
+    ("按摩", "零用金-化妝保養＋按摩"), ("LUSH", "零用金-化妝保養＋按摩"), ("Tobeysimple", "零用金-化妝保養＋按摩"),
+    ("pd pila", "零用金-化妝保養＋按摩"), ("Pd忠孝館", "零用金-化妝保養＋按摩"), ("美業", "零用金-化妝保養＋按摩"),
+    # 衣飾
+    ("女人夢想堂", "零用金-衣飾"), ("MITSUI", "零用金-衣飾"), ("NET", "零用金-衣飾"), ("OLIVE YOUNG", "零用金-衣飾"),
+    # 書／電影
     ("書店", "零用金-書"), ("博客來", "零用金-書"),
-    ("威秀", "零用金-電影"), ("影城", "零用金-電影"),
-    ("超市", "零用金-食材"), ("全聯", "零用金-食材"), ("家樂福", "零用金-食材"),
-    ("餐", "零用金-餐費"), ("飯", "零用金-餐費"), ("麵", "零用金-餐費"), ("早午餐", "零用金-餐費"),
-    ("咖啡", "零用金-餐費"), ("CAF", "零用金-餐費"), ("茶", "零用金-餐費"), ("５０嵐", "零用金-餐費"), ("50嵐", "零用金-餐費"),
-    ("烘焙", "零用金-餐費"), ("ＳＵＫＩＹＡ", "零用金-餐費"), ("鹽水雞", "零用金-餐費"),
-    ("MOMO", "零用金-用品"), ("百貨", "零用金-用品"), ("特力", "零用金-用品"), ("康達盛通", "零用金-用品"),
-    ("飯店", "零用金-旅行"), ("旅館", "零用金-旅行"), ("航空", "零用金-旅行"),
+    ("威秀", "零用金-電影"), ("影城", "零用金-電影"), ("劇院", "零用金-電影"),
+    # 食材
+    ("超市", "零用金-食材"), ("全聯", "零用金-食材"), ("家樂福", "零用金-食材"), ("美廉社", "零用金-食材"),
+    # 餐費
+    ("統一超商", "零用金-餐費"), ("全家", "零用金-餐費"), ("萊爾富", "零用金-餐費"), ("SEVEN-ELEVEN", "零用金-餐費"),
+    ("GS25", "零用金-餐費"), ("麥當勞", "零用金-餐費"), ("餐", "零用金-餐費"), ("飯", "零用金-餐費"), ("麵", "零用金-餐費"),
+    ("食堂", "零用金-餐費"), ("素食", "零用金-餐費"), ("煲湯", "零用金-餐費"), ("臭豆腐", "零用金-餐費"),
+    ("鹽水雞", "零用金-餐費"), ("酥雞", "零用金-餐費"), ("烤頂雞", "零用金-餐費"), ("葵燒", "零用金-餐費"), ("初月", "零用金-餐費"),
+    ("咖啡", "零用金-餐費"), ("CAF", "零用金-餐費"), ("茶", "零用金-餐費"), ("50嵐", "零用金-餐費"), ("路易", "零用金-餐費"),
+    ("PAUL", "零用金-餐費"), ("丹麥", "零用金-餐費"), ("蛋糕", "零用金-餐費"), ("餅", "零用金-餐費"), ("桃酥", "零用金-餐費"),
+    ("麻油雞", "零用金-餐費"), ("老蘿蔔", "零用金-餐費"), ("聯誼社", "零用金-餐費"), ("美食", "零用金-餐費"),
+    ("微風", "零用金-餐費"), ("黑松", "零用金-餐費"), ("金興發", "零用金-餐費"), ("I-MEI", "零用金-餐費"),
+    ("goodeggs", "零用金-餐費"), ("SSIYU", "零用金-餐費"), ("Flourish", "零用金-餐費"), ("Dore", "零用金-餐費"),
+    ("Local Lo", "零用金-餐費"), ("Redi", "零用金-餐費"), ("Mimi", "零用金-餐費"), ("coco", "零用金-餐費"),
+    ("MamaLiLi", "零用金-餐費"), ("LAY BACK", "零用金-餐費"), ("知初", "零用金-餐費"), ("巢屋", "零用金-餐費"),
+    ("采豊", "零用金-餐費"), ("一般商品買賣", "零用金-餐費"), ("烘焙", "零用金-餐費"), ("SUKIYA", "零用金-餐費"),
+    ("早安", "零用金-餐費"), ("DONG TIANYUE", "零用金-餐費"), ("DAO YAN", "零用金-餐費"), ("ZHI YOU", "零用金-餐費"),
+    # 用品（含 AI 訂閱＝個人）
+    ("OPENAI", "零用金-用品"), ("CHATGPT", "零用金-用品"), ("ANTHROPIC", "零用金-用品"), ("CLAUDE", "零用金-用品"),
+    ("CHATHUB", "零用金-用品"), ("CapCut", "零用金-用品"),
+    ("蝦皮", "零用金-用品"), ("SHOPEE", "零用金-用品"), ("MOMO", "零用金-用品"), ("IKEA", "零用金-用品"), ("誠品", "零用金-用品"),
+    ("京站", "零用金-用品"), ("巨城", "零用金-用品"), ("寶雅", "零用金-用品"), ("POYA", "零用金-用品"), ("屈臣氏", "零用金-用品"),
+    ("文具", "零用金-用品"), ("PCHOME", "零用金-用品"), ("taobao", "零用金-用品"), ("小米", "零用金-用品"),
+    ("佳銥", "零用金-用品"), ("巷上", "零用金-用品"), ("特麗樹", "零用金-用品"), ("i color", "零用金-用品"),
+    ("ＬＩＮＥ禮物", "零用金-用品"), ("團圓國際", "零用金-用品"), ("百貨", "零用金-用品"), ("特力", "零用金-用品"),
+    ("康達盛通", "零用金-用品"), ("曙客", "零用金-用品"), ("DAISO", "零用金-用品"), ("拾元小店", "零用金-用品"),
+    # 旅行
+    ("飯店", "零用金-旅行"), ("旅館", "零用金-旅行"), ("航空", "零用金-旅行"), ("虎航", "零用金-旅行"), ("客路", "零用金-旅行"),
+    ("溫泉", "零用金-旅行"), ("君悅", "零用金-旅行"), ("香格里拉", "零用金-旅行"), ("SUICA", "零用金-旅行"),
+    ("Tmoney", "零用金-旅行"), ("esim", "零用金-旅行"),
 ]
 
 
@@ -61,6 +117,8 @@ def categorize(description: str, rules: list[tuple[str, str]]) -> tuple[str, str
     for keyword, row in rules:
         if norm(keyword) in upper:
             return row, f"規則：{keyword}"
+    if any(h in upper for h in TRAVEL_HINTS):
+        return "零用金-旅行", "規則：國外消費"
     return FALLBACK_ROW, "對不到規則 → 待分類"
 
 
@@ -214,10 +272,23 @@ def build_plan(files: list[ParsedFile], values: list[list], stamp: date, applied
             act.status = f"不符：細帳 {act.current:,.0f}／帳單 {st.total_due:,}（只加備註，請確認）"
         if f.key in applied:
             act.status += "（已寫過，會更新備註）"
-        for ch in st.purchases:
-            if ch.amount == 0:
+        purchases = [c for c in st.purchases if c.amount != 0]
+        fee_re = re.compile(r"國外交易(?:服務|手續)費[－-]?\s*([\d.,]+)?")
+        decided: list[tuple[Charge, str, str]] = []
+        for ch in purchases:
+            fm = fee_re.search(ch.description)
+            if fm:
+                base_amt = int(float(fm.group(1).replace(",", ""))) if fm.group(1) else None
+                base = next((d for d in decided if d[0].day == ch.day and d[0].amount == base_amt), None) \
+                    or (decided[-1] if decided else None)
+                label, reason = (base[1], "跟隨對應消費") if base else ("零用金-旅行", "規則：國外手續費")
+            else:
+                label, reason = categorize(ch.description, rules)
+            decided.append((ch, label, reason))
+        for ch, label, reason in decided:
+            if label == SKIP_ROW:
+                plan.spends.append(SpendAction(f, ch, SKIP_ROW, "不列零用金（只留備註）"))
                 continue
-            label, reason = categorize(ch.description, rules)
             sa = SpendAction(f, ch, label, reason)
             r = find_row(labels, label)
             if r is None:
@@ -226,6 +297,7 @@ def build_plan(files: list[ParsedFile], values: list[list], stamp: date, applied
                 r = find_row(labels, FALLBACK_ROW)
             sa.cell = a1(r, col) if r is not None else ""
             plan.spends.append(sa)
+        plan.spends = [x for x in plan.spends if not (x.row_label == SKIP_ROW and x.cell)]
         for w in st.warnings:
             plan.problems.append(f"{BANK_NAME[f.bank]} {f.path.name}：{w}")
     return plan
@@ -317,7 +389,8 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
                            f"{detail_title}!{a.cell}｜{a.status}\n{a.note}"))
 
     # 2) 含信用卡表：刷卡加進零用金各項（同一份帳單只加一次）
-    pending = [] if notes_only else [s for s in plan.spends if s.cell and s.file.key not in applied]
+    pending = [] if notes_only else [s for s in plan.spends if s.cell and s.row_label != SKIP_ROW
+                                     and s.file.key not in applied]
     by_cell: dict[str, list[SpendAction]] = {}
     for s in pending:
         by_cell.setdefault(s.cell, []).append(s)

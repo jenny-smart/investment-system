@@ -124,6 +124,30 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(categorize("連支＊ＷＴＣ　Ｃａｆ？Taipei", DEFAULT_RULES)[0], "零用金-餐費")  # 全形
         self.assertEqual(categorize("ｙｏｘｉTAIPEI", DEFAULT_RULES)[0], "零用金-交通1")
 
+    def test_jenny_rules(self):
+        self.assertEqual(categorize("彭園新店館New Ta", DEFAULT_RULES)[0], "零用金-公司代墊")
+        self.assertEqual(categorize("連加＊ＬＩＮＥ 官方帳", DEFAULT_RULES)[0], "零用金-公司代墊")
+        self.assertEqual(categorize("OPENAI *CHATGPT SUBSCRO9393SAN FR", DEFAULT_RULES)[0], "零用金-用品")
+        self.assertEqual(categorize("＿支付連-女人夢想堂", DEFAULT_RULES)[0], "零用金-衣飾")
+        self.assertEqual(categorize("綠界科技股＊ｐｄ　ｐｉｌａ 第01/06期/TW", DEFAULT_RULES)[0], "零用金-化妝保養＋按摩")
+        self.assertEqual(categorize("JEIRINMEDICARLSENTEOA9131 PUSAN", DEFAULT_RULES)[0], "零用金-化妝保養＋按摩")
+        self.assertEqual(categorize("MEGADONQUIJOTE MIYAZAK0985-2", DEFAULT_RULES)[0], "零用金-旅行")
+        self.assertEqual(categorize("114年度綜所稅款 第01/12期 /TW", DEFAULT_RULES)[0], "（不列零用金）")
+
+    def test_foreign_fee_follows_base_and_tax_skipped(self):
+        text = TAISHIN.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 17,868").replace(
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n",
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n115/06/01 115/10/08 114年度綜所稅款 第05/12期 /TW 16,518  TW\n")
+        values = [["2026", "2026-11"], ["零用金-餐費", ""], ["零用金-其他", ""], ["零用金-交通1", ""], ["零用金-用品", ""],
+                  ["信用卡-台新 18", ""]]
+        plan = build_plan([ParsedFile("taishin", Path("t.pdf"), parse("taishin", text))], values, date(2026, 11, 14), {})
+        by = {s.charge.description: s for s in plan.spends}
+        self.assertEqual(by["EXAMPLE SaaS SAN FR"].row_label, "零用金-其他")     # 美國線上服務不是旅行 → 待分類
+        self.assertEqual(by["國外交易服務費－491.00"].row_label, "零用金-其他")   # 跟隨 491 那筆
+        self.assertEqual(by["國外交易服務費－491.00"].reason, "跟隨對應消費")
+        tax = by["114年度綜所稅款 第05/12期 /TW"]
+        self.assertEqual((tax.row_label, tax.cell), ("（不列零用金）", ""))
+
     def test_merge_note_replaces_same_statement(self):
         old = "使用者自己的備註\n【星展 信用卡帳單】本期應繳 260\n繳款截止日 2026/11/09\n舊明細\n加註日期：2026-11-01（bank_sync）"
         new = "【星展 信用卡帳單】本期應繳 260\n繳款截止日 2026/11/09\n新明細\n加註日期：2026-11-14（bank_sync）"
