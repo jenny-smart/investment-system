@@ -44,7 +44,7 @@ def test_classify_rules():
     assert [(p.row, p.amount) for p in e["基金"].postings] == [(92, 300), (126, 300)]
     assert [(p.row, p.amount) for p in e["新興邊境 申購"].postings] == [(38, -20000), (105, 20000)]
     dunnan = [x for x in classify(txs, RULES) if x.tx.currency == "美元"][0]
-    assert dunnan.skip
+    assert [(p.row, p.amount) for p in dunnan.postings] == [(90, 100), (125, 100)]  # 外幣列＝古亭＋敦南加總
 
 
 def test_plan_cells_appends_terms():
@@ -136,6 +136,7 @@ def test_rules_from_review_feedback():
         tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 10, -4896, "媒體轉出", "信用卡款星展銀行"),
         tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 6, -68643, "支出", "040750032867ZAR", "南非幣", True),
         tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 9, 11772.86, "存入", "040750032867ZAR", "南非幣", True),
+        tx("taishin", "****867 古亭外幣綜存", "台新外幣", 9, -11772.86, "支出", "轉敦南", "南非幣"),
         tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 9, -11773.76, "支出", "88872B0RC170", "南非幣", True),
         tx("taishin", "****867 古亭外幣綜存", "台新外幣", 3, 1234.5, "存入", "ABC1基金XX12345", "南非幣"),
         tx("taishin", "****867 古亭外幣綜存", "台新外幣", 4, 3.2, "存入", "INT202611", "美元"),
@@ -144,8 +145,8 @@ def test_rules_from_review_feedback():
     assert [(p.row, p.amount) for p in got[("基金配息 0056FUND", 11)].postings] == [(116, 8590)]
     assert [(p.row, p.amount) for p in got[("基金配息00740B", 12)].postings] == [(116, 360)]
     assert [(p.row, p.amount) for p in got[("信用卡款星展銀行", 10)].postings] == [(135, 4896)]
-    assert [(p.row, p.amount) for p in got[("040750032867ZAR", 6)].postings] == [(110, 68643)]
-    assert got[("040750032867ZAR", 9)].skip
+    assert [(p.row, p.amount) for p in got[("040750032867ZAR", 6)].postings] == [(92, -68643), (110, 68643)]
+    assert got[("040750032867ZAR", 9)].skip and got[("轉敦南", 9)].skip  # 古亭⇄敦南互轉，加總不變
     td = got[("88872B0RC170", 9)]
     assert [(p.row, p.note_only) for p in td.postings] == [(92, True)]
     assert [(p.row, p.amount) for p in got[("ABC1基金XX12345", 3)].postings] == [(92, 1234.5), (126, 1234.5)]

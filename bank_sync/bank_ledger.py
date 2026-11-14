@@ -240,10 +240,12 @@ def _internal_pairs(txs: list[Tx]) -> dict[str, str]:
     """自己帳戶之間的轉帳：不同帳號、金額相反、日期相差 2 天內 → 配成一對。"""
     pairs, used = {}, set()
     for a in txs:
-        if a.key in used or a.amount >= 0 or a.currency != "TWD":
+        if a.key in used or a.amount >= 0:
             continue
         for b in txs:
-            if b.key in used or b.key == a.key or b.currency != "TWD" or b.account == a.account:
+            if b.key in used or b.key == a.key or b.currency != a.currency or b.account == a.account:
+                continue
+            if a.currency != "TWD" and not (a.ledger == b.ledger == "台新外幣"):
                 continue
             if abs(b.amount + a.amount) < 0.5 and abs((b.day - a.day).days) <= 2:
                 pairs[a.key], pairs[b.key] = b.key, a.key
@@ -270,26 +272,22 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
                 e.skip, e.reason = True, f"幣別 {t.currency} 細帳沒有對應列"
             elif is_interest:
                 e.postings, e.reason = [Posting(own, t.amount)], "外幣利息（加在幣別列）"
-            elif t.interest_only:  # 敦南外幣：過路帳戶
-                if t.amount < 0 and is_fund_buy and t.currency in FX_FUND_ROWS:
-                    e.postings = [Posting(FX_FUND_ROWS[t.currency], -t.amount)]
-                    e.reason = f"敦南投資基金 → {FX_FUND_ROWS[t.currency]} 台新-{t.currency[:2]}"
-                elif t.amount > 0:
-                    e.skip, e.reason = True, "古亭轉入敦南（過路，古亭那邊已記）"
-                else:  # Jenny：轉入定存只加備註，到期利息（INT）再加進幣別列
-                    e.postings = [Posting(own, t.amount, note_only=True)]
-                    e.reason = "轉入定存（只加備註，不加金額；到期利息再記）"
+            elif pairs.get(t.key):  # 古亭⇄敦南：細帳外幣列＝兩個帳戶加總，互轉不變
+                e.skip, e.reason = True, "台新外幣帳戶互轉（外幣列是加總，不變）"
+            elif t.amount < 0 and is_fund_buy and t.currency in FX_FUND_ROWS:
+                e.postings = [Posting(own, t.amount), Posting(FX_FUND_ROWS[t.currency], -t.amount)]
+                e.reason = f"外幣投資基金 → {FX_FUND_ROWS[t.currency]}"
+            elif t.amount < 0 and t.currency in FUND_ROWS and any(w in text for w in FUND_WORDS):
+                e.postings = [Posting(own, t.amount), Posting(FUND_ROWS[t.currency], -t.amount)]
+                e.reason = "基富通投資（外幣）"
+            elif t.amount < 0 and t.interest_only:  # Jenny：敦南轉入定存只加備註，到期利息再加
+                e.postings = [Posting(own, t.amount, note_only=True)]
+                e.reason = "轉入定存（只加備註，不加金額；到期利息再記）"
             elif t.amount > 0:
                 e.postings = [Posting(own, t.amount), Posting(FX_DIVIDEND_ROWS[t.currency], t.amount)]
                 e.reason = "外幣基金收入（配息）"
-            elif is_fund_buy and t.currency in FX_FUND_ROWS:
-                e.postings = [Posting(own, t.amount), Posting(FX_FUND_ROWS[t.currency], -t.amount)]
-                e.reason = "外幣投資基金"
-            elif t.currency in FUND_ROWS and any(w in text for w in FUND_WORDS):
-                e.postings = [Posting(own, t.amount), Posting(FUND_ROWS[t.currency], -t.amount)]
-                e.reason = "基富通投資（外幣）"
             else:
-                e.postings, e.reason = [Posting(own, t.amount)], "外幣轉出（例：轉敦南）— 另一邊請確認"
+                e.postings, e.reason = [Posting(own, t.amount)], "外幣轉出 — 另一邊請確認"
             out.append(e)
             continue
         row, interest_row, _ = ACCOUNT_ROWS[t.ledger]
@@ -636,6 +634,27 @@ def _is_time_deposit(t: Tx) -> bool:
     return not re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", text) and not re.search(r"\bINT|利息", text)
 
 
+FX_BALANCE_FILE = TX_ROOT / "taishin" / "_fx_balance.json"
+FX_BALANCE_ACCOUNTS = ("古亭", "Richart外幣綜存")  # Jenny：外幣列＝這兩個帳戶加總＋定存（總覽的「總計」已含定存）
+
+
+def fx_overview() -> dict:
+    """{細帳列號: (總計, 說明)}：外幣總覽各幣別（兩個帳戶的活期＋定期）。"""
+    try:
+        data = json.loads(FX_BALANCE_FILE.read_text("utf-8"))
+    except Exception:
+        return {}
+    out = {}
+    for r in data.get("rows", []):
+        row = FX_ROWS.get(r["currency"])
+        if row is None or not any(k in r["account"] for k in FX_BALANCE_ACCOUNTS):
+            continue
+        total, parts = out.get(row, (0.0, []))
+        parts.append(f"{r['account']}：活期 {r['demand']:,.2f}＋定存 {r['time']:,.2f}")
+        out[row] = (total + r["total"], parts)
+    return {k: (v, "；".join(p) + f"（外幣總覽 {data.get('at', '')}）") for k, (v, p) in out.items()}
+
+
 def mark_recorded(entries: list[Entry], all_txs: list[Tx], numbers: list, labels: list, cols: dict) -> int:
     """用銀行餘額找出「你已經手動記到哪一筆」：
     依時間順序算各帳戶加總餘額，細帳那一格目前的金額等於哪個時間點的餘額，那個時間點以前的交易就是已記過。"""
@@ -645,7 +664,17 @@ def mark_recorded(entries: list[Entry], all_txs: list[Tx], numbers: list, labels
         if r is not None and t.balance is not None:
             by_row.setdefault(r, []).append(t)
     done = set()
+    overview = fx_overview()
+    this_month = date.today().strftime("%Y-%m")
+    for row_no, (total, _) in overview.items():  # 外幣：細帳目前＝總覽總計 → 這個月都記過了
+        c = cols.get(this_month)
+        if c is not None and row_no - 1 < len(numbers) and c < len(numbers[row_no - 1]):
+            cur = _num(str(numbers[row_no - 1][c]))
+            if cur is not None and abs(cur - total) < 0.5:
+                done.update(t.key for t in all_txs if ledger_row_of(t) == row_no and f"{t.day:%Y-%m}" == this_month)
     for row_no, txs in by_row.items():
+        if row_no in overview:
+            continue
         txs.sort(key=lambda t: t.when)
         months = sorted({f"{t.day:%Y-%m}" for t in txs})
         for month in months:
@@ -738,6 +767,13 @@ def simulate(entries: list[Entry], all_txs: list[Tx], formulas: list, numbers: l
                 add += _linked_sign(f, col_letter, other_r + 1) * amount
         sim = cur_v + add
         bank = balances.get(row_no, {})
+        ov = fx_overview().get(row_no)
+        if ov is not None:  # 外幣列用外幣總覽（兩個帳戶的活期＋定存）
+            total, src = ov
+            diff = round(sim - total, 2)
+            rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, total, diff, src,
+                         "✓ 相符" if abs(diff) < 0.5 else "⚠️ 不相符"])
+            continue
         if not bank:
             if add:
                 rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, "", "", "沒有銀行餘額資料", "⚠️ 無法核對"])
