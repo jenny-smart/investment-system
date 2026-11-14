@@ -118,3 +118,14 @@ class NativeJsTest(unittest.TestCase):
         for js in (native_chrome.FILL_JS, native_chrome.STATE_JS, native_chrome.INSPECT_JS):
             for line in js.splitlines():
                 self.assertFalse(line.strip().startswith("//"), line)
+
+
+class MaskTest(unittest.TestCase):
+    def test_mask_card_and_id(self):
+        from bank_sync.mail_statements import mask_text
+        out = mask_text("卡號 4563-1234-5678-9012 持卡人 A224126880 金額 1,234 日期 2026/10/05")
+        self.assertNotIn("4563", out)
+        self.assertIn("****9012", out)
+        self.assertNotIn("A224126880", out)
+        self.assertIn("1,234", out)
+        self.assertIn("2026/10/05", out)

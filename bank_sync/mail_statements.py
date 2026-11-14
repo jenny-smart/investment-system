@@ -171,3 +171,42 @@ def check_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -
             mark = "✓" if row["ok"] else "✗"
             print(f"{mark} {source.name} {pdf.name}：{'可讀，' + str(row['chars']) + ' 字' if row['ok'] else ''}{row['note']}")
     return results
+
+
+def mask_text(text: str) -> str:
+    """遮掉卡號（13–19 碼數字，可含空白／-）與身分證字號，只留後 4 碼。"""
+    def card(m):
+        digits = re.sub(r"\D", "", m.group(0))
+        return "****" + digits[-4:]
+    text = re.sub(r"\b(?:\d[ -]?){12,18}\d\b", card, text)
+    text = re.sub(r"\b[A-Z][12]\d{8}\b", "A*********", text)
+    return text
+
+
+def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[Path]:
+    """每家最新一期帳單轉成文字檔（卡號、身分證遮蔽），存在 statements/_文字樣本/，給本人檢查後再分享。"""
+    out_dir = STATEMENT_DIR / "_文字樣本"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+    for source in SOURCES:
+        if banks and source.code not in banks:
+            continue
+        folder = STATEMENT_DIR / source.name
+        pdfs = sorted(list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))) if folder.exists() else []
+        if not pdfs:
+            continue
+        try:
+            password = load_section(source.code, ("pdf_password",), path)["pdf_password"]
+        except (KeyError, ValueError):
+            password = ""
+        latest = pdfs[-1]
+        try:
+            text = open_pdf_text(latest, password)
+        except Exception as exc:
+            print(f"✗ {source.name}：{exc}")
+            continue
+        target = out_dir / f"{source.name}_{latest.stem}.txt"
+        target.write_text(mask_text(text), "utf-8")
+        written.append(target)
+        print(f"✓ {source.name}：{target}")
+    return written

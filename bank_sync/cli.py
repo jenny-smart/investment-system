@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     fetch.add_argument("--bank", action="append", default=[], help="只抓這家（可重複）：fubon taishin sc dbs cathay hsbc ubot")
     fetch.add_argument("--force", action="store_true", help="已下載過的也重新下載")
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
+    dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
+    dump.add_argument("--bank", action="append", default=[])
     imp = sub.add_parser("import-csv")
     imp.add_argument("account"); imp.add_argument("input", type=Path)
     imp.add_argument("--currency", default="TWD")
@@ -94,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
         from .mail_statements import check_statements, fetch_statements
         fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
         check_statements(banks=tuple(args.bank))
+    elif args.command == "dump-statements":
+        from .mail_statements import dump_statements
+        dump_statements(banks=tuple(args.bank))
     elif args.command == "check-statements":
         from .mail_statements import check_statements
         check_statements()
