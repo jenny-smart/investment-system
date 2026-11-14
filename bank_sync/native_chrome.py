@@ -154,3 +154,37 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
             pass
         time.sleep(2)
     return False
+
+
+INSPECT_JS = r"""
+(() => {
+  const docs = [];
+  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  walk(document);
+  const rows = [];
+  docs.forEach((d, di) => [...d.querySelectorAll('input,select,textarea')].forEach(e => {
+    const r = e.getClientRects()[0];
+    let label = '';
+    if (e.labels && e.labels.length) label = e.labels[0].innerText;
+    if (!label) { let n = e.parentElement; for (let i = 0; n && i < 4 && !label; i++, n = n.parentElement) label = (n.innerText || '').trim().slice(0, 30); }
+    rows.push({frame: di, tag: e.tagName.toLowerCase(), type: e.type, id: e.id, name: e.name,
+               placeholder: e.placeholder, aria: e.getAttribute('aria-label') || '', readonly: e.readOnly,
+               visible: !!r, x: r ? Math.round(r.x) : null, y: r ? Math.round(r.y) : null,
+               label: label.replace(/\s+/g, ' ')});
+  }));
+  return JSON.stringify(rows);
+})()
+"""
+
+
+def inspect_page(bank_code: str) -> list[dict]:
+    """列出已開啟的銀行登入頁欄位（名稱、類型、位置），不讀取欄位內容。"""
+    bank = WEB_BANKS[bank_code]
+    rows = json.loads(_applescript(bank.host, f"bank-sync-{bank_code}", INSPECT_JS))
+    for i, r in enumerate(rows):
+        if r["type"] == "hidden":
+            continue
+        print(f"{i:>2} {'可見' if r['visible'] else '隱藏'} {r['tag']}/{r['type']:<9} id={r['id']!r} name={r['name']!r} "
+              f"placeholder={r['placeholder']!r} aria={r['aria']!r} readonly={r['readonly']} "
+              f"位置=({r['x']},{r['y']}) 標籤={r['label']!r}")
+    return rows
