@@ -384,7 +384,41 @@ LOGOUT_JS = r"""
 }
 """
 LOGOUT_NAMES = ["登出", "安全登出", "登出系統", "立即登出", "Logout", "登出網銀"]
-CONFIRM_NAMES = ["確定登出", "確認登出", "確定", "確認", "是"]
+CONFIRM_NAMES = ["直接登出", "確定登出", "確認登出", "確定", "確認", "是"]
+# 富邦：右上角登出鈕是 header_form:header_logout，按下後彈窗要再按「直接登出」（參照 tool-system fubon_agent.logout_and_close）
+FUBON_LOGOUT = ('[id="header_form:header_logout"]', 'a[onclick*="logout" i]', 'input[value="登出"]')
+
+
+def _logout_fubon(page) -> bool:
+    hit = False
+    for ctx in _contexts(page):
+        for sel in FUBON_LOGOUT:
+            item = _first_visible(ctx.locator(sel))
+            if item is not None:
+                try:
+                    item.click(timeout=5000)
+                except Exception:
+                    item.evaluate("e => e.click()")
+                hit = True
+                break
+        if hit:
+            break
+    if not hit:
+        return False
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        for ctx in _contexts(page):
+            item = _first_visible(ctx.get_by_text("直接登出", exact=True))
+            if item is not None:
+                try:
+                    item.click(timeout=5000)
+                except Exception:
+                    item.evaluate("e => e.click()")
+                page.wait_for_timeout(2500)
+                return not _fubon_logged_in(page)
+        page.wait_for_timeout(300)
+    page.wait_for_timeout(1500)
+    return not _fubon_logged_in(page)
 
 
 def logout(page) -> bool:
@@ -393,6 +427,8 @@ def logout(page) -> bool:
         return False
     try:
         page.on("dialog", lambda d: d.accept())
+        if "taipeifubon" in page.url:
+            return _logout_fubon(page)
         hit = None
         for ctx in _contexts(page):
             try:

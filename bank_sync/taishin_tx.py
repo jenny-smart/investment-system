@@ -397,6 +397,8 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 results += fetch_twd(page, progress, since)
                 print("查詢外幣交易明細…")
                 results += fetch_fx(page, progress, since)
+            except KeyboardInterrupt:
+                print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
             except Exception as exc:
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:

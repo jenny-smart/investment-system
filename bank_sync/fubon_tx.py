@@ -279,6 +279,8 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
             try:
                 print("查詢臺外幣交易明細…")
                 results = fetch_all(page, progress, since)
+            except KeyboardInterrupt:
+                print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
             except Exception as exc:
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:
