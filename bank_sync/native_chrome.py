@@ -14,7 +14,7 @@ from .banks import WEB_BANKS, WebBank
 from .credentials import load_credentials
 
 FILL_JS = r"""
-(() => {
+(() => { try {
   const creds = __CREDS__;
   const hints = __HINTS__;
   const docs = [];
@@ -78,18 +78,18 @@ FILL_JS = r"""
     return JSON.stringify(result);
   }
   return 'WAIT';
-})()
+} catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
 STATE_JS = r"""
-(() => {
+(() => { try {
   const docs = [];
   const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
   walk(document);
   const text = docs.map(d => d.body ? d.body.innerText : '').join('\n');
   const pwd = docs.some(d => [...d.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length));
   return JSON.stringify({password: pwd, logout: text.includes('登出'), loggedOut: /您已成功登出|已登出/.test(text)});
-})()
+} catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
 
@@ -141,6 +141,9 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
             if "允許來自 Apple 事件" in str(exc):
                 raise
             output = "WAIT"
+        if output.startswith("JS_ERROR:"):
+            print(f"! {bank.name}：{output}")
+            break
         if output not in ("WAIT", "TAB_NOT_FOUND", ""):
             filled = json.loads(output)
             break
@@ -164,7 +167,7 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
 
 
 INSPECT_JS = r"""
-(() => {
+(() => { try {
   const docs = [];
   const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
   walk(document);
@@ -180,14 +183,19 @@ INSPECT_JS = r"""
                label: label.replace(/\s+/g, ' ')});
   }));
   return JSON.stringify(rows);
-})()
+} catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
 
 def inspect_page(bank_code: str) -> list[dict]:
     """列出已開啟的銀行登入頁欄位（名稱、類型、位置），不讀取欄位內容。"""
     bank = WEB_BANKS[bank_code]
-    rows = json.loads(_applescript(bank.host, f"bank-sync-{bank_code}", INSPECT_JS))
+    output = _applescript(bank.host, f"bank-sync-{bank_code}", INSPECT_JS)
+    if output == "TAB_NOT_FOUND":
+        raise SystemExit(f"Chrome 裡找不到{bank.name}的分頁；請先執行 login 打開登入頁。")
+    if not output.startswith("["):
+        raise SystemExit(f"{bank.name}分頁沒有回應正確結果：{output[:200] or '（空白，可能還在載入，或 Chrome 沒開啟 Apple 事件的 JavaScript）'}")
+    rows = json.loads(output)
     for i, r in enumerate(rows):
         if r["type"] == "hidden":
             continue
