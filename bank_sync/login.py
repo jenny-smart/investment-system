@@ -339,18 +339,37 @@ def open_bank(context, login_key: str, bank_code: str) -> LoginState:
     return state
 
 
+def _enter_pressed() -> bool:
+    """終端機（或 App 的「繼續」）按了 Enter 沒有；不會卡住等待。"""
+    try:
+        import select
+        import sys
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if ready:
+            sys.stdin.readline()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def wait_for_logins(context, states: list[LoginState], timeout_s: float = 900) -> None:
     deadline = time.time() + timeout_s
+    print("（已經登入、看到帳戶畫面但程式沒反應的話，回到這裡按 Enter）")
     while time.time() < deadline:
         pending = [s for s in states if not s.logged_in]
         if not pending:
             return
+        manual = _enter_pressed()
         for state in pending:
             page = _logged_in_page(context, state.bank)
+            if page is None and manual:
+                pages = _bank_pages(context, state.bank)
+                page = pages[-1] if pages else None
             if page is not None:
                 state.page, state.logged_in = page, True
-                print(f"✓ {state.bank.name}：登入完成")
-        time.sleep(2)
+                print(f"✓ {state.bank.name}：登入完成{'（手動確認）' if manual else ''}")
+        time.sleep(1)
 
 
 def launch_context(playwright):
