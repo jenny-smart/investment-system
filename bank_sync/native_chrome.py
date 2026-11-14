@@ -66,16 +66,21 @@ def open_native(url: str) -> None:
         raise RuntimeError("專用 Chrome 沒有啟動成功")
 
 
-def evaluate(host: str, javascript: str) -> str:
-    """在專用 Chrome 裡網址含 host 的分頁執行 JavaScript，回傳字串結果。"""
+def _targets(host: str) -> list[dict]:
+    targets = _http("/json")
+    pages = [t for t in targets if t.get("type") == "page" and host in t.get("url", "")]
+    if not pages:
+        return []
+    # 跨網域內嵌框是獨立的 target，一併嘗試
+    return pages + [t for t in targets if t.get("type") == "iframe"]
+
+
+def _run(target: dict, javascript: str) -> str:
     try:
         import websocket
     except ImportError as exc:
-        raise RuntimeError("請先安裝：pip install websocket-client") from exc
-    tabs = [t for t in _http("/json") if t.get("type") == "page" and host in t.get("url", "")]
-    if not tabs:
-        return "TAB_NOT_FOUND"
-    ws = websocket.create_connection(tabs[0]["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
+        raise RuntimeError("請先安裝：pip3 install websocket-client") from exc
+    ws = websocket.create_connection(target["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
     try:
         ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
                             "params": {"expression": javascript, "returnByValue": True}}))
@@ -88,17 +93,40 @@ def evaluate(host: str, javascript: str) -> str:
         ws.close()
 
 
+def evaluate(host: str, javascript: str, every: bool = False):
+    """在專用 Chrome 裡網址含 host 的分頁（及其跨網域內嵌框）執行 JavaScript。
+    every=False：回傳第一個有內容的結果；every=True：回傳 [(網址, 結果)]。"""
+    targets = _targets(host)
+    if not targets:
+        return [] if every else "TAB_NOT_FOUND"
+    results = []
+    for target in targets:
+        try:
+            output = _run(target, javascript)
+        except Exception as exc:  # 某個內嵌框連不上就換下一個
+            output = f"ERROR:{exc}"
+        if every:
+            results.append((target.get("url", ""), output))
+        elif output not in ("", "WAIT") and not output.startswith("ERROR:"):
+            return output
+    return results if every else "WAIT"
+
+
 FILL_JS = r"""
 (() => { try {
   const creds = __CREDS__;
   const hints = __HINTS__;
-  const docs = [];
-  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  const roots = [];
+  const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
   walk(document);
+  const all = sel => roots.flatMap(r => [...r.querySelectorAll(sel)]);
   const visible = e => e && e.getClientRects().length > 0;
   const fillable = e => visible(e) && !e.disabled && !['hidden','button','submit','checkbox','radio','image','reset'].includes((e.type || 'text').toLowerCase());
+  const squash = t => (t || '').replace(/\s+/g, '');
+  const box = e => e.getBoundingClientRect();
+  const hostText = e => { const h = e.getRootNode().host; return h ? [h.getAttribute('label'), h.getAttribute('aria-label'), h.getAttribute('placeholder'), h.getAttribute('name')].join(' ') : ''; };
   const isCaptcha = e => {
-    const a = [e.name, e.id, e.placeholder, e.getAttribute('aria-label'), e.title].join(' ');
+    const a = [e.name, e.id, e.placeholder, e.getAttribute('aria-label'), e.title, hostText(e)].join(' ');
     if (/captcha|verify|vcode|pict|chkcode|驗證|檢核/i.test(a)) return true;
     let n = e.parentElement;
     for (let i = 0; n && i < 4; i++, n = n.parentElement) {
@@ -107,75 +135,64 @@ FILL_JS = r"""
     }
     return false;
   };
-  for (const d of docs) {
-    const inputs = [...d.querySelectorAll('input')].filter(fillable);
-    if (!inputs.some(e => (e.type || '').toLowerCase() === 'password') && inputs.length < 2) continue;
-    const used = new Set();
-    const result = {filled: [], missing: []};
-    const squash = t => (t || '').replace(/\s+/g, '');
-    const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const candidates = [...d.querySelectorAll('label,span,div,td,th,p,dt,dd,li,strong,b,font')]
-      .filter(e => visible(e) && !e.closest('a,button') && squash(e.innerText).length > 0 && squash(e.innerText).length <= 20);
-    const innermost = w => candidates.filter(e => squash(e.innerText).includes(w)
-      && ![...e.children].some(c => squash(c.innerText).includes(w)));
-    const box = e => e.getBoundingClientRect();
-    const sameRow = (l, i) => { const a = box(l), b = box(i); return Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < Math.max(a.height, b.height) / 2 + 8; };
-    const forLabel = label => {
-      const free = inputs.filter(e => !used.has(e) && !isCaptcha(e));
-      const row = free.filter(e => sameRow(label, e) && box(e).left >= box(label).left - 4)
-        .sort((x, y) => box(x).left - box(y).left);
-      if (row.length) return row[0];
-      const below = free.filter(e => box(e).top >= box(label).top - 4 && follows(label, e))
-        .sort((x, y) => (box(x).top - box(y).top) || (box(x).left - box(y).left));
-      return below[0] || null;
-    };
-    const findFor = words => {
-      for (const w of words) {
-        const ph = inputs.find(e => !used.has(e) && !isCaptcha(e) && (squash(e.placeholder).includes(w) || squash(e.getAttribute('aria-label')).includes(w)));
-        if (ph) return ph;
-        for (const label of innermost(w)) {
-          const input = forLabel(label);
-          if (input) return input;
-        }
-      }
-      return null;
-    };
-    let previous = null;
-    const pwdField = creds.password ? findFor(hints.password || []) : null;
-    for (const field of ['id_number', 'user_code', 'password']) {
-      if (!creds[field]) continue;
-      let input = field === 'password' && pwdField && !used.has(pwdField) ? pwdField : findFor(hints[field] || []);
-      if (field !== 'password' && input && input === pwdField) input = null;
-      if (!input && field === 'user_code' && previous && pwdField)
-        input = inputs.find(e => !used.has(e) && e !== pwdField && !isCaptcha(e) && follows(previous, e) && follows(e, pwdField));
-      if (!input && field === 'password') input = inputs.find(e => !used.has(e) && (e.type || '').toLowerCase() === 'password');
-      if (!input && field === 'password' && previous) input = inputs.find(e => !used.has(e) && !isCaptcha(e) && follows(previous, e));
-      if (!input) { result.missing.push(field); continue; }
-      used.add(input);
-      input.removeAttribute('readonly');
-      input.focus();
-      const setter = Object.getOwnPropertyDescriptor(input.ownerDocument.defaultView.HTMLInputElement.prototype, 'value').set;
-      setter.call(input, creds[field]);
-      for (const t of ['input', 'change', 'keyup', 'blur']) input.dispatchEvent(new Event(t, {bubbles: true}));
-      result.filled.push(field);
-      previous = input;
+  const inputs = all('input').filter(fillable).sort((x, y) => (box(x).top - box(y).top) || (box(x).left - box(y).left));
+  if (!inputs.length) return 'WAIT';
+  const used = new Set();
+  const result = {filled: [], missing: []};
+  const candidates = all('label,span,div,td,th,p,dt,dd,li,strong,b,font,legend')
+    .filter(e => visible(e) && !e.closest('a,button') && squash(e.innerText).length > 0 && squash(e.innerText).length <= 20);
+  const exact = (e, w) => squash(e.innerText).replace(/[:：*＊]/g, '') === w;
+  const innermost = w => candidates.filter(e => squash(e.innerText).includes(w) && ![...e.children].some(c => squash(c.innerText).includes(w)))
+    .sort((x, y) => (exact(y, w) - exact(x, w)) || (squash(x.innerText).length - squash(y.innerText).length));
+  const sameRow = (l, i) => { const a = box(l), b = box(i); return Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < Math.max(a.height, b.height) / 2 + 8; };
+  const free = () => inputs.filter(e => !used.has(e) && !isCaptcha(e));
+  const forLabel = label => {
+    const row = free().filter(e => sameRow(label, e) && box(e).left >= box(label).left - 4).sort((x, y) => box(x).left - box(y).left);
+    if (row.length) return row[0];
+    return free().find(e => box(e).top >= box(label).top - 4 && box(e).top - box(label).bottom < 120) || null;
+  };
+  const findFor = words => {
+    for (const w of words) {
+      const attr = free().find(e => squash([e.placeholder, e.getAttribute('aria-label'), hostText(e), ...[...(e.labels || [])].map(l => l.innerText)].join(' ')).includes(w));
+      if (attr) return attr;
+      for (const label of innermost(w)) { const input = forLabel(label); if (input) return input; }
     }
-    if (!result.filled.length) continue;
-    const captcha = inputs.find(e => !used.has(e) && isCaptcha(e));
-    if (captcha) captcha.focus();
-    return JSON.stringify(result);
+    return null;
+  };
+  const below = (a, b) => box(b).top > box(a).top + 2;
+  const pwdField = creds.password ? findFor(hints.password || []) : null;
+  let previous = null;
+  for (const field of ['id_number', 'user_code', 'password']) {
+    if (!creds[field]) continue;
+    let input = field === 'password' && pwdField && !used.has(pwdField) ? pwdField : findFor(hints[field] || []);
+    if (field !== 'password' && input && input === pwdField) input = null;
+    if (!input && field === 'id_number') input = free().find(e => e !== pwdField) || null;
+    if (!input && field === 'user_code' && previous && pwdField) input = free().find(e => e !== pwdField && below(previous, e) && below(e, pwdField)) || null;
+    if (!input && field === 'password') input = free().find(e => (e.type || '').toLowerCase() === 'password') || (previous ? free().find(e => below(previous, e)) : null) || null;
+    if (!input) { result.missing.push(field); continue; }
+    used.add(input);
+    input.removeAttribute('readonly');
+    input.focus();
+    const setter = Object.getOwnPropertyDescriptor(input.ownerDocument.defaultView.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, creds[field]);
+    for (const t of ['input', 'change', 'keyup', 'blur']) input.dispatchEvent(new Event(t, {bubbles: true, composed: true}));
+    result.filled.push(field);
+    previous = input;
   }
-  return 'WAIT';
+  const captcha = inputs.find(e => !used.has(e) && isCaptcha(e));
+  if (captcha) captcha.focus();
+  return JSON.stringify(result);
 } catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
 STATE_JS = r"""
 (() => { try {
-  const docs = [];
-  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  const roots = [];
+  const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
   walk(document);
-  const text = docs.map(d => d.body ? d.body.innerText : '').join('\n');
-  const pwd = docs.some(d => [...d.querySelectorAll('input[type=password]')].some(e => e.getClientRects().length));
+  const all = sel => roots.flatMap(r => [...r.querySelectorAll(sel)]);
+  const text = roots.map(r => r.body ? r.body.innerText : (r.host ? (r.host.innerText || r.textContent || '') : '')).join(' ');
+  const pwd = all('input[type=password]').some(e => e.getClientRects().length);
   return JSON.stringify({password: pwd, logout: text.includes('登出'), loggedOut: /您已成功登出|已登出/.test(text)});
 } catch (err) { return 'JS_ERROR:' + err; } })()
 """
@@ -232,40 +249,46 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
 
 INSPECT_JS = r"""
 (() => { try {
-  const docs = [];
-  const walk = d => { docs.push(d); [...d.querySelectorAll('iframe,frame')].forEach(f => { try { if (f.contentDocument) walk(f.contentDocument); } catch (_) {} }); };
+  const roots = [];
+  const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
   walk(document);
+  const all = sel => roots.flatMap(r => [...r.querySelectorAll(sel)]);
   const rows = [];
-  docs.forEach((d, di) => [...d.querySelectorAll('input,select,textarea')].forEach(e => {
-    const r = e.getClientRects()[0];
+  roots.forEach((r, ri) => [...r.querySelectorAll('input,select,textarea')].forEach(e => {
+    const b = e.getClientRects()[0];
     let label = '';
     if (e.labels && e.labels.length) label = e.labels[0].innerText;
     if (!label) { let n = e.parentElement; for (let i = 0; n && i < 4 && !label; i++, n = n.parentElement) label = (n.innerText || '').trim().slice(0, 30); }
-    rows.push({frame: di, tag: e.tagName.toLowerCase(), type: e.type, id: e.id, name: e.name,
+    const host = e.getRootNode().host;
+    rows.push({frame: ri, tag: e.tagName.toLowerCase(), type: e.type, id: e.id, name: e.name,
                placeholder: e.placeholder, aria: e.getAttribute('aria-label') || '', readonly: e.readOnly,
-               visible: !!r, x: r ? Math.round(r.x) : null, y: r ? Math.round(r.y) : null,
-               label: label.replace(/\s+/g, ' ')});
+               visible: !!b, x: b ? Math.round(b.x) : null, y: b ? Math.round(b.y) : null,
+               label: (label || '').replace(/\s+/g, ' '), host: host ? host.tagName.toLowerCase() + ' label=' + (host.getAttribute('label') || '') : ''});
   }));
-  return JSON.stringify(rows);
+  const iframes = all('iframe,frame').map(f => { let same = true; try { f.contentDocument.body; } catch (_) { same = false; } return (f.src || '').split('?')[0] + (same && f.contentDocument ? '' : ' (跨網域)'); });
+  return JSON.stringify({rows: rows, iframes: iframes, roots: roots.length});
 } catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
 
-def inspect_page(bank_code: str) -> list[dict]:
-    """列出已開啟的銀行登入頁欄位（名稱、類型、位置），不讀取欄位內容。"""
+def inspect_page(bank_code: str) -> None:
+    """列出專用 Chrome 裡銀行登入頁的欄位（名稱、類型、位置），不讀取欄位內容。"""
     bank = WEB_BANKS[bank_code]
     if not _running():
         raise SystemExit(f"專用 Chrome 沒有開著；請先執行 python3 -m bank_sync login {bank_code}")
-    output = evaluate(bank.host, INSPECT_JS)
-    if output == "TAB_NOT_FOUND":
+    results = evaluate(bank.host, INSPECT_JS, every=True)
+    if not results:
         raise SystemExit(f"專用 Chrome 裡找不到{bank.name}的分頁；請先執行 login 打開登入頁。")
-    if not output.startswith("["):
-        raise SystemExit(f"{bank.name}分頁沒有回應正確結果：{output[:200] or '（空白，可能還在載入）'}")
-    rows = json.loads(output)
-    for i, r in enumerate(rows):
-        if r["type"] == "hidden":
+    for url, output in results:
+        print(f"== {url.split('?')[0][:80]}")
+        if not output.startswith("{"):
+            print(f"   （沒有結果：{output[:150] or '空白'}）")
             continue
-        print(f"{i:>2} {'可見' if r['visible'] else '隱藏'} {r['tag']}/{r['type']:<9} id={r['id']!r} name={r['name']!r} "
-              f"placeholder={r['placeholder']!r} aria={r['aria']!r} readonly={r['readonly']} "
-              f"位置=({r['x']},{r['y']}) 標籤={r['label']!r}")
-    return rows
+        data = json.loads(output)
+        print(f"   區塊數={data['roots']}  內嵌框={data['iframes']}")
+        for i, r in enumerate(data["rows"]):
+            if r["type"] == "hidden":
+                continue
+            print(f"   {i:>2} {'可見' if r['visible'] else '隱藏'} {r['tag']}/{r['type']:<9} id={r['id']!r} name={r['name']!r} "
+                  f"placeholder={r['placeholder']!r} aria={r['aria']!r} readonly={r['readonly']} "
+                  f"位置=({r['x']},{r['y']}) 標籤={r['label']!r} 元件={r['host']!r}")
