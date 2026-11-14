@@ -32,13 +32,15 @@ class TableBank:
     custom_dates: tuple = ()    # (點「自選」的文字, 起日 CSS, 迄日 CSS)
     max_days: int = 365
     only_accounts: tuple = ()   # 只抓帳號名稱含這些字的帳戶
+    direct_url: str = ""        # 點不到選單時直接開明細頁網址
 
 
 BANKS = {
     "linebank": TableBank("linebank", "LINE Bank", "連線", ("帳戶交易明細查詢",), "#account-dropdown", ("查詢",),
                           ("時間", "摘要", "金額"), "時間", only_accounts=("主帳戶",)),
     "yuanta": TableBank("yuanta", "元大銀行", "元大", ("臺幣交易明細查詢",), "#acctno", ("確認送出",),
-                        ("帳務日期", "交易說明"), "帳務日期", ("自選", "#sdate", "#edate"), 365, only_accounts=("大同",)),
+                        ("帳務日期", "交易說明"), "帳務日期", ("自選", "#sdate", "#edate"), 365, only_accounts=("大同",),
+                        direct_url="https://ebank.yuantabank.com.tw/nib/tx/transactiondetails"),
 }
 
 TABLE_JS = r"""
@@ -131,15 +133,39 @@ CONTAINS_JS = r"""
 """
 
 
-def _goto(page, bank: TableBank) -> None:
-    for _ in range(20):
-        if page.query_selector(bank.account_select):
-            return
-        _click_text(page, bank.nav_links)
+def _find(page, bank: TableBank):
+    for frame in page.frames:
+        try:
+            if frame.query_selector(bank.account_select):
+                return frame
+        except Exception:
+            continue
+    return None
+
+
+def _goto(page, bank: TableBank):
+    """切到明細頁，回傳有帳號下拉的那個 frame（可能是主頁面或 iframe）。"""
+    for step in range(16):
+        found = _find(page, bank)
+        if found is not None:
+            return found
+        if step == 6 and bank.direct_url:
+            print(f"  點選單沒反應，直接開明細頁（{bank.direct_url}）")
+            try:
+                page.goto(bank.direct_url, wait_until="domcontentloaded")
+            except Exception:
+                pass
+        elif step < 6 or step > 7:
+            _click_text(page, bank.nav_links)
         page.wait_for_timeout(1500)
     from .login import drain_stdin
     drain_stdin()
+    print(f"  （目前網址 {page.url.split('?')[0]}）")
     input(f"  請在 Chrome 點到「{bank.nav_links[0]}」頁，回到這裡按 Enter：")
+    found = _find(page, bank)
+    if found is None:
+        raise RuntimeError(f"找不到帳號下拉（{bank.account_select}），目前網址 {page.url.split('?')[0]}")
+    return found
 
 
 def _read(page, bank: TableBank, before: str, timeout_s: float = 20) -> dict:
@@ -177,8 +203,8 @@ def _read(page, bank: TableBank, before: str, timeout_s: float = 20) -> dict:
     return {"head": ["日期"] + head, "rows": rows}
 
 
-def fetch_accounts(page, bank: TableBank, state: dict, since: date) -> list[dict]:
-    _goto(page, bank)
+def fetch_accounts(top, bank: TableBank, state: dict, since: date) -> list[dict]:
+    page = _goto(top, bank)
     options = page.evaluate(SELECT_JS, [bank.account_select, -1]) or []
     accounts = [(i, t) for i, t in enumerate(options) if t and "請選擇" not in t
                 and (not bank.only_accounts or any(k in t for k in bank.only_accounts))]
@@ -190,7 +216,7 @@ def fetch_accounts(page, bank: TableBank, state: dict, since: date) -> list[dict
         key = f"TWD:{name}"
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
         start = max(start, today - timedelta(days=bank.max_days))
-        _goto(page, bank)
+        page = _goto(top, bank)
         page.evaluate(SELECT_JS, [bank.account_select, i])
         page.wait_for_timeout(600)
         if bank.custom_dates:

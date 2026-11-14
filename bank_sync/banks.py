@@ -22,6 +22,7 @@ class WebBank:
     logged_out_markers: tuple[str, ...] = ("您已成功登出", "已登出")
     note: str = ""
     native: bool = False                        # True = 用一般模式的專用 Chrome（認得出程式控制的銀行）
+    submit: tuple[str, ...] = ()                # 沒有驗證碼的銀行：填完帳密自動按這個按鈕
 
 
 WEB_BANKS: dict[str, WebBank] = {bank.code: bank for bank in (
@@ -34,7 +35,7 @@ WEB_BANKS: dict[str, WebBank] = {bank.code: bank for bank in (
             "standardchartered.com.tw", native=True,
             note="渣打會擋程式控制的 Chrome，改用一般模式的專用 Chrome 視窗。"),
     WebBank("linebank", "LINE Bank", "https://accessibility.linebank.com.tw/login", "linebank.com.tw",
-            captcha=False, note="LINE Bank 可能需要在手機 App 按確認。"),
+            captcha=False, submit=("確定", "登入"), note="LINE Bank 填完帳密會自動按「確定」。"),
     WebBank("yuanta", "元大銀行", "https://ebank.yuantabank.com.tw/nib/", "yuantabank.com.tw"),
     WebBank("next", "將來銀行", "https://accessibility.nextbank.com.tw/login", "nextbank.com.tw",
             note="登入後若終端機沒顯示「登入完成」，請在終端機按 Enter。"),

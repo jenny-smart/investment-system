@@ -328,6 +328,17 @@ def open_bank(context, login_key: str, bank_code: str) -> LoginState:
             return state
         filled, missing = fill_login(login_page, ctx, bank, creds)
         state.page, state.filled, state.missing = login_page, tuple(filled), tuple(missing)
+        if bank.submit and not missing:
+            for name in bank.submit:
+                try:
+                    btn = ctx.get_by_role("button", name=name, exact=True)
+                    if btn.count() and btn.first.is_visible():
+                        login_page.wait_for_timeout(500)
+                        btn.first.click(timeout=4000)
+                        print(f"→ {bank.name}：已自動按「{name}」")
+                        break
+                except Exception:
+                    continue
         tip = "請輸入驗證碼並按登入" if bank.captcha else "請確認後按登入"
         extra = f"（找不到欄位：{'、'.join(missing)}，請手動填）" if missing else ""
         print(f"→ {bank.name}：已預填 {len(filled)} 欄，{tip}{extra}")
