@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import fcntl
-import re
 import time
 from dataclasses import dataclass
 from typing import Iterable, TextIO
@@ -87,7 +86,28 @@ def _claimed(locator) -> bool:
         return True
 
 
-def _unclaimed_inputs(locator) -> Iterable:
+CAPTCHA_JS = """e => {
+  const attrs = [e.name, e.id, e.placeholder, e.getAttribute('aria-label'), e.title].join(' ');
+  if (/captcha|verify|vcode|pict|chkcode|驗證|檢核/i.test(attrs)) return true;
+  // 最靠近、有文字的上層區塊（通常就是這一格的標籤列）是否寫「驗證碼」
+  let node = e.parentElement;
+  for (let i = 0; node && i < 4; i++, node = node.parentElement) {
+    const text = (node.innerText || '').trim();
+    if (text) return /驗證|檢核碼/.test(text) && !/密碼|代號|代碼|身分證/.test(text.replace(/驗證碼|檢核碼/g, ''));
+  }
+  return false;
+}"""
+
+
+def _is_captcha(item) -> bool:
+    try:
+        return bool(item.evaluate(CAPTCHA_JS))
+    except Exception:
+        return False
+
+
+def _unclaimed_inputs(locator, allow_captcha: bool = False) -> Iterable:
+    """可見、未停用、還沒填過的輸入框。鎖住（readonly）的也算：部分銀行要點一下才解鎖，用來擋自動填入。"""
     try:
         count = locator.count()
     except Exception:
@@ -95,15 +115,16 @@ def _unclaimed_inputs(locator) -> Iterable:
     for index in range(count):
         item = locator.nth(index)
         try:
-            if not _visible(item) or not item.is_editable():
+            if not _visible(item) or item.is_disabled():
                 continue
             kind = (item.get_attribute("type") or "text").lower()
         except Exception:
             continue
         if kind in {"hidden", "button", "submit", "checkbox", "radio", "image", "reset"}:
             continue
-        if not _claimed(item):
-            yield item
+        if _claimed(item) or (not allow_captcha and _is_captcha(item)):
+            continue
+        yield item
 
 
 # ---------- 找登入框 ----------
@@ -154,13 +175,13 @@ def find_login_frame(context, bank: WebBank, timeout_s: float = 90):
 
 # ---------- 填帳密 ----------
 
-def _input_for_hint(ctx, hint: str):
+def _input_for_hint(ctx, hint: str, allow_captcha: bool = False):
     for locator in (
         ctx.get_by_label(hint, exact=False),
         ctx.get_by_placeholder(hint, exact=False),
         ctx.locator(f'input[aria-label*="{hint}"], input[title*="{hint}"]'),
     ):
-        for item in _unclaimed_inputs(locator):
+        for item in _unclaimed_inputs(locator, allow_captcha):
             return item
     try:
         labels = ctx.get_by_text(hint, exact=False)
@@ -173,13 +194,14 @@ def _input_for_hint(ctx, hint: str):
             continue
         # 富邦等表格版面：同一列的輸入框；其他版面：標籤後面第一個輸入框
         for path in ("xpath=ancestor::tr[1]//input", "xpath=following::input"):
-            for item in _unclaimed_inputs(label.locator(path)):
+            for item in _unclaimed_inputs(label.locator(path), allow_captcha):
                 return item
     return None
 
 
 def _type_like_user(page, item, value: str) -> None:
     item.click()
+    item.evaluate("e => { if (e.readOnly) e.removeAttribute('readonly'); }")
     item.press("ControlOrMeta+a")
     item.press("Backspace")
     item.type(value, delay=30)
@@ -190,15 +212,7 @@ def _next_input_after(previous):
     """上一個填好的欄位後面第一個可填、且不是驗證碼的輸入框（欄位名稱抓不到時用）。"""
     if previous is None:
         return None
-    for item in _unclaimed_inputs(previous.locator("xpath=following::input")):
-        try:
-            hint = " ".join(filter(None, (item.get_attribute(a) for a in ("name", "id", "placeholder", "aria-label", "title"))))
-        except Exception:
-            hint = ""
-        if re.search(r"captcha|verify|驗證|檢核|vcode|chk", hint, re.I):
-            return None
-        return item
-    return None
+    return next(iter(_unclaimed_inputs(previous.locator("xpath=following::input"))), None)
 
 
 def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[str], list[str]]:
@@ -229,7 +243,7 @@ def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[st
         except Exception:
             missing.append(field)
     for hint in CAPTCHA_HINTS:
-        captcha = _input_for_hint(ctx, hint)
+        captcha = _input_for_hint(ctx, hint, allow_captcha=True)
         if captcha is not None:
             try:
                 captcha.focus()
