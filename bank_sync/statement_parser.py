@@ -73,8 +73,6 @@ def parse_taishin(text: str) -> Statement:
             continue
         if not in_detail:
             continue
-        if line.startswith("*") or line.startswith("◎"):
-            break
         c = re.search(r"卡號末四碼[:：](\d{4})", line)
         if c:
             card = c.group(1)
@@ -122,15 +120,28 @@ def parse_dbs(text: str) -> Statement:
     st.total_due = _int(m.group(1)) if m else None
     card = ""
     row = re.compile(r"^(\d{4}/\d{2}/\d{2}) (\d{4}/\d{2}/\d{2}) (.+?) (" + NUM + r")$")
-    for line in text.splitlines():
-        line = line.strip()
+    start = re.compile(r"^\d{4}/\d{2}/\d{2} \d{4}/\d{2}/\d{2} ")
+    lines = [l.strip() for l in text.splitlines()]
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         c = re.search(r"卡號末4碼\s*(\d{4})", line)
         if c:
             card = c.group(1)
+        # 一筆消費可能被拆成好幾行（商店名稱太長），接到出現金額為止
+        if start.match(line) and not row.match(line):
+            j = i + 1
+            while j < len(lines) and j <= i + 3 and not start.match(lines[j]):
+                line = f"{line} {lines[j]}"
+                if re.fullmatch(NUM, lines[j]):
+                    break
+                j += 1
+            i = j
         r = row.match(line)
         if r:
-            desc = re.sub(r"\s*/\s*[A-Z]{2}\s+\S+$", "", r.group(3))  # 去掉「/ TW Taipei」
+            desc = re.sub(r"\s*/\s*[A-Z]{2}(?:\s+\S+)*$", "", r.group(3))  # 去掉「/ TW Taipei」
             st.charges.append(Charge(_roc(r.group(1)), _clean(desc), _int(r.group(4)), card))
+        i += 1
     return st
 
 

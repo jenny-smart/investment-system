@@ -74,6 +74,21 @@ class ParserTest(unittest.TestCase):
         st = parse("cathay", CATHAY)
         self.assertEqual((st.ledger_month, st.total_due), ("2026-09", 0))
 
+    def test_taishin_rows_after_page_break(self):
+        text = TAISHIN.replace("*若您要使用金融卡繳交信用卡款\n",
+                               "*若您要使用金融卡繳交信用卡款\n◎自動提款機繳款說明\n115/10/09 115/10/12 範例日本商店MIYAZA 100 1008 JP JPY 500.00\n")
+        text = text.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 1,450")
+        st = parse("taishin", text)
+        self.assertEqual(sum(c.amount for c in st.purchases), 1450)
+        self.assertEqual(st.warnings, [])
+
+    def test_dbs_wrapped_row(self):
+        text = DBS.replace("2026/10/10 2026/10/13 範例商店 / TW Taipei 200",
+                           "2026/10/10 2026/10/13 範例很長的商店名稱 / TW\nTAIPEI\n200")
+        st = parse("dbs", text)
+        self.assertEqual([c.amount for c in st.purchases], [60, 200])
+        self.assertEqual(st.purchases[1].description, "範例很長的商店名稱")
+
     def test_mismatch_warns(self):
         st = parse("dbs", DBS.replace("\n260\n", "\n999\n"))
         self.assertTrue(any("不同" in w for w in st.warnings))
