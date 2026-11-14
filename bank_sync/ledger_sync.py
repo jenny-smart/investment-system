@@ -523,6 +523,47 @@ def _ensure_summary_rows(copy, formulas: list, labels: list, cols: dict, log: li
     return insert_at
 
 
+def fix_cash_offsets(plan: Plan, book, stamp: date, applied: dict) -> list[str]:
+    """補救：含信用卡表已加過刷卡、但 25 列還沒同額加回的月份，補上抵銷金額與統計列（可重複執行）。"""
+    detail_title, copy_title = f"{plan.year}細帳", f"{plan.year}細帳(含信用卡)"
+    detail = book.worksheet(detail_title)
+    if copy_title not in [w.title for w in book.worksheets()]:
+        return [f"還沒有「{copy_title}」，不需要補救"]
+    copy = book.worksheet(copy_title)
+    done = [s for s in plan.spends if s.cell and s.row_label != SKIP_ROW and s.file.key in applied]
+    terms = _cash_offsets(done)
+    formulas = copy.get_values(value_render_option="FORMULA")
+    notes = copy.get_notes()
+    labels = [r[0] if r else "" for r in formulas]
+    cols = month_columns(formulas[0] if formulas else [])
+    cash_row = find_row(labels, CASH_ROW)
+    log: list[str] = []
+    card_sum_row = _ensure_summary_rows(copy, formulas, labels, cols, log, copy_title)
+    if cash_row is None:
+        return log + [f"⚠️ 找不到「{CASH_ROW}」列"]
+    for month, (total, count) in sorted(terms.items()):
+        col = cols.get(month)
+        if col is None:
+            continue
+        for row, label, text in ((cash_row, CASH_ROW, f"信用卡消費合計 +{total:,}（{count} 筆；抵銷，現金不變）"),
+                                 (card_sum_row, CARD_SUM_ROW, f"信用卡消費合計 +{total:,}（{count} 筆）")):
+            if row is None:
+                continue
+            existing = notes[row][col] if row < len(notes) and col < len(notes[row]) else ""
+            if f"【信用卡 {month}】" in (existing or ""):
+                log.append(f"{copy_title}!{a1(row, col)} {label} {month} 已補過，略過")
+                continue
+            cell = a1(row, col)
+            formula = formulas[row][col] if row < len(formulas) and col < len(formulas[row]) else ""
+            new = add_term(formula, total)
+            block = f"【信用卡 {month}】{text}\n加註日期：{stamp:%Y-%m-%d}（bank_sync）"
+            copy.update(range_name=cell, values=[[new]], value_input_option="USER_ENTERED")
+            copy.update_note(cell, (existing + "\n" + block).strip() if existing else block)
+            log.append(f"{copy_title}!{cell} {label} {formula or '（空白）'} → {new}")
+    log.extend(check_net_rows(detail, copy, detail_title, copy_title))
+    return log
+
+
 def _rc(cell: str) -> tuple[int, int]:
     m = re.match(r"([A-Z]+)(\d+)", cell)
     col = 0
@@ -554,7 +595,8 @@ def unclassified_summary(plan: Plan) -> list[tuple[str, int, int]]:
     return sorted(((k, len(v), sum(v)) for k, v in groups.items()), key=lambda x: -abs(x[2]))
 
 
-def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = False, show_unclassified: bool = False) -> Path:
+def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = False, show_unclassified: bool = False,
+        fix_cash: bool = False, check: bool = False) -> Path:
     stamp = date.today()
     files = parsed_statements(year, banks=banks)
     if not files:
@@ -570,6 +612,19 @@ def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = Fa
         print(f"{BANK_NAME[a.file.bank]} {a.file.statement.ledger_month} {a.cell or '-'}：{a.status}")
     print(f"刷卡 {len(plan.spends)} 筆，其中待分類 {sum('待分類' in s.reason for s in plan.spends)} 筆")
     print(f"比對報表：{report}")
+    if check or fix_cash:
+        if fix_cash:
+            for line in fix_cash_offsets(plan, book, stamp, applied):
+                print("✓" if not line.startswith("⚠️") else "", line)
+        else:
+            copy_title = f"{plan.year}細帳(含信用卡)"
+            if copy_title in [w.title for w in book.worksheets()]:
+                for line in check_net_rows(book.worksheet(f"{plan.year}細帳"), book.worksheet(copy_title),
+                                           f"{plan.year}細帳", copy_title):
+                    print(line)
+            else:
+                print(f"還沒有「{copy_title}」")
+        return report
     if show_unclassified:
         print("\n待分類的商店（筆數／金額合計）：")
         for name, n, total in unclassified_summary(plan):

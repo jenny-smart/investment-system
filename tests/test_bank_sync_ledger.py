@@ -294,6 +294,25 @@ class NotesOnlyTest(unittest.TestCase):
         self.assertEqual(book.worksheet("2026細帳(含信用卡)").values[1][2], "=100+60")
 
 
+class FixCashTest(unittest.TestCase):
+    def test_fix_adds_missing_offsets_once(self):
+        from bank_sync.ledger_sync import fix_cash_offsets
+        detail = FakeSheet("2026細帳", ApplyTest.VALUES)
+        book = FakeBook(detail)
+        # 模擬舊版：只加了分類列，沒加 25 列
+        copy = book.duplicate_sheet(1, 1, "2026細帳(含信用卡)")
+        copy.values[1][2] = "=100+60"; copy.values[2][2] = "=200"
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
+        applied = {"dbs:dbs.pdf": "2026-11-14"}
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        log = fix_cash_offsets(plan, book, date(2026, 11, 14), applied)
+        self.assertEqual(copy.values[4][2], "=4000+1000+260")
+        self.assertEqual(copy.values[7][2], "=260")
+        log2 = fix_cash_offsets(plan, book, date(2026, 11, 14), applied)
+        self.assertEqual(copy.values[4][2], "=4000+1000+260")   # 不重複
+        self.assertTrue(any("已補過" in l for l in log2))
+
+
 class GoogleAuthTest(unittest.TestCase):
     def test_refresh_token_credentials(self):
         import json, tempfile

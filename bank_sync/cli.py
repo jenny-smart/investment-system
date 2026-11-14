@@ -85,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     led.add_argument("--bank", action="append", default=[])
     led.add_argument("--notes-only", action="store_true", help="只在 2026細帳 加備註，不建／不動 含信用卡 表")
     led.add_argument("--unclassified", action="store_true", help="列出對不到分類規則的商店（筆數、金額）")
+    led.add_argument("--check", action="store_true", help="只比對兩表「零用金-淨值」是否每月相等")
+    led.add_argument("--fix-cash", action="store_true", help="補救：已加刷卡但 25 列未同額加回的月份補上抵銷與統計列")
     prev = sub.add_parser("preview-statements", help="列出每份帳單解析結果（不需要 Google 權限）")
     prev.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     imp = sub.add_parser("import-csv")
@@ -117,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "ledger":
         from .ledger_sync import run
         run(args.year, apply=args.apply, banks=tuple(args.bank), notes_only=args.notes_only,
-            show_unclassified=args.unclassified)
+            show_unclassified=args.unclassified, fix_cash=args.fix_cash, check=args.check)
     elif args.command == "preview-statements":
         from .ledger_sync import BANK_NAME, parsed_statements
         for f in parsed_statements(args.year):
