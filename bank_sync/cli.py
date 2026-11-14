@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     ffb = sub.add_parser("fetch-fubon", help="富邦：自動查詢臺外幣交易明細，存在本機")
     ffb.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
     ffb.add_argument("--keep-open", action="store_true")
+    fnx = sub.add_parser("fetch-next", help="將來銀行：查詢主帳戶明細（先存結果文字＋格式樣本）")
+    fnx.add_argument("--since", help="從哪天開始（預設本月 1 日）")
+    fnx.add_argument("--keep-open", action="store_true")
     exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
     exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
@@ -126,6 +129,10 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date as _date
         from .fubon_tx import fetch as fubon_fetch
         fubon_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "fetch-next":
+        from datetime import date as _date
+        from .next_tx import fetch as next_fetch
+        next_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
     elif args.command == "explore":
         from .explore import explore
         explore(args.login, login_bank_code(args.login))
