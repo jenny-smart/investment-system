@@ -86,6 +86,7 @@ class Entry:
     postings: list = field(default_factory=list)
     reason: str = ""
     skip: bool = False
+    waiting: bool = False
 
 
 def _num(text: str) -> float | None:
@@ -373,6 +374,141 @@ def check_rows(labels: list) -> list[str]:
     return bad
 
 
+# ---------------------------------------------------------------- 確認表（總帳裡的「銀行明細確認」分頁）
+
+REVIEW_TITLE = "銀行明細確認"
+REVIEW_HEAD = ["狀態", "日期", "銀行帳戶", "細帳", "金額", "摘要", "備註", "記到（列：金額）", "依據",
+               "你的確認", "改記到（另一邊列號或列名）", "代碼"]
+CHOICES = ["確認", "略過"]
+
+
+def needs_check(e: Entry) -> bool:
+    return any(k in e.reason for k in ("待分類", "請確認", "另一邊請確認", "零用金減項"))
+
+
+def _describe(e: Entry, labels: list) -> str:
+    if e.skip:
+        return "略過"
+    def name(row):
+        if isinstance(row, str):
+            return row
+        return f"{row} {labels[row - 1] if row - 1 < len(labels) else ''}".strip()
+    return "；".join(f"{name(p.row)}：{p.amount:+,.2f}".replace(".00", "") for p in e.postings)
+
+
+def read_review(book) -> dict:
+    """{代碼: (你的確認, 改記到)}"""
+    try:
+        ws = book.worksheet(REVIEW_TITLE)
+    except Exception:
+        return {}
+    rows = ws.get_values()
+    if not rows:
+        return {}
+    head = rows[0]
+    try:
+        ki, ci, ri = head.index("代碼"), head.index("你的確認"), head.index("改記到（另一邊列號或列名）")
+    except ValueError:
+        return {}
+    out = {}
+    for r in rows[1:]:
+        if ki < len(r) and r[ki]:
+            out[r[ki]] = (r[ci].strip() if ci < len(r) else "", r[ri].strip() if ri < len(r) else "")
+    return out
+
+
+def apply_review(entries: list[Entry], answers: dict) -> list[Entry]:
+    """套用你在確認表填的答案；需要確認但還沒填「確認」的，這次先不寫入。"""
+    out = []
+    for e in entries:
+        code = _code(e.tx)
+        choice, target = answers.get(code, ("", ""))
+        if choice == "略過":
+            e.skip, e.reason = True, "你在確認表選了略過"
+        elif target:
+            row = int(target) if target.isdigit() else target
+            mine = e.postings[0] if e.postings else Posting(ACCOUNT_ROWS.get(e.tx.ledger, (None,))[0], e.tx.amount)
+            e.postings, e.reason, e.skip = [mine, Posting(row, -e.tx.amount)], f"你改記到 {target}", False
+        elif needs_check(e) and choice != "確認":
+            e.skip, e.reason, e.waiting = True, "等你在確認表確認（這次先不寫）", True
+        out.append(e)
+    return out
+
+
+def _code(t: Tx) -> str:
+    import hashlib
+    return hashlib.sha1(t.key.encode("utf-8")).hexdigest()[:12]
+
+
+def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str:
+    try:
+        ws = book.worksheet(REVIEW_TITLE)
+    except Exception:
+        ws = book.add_worksheet(REVIEW_TITLE, rows=500, cols=len(REVIEW_HEAD))
+    rows = [REVIEW_HEAD]
+    order = sorted(entries, key=lambda e: (not needs_check(e), e.tx.day))
+    for e in order:
+        t = e.tx
+        choice, target = answers.get(_code(t), ("", ""))
+        state = "⚠️ 請確認" if needs_check(e) else ("略過" if e.skip else "自動")
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE"}.get(t.bank, t.bank)
+        money = t.amount if t.currency != "TWD" else int(round(t.amount))
+        rows.append([state, t.day.isoformat(), f"{who} {t.account}", t.ledger + ("" if t.currency == "TWD" else f"（{t.currency}）"),
+                     money, t.summary, t.note, _describe(e, labels), e.reason, choice, target, _code(t)])
+    ws.clear()
+    if ws.row_count < len(rows) + 10:
+        ws.add_rows(len(rows) + 10 - ws.row_count)
+    ws.update(rows, "A1", value_input_option="RAW")
+    try:  # 「你的確認」下拉選單、標題粗體凍結、要確認的列標黃
+        sid = ws.id
+        reqs = [
+            {"setDataValidation": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": len(rows),
+                                             "startColumnIndex": 9, "endColumnIndex": 10},
+                                   "rule": {"condition": {"type": "ONE_OF_LIST",
+                                                          "values": [{"userEnteredValue": c} for c in CHOICES]},
+                                            "showCustomUi": True, "strict": False}}},
+            {"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {"frozenRowCount": 1}},
+                                       "fields": "gridProperties.frozenRowCount"}},
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1},
+                            "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}}, "fields": "userEnteredFormat.textFormat.bold"}},
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2000},
+                            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 1, "green": 1, "blue": 1}}},
+                            "fields": "userEnteredFormat.backgroundColor"}},
+        ]
+        for i, r in enumerate(rows[1:], start=1):
+            if r[0].startswith("⚠️"):
+                reqs.append({"repeatCell": {"range": {"sheetId": sid, "startRowIndex": i, "endRowIndex": i + 1,
+                                                      "startColumnIndex": 0, "endColumnIndex": len(REVIEW_HEAD)},
+                                            "cell": {"userEnteredFormat": {"backgroundColor": {"red": 1, "green": 0.95, "blue": 0.75}}},
+                                            "fields": "userEnteredFormat.backgroundColor"}})
+        book.batch_update({"requests": reqs})
+    except Exception as exc:
+        print(f"（確認表格式沒套上：{exc}）")
+    return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
+
+
+def review(year: int) -> str:
+    """把目前抓到、還沒寫進細帳的明細，列在總帳的「銀行明細確認」分頁，要你確認的排最上面並標黃。"""
+    txs, warn = load_transactions()
+    for w in warn[:10]:
+        print("⚠️", w)
+    applied = load_applied()
+    entries = classify([t for t in txs if t.key not in applied])
+    from .google_auth import credentials
+    book = open_book(credentials())
+    labels = [r[0] if r else "" for r in book.worksheet(f"{year}細帳").get_values()]
+    answers = read_review(book)
+    url = write_review(book, entries, labels, answers)
+    n_check = sum(needs_check(e) for e in entries)
+    print(f"還沒寫進細帳的明細 {len(entries)} 筆，其中要你確認 {n_check} 筆（排最上面、標黃）。")
+    print(f"確認表：{url}")
+    print("在「你的確認」選 確認／略過；另一邊要改的，在「改記到」填列號（例 105）或列名（例 零用金-餐費）。")
+    print("填好後執行：python3 -m bank_sync bank-ledger --apply")
+    from .progress_log import log_run
+    log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆")
+    return url
+
+
 def run(year: int, apply: bool = False) -> Path:
     txs, warn = load_transactions()
     for w in warn[:10]:
@@ -385,6 +521,7 @@ def run(year: int, apply: bool = False) -> Path:
     from .google_auth import calendar_add_once, credentials
     creds = credentials()
     book = open_book(creds)
+    entries = apply_review(entries, read_review(book))
     detail_title = f"{year}細帳"
     ws = book.worksheet(detail_title)
     shown = ws.get_values()
@@ -433,7 +570,8 @@ def run(year: int, apply: bool = False) -> Path:
             _set_notes(sheet, merged)
         print(f"✓ {title}：更新 {len(values)} 格")
     for e in entries:
-        applied.add(e.tx.key)
+        if not getattr(e, "waiting", False):  # 等你確認的下次再寫
+            applied.add(e.tx.key)
     save_applied(applied)
     from .progress_log import log_run
     banks_done = {}

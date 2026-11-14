@@ -70,3 +70,60 @@ def test_fullwidth_uncle_and_linebank_interest():
     assert t.amount == 12 and t.summary.startswith("利息")
     e = classify([t], RULES)[0]
     assert [(p.row, p.amount) for p in e.postings] == [(52, 12), (53, 12)]
+
+
+class FakeWS:
+    def __init__(self, rows=None):
+        self.rows, self.id, self.row_count = rows or [], 7, 100
+
+    def get_values(self):
+        return self.rows
+
+    def clear(self):
+        self.rows = []
+
+    def add_rows(self, n):
+        self.row_count += n
+
+    def update(self, rows, a1, value_input_option=None):
+        self.rows = rows
+
+
+class FakeBook:
+    id = "BOOK"
+
+    def __init__(self):
+        self.ws = None
+
+    def worksheet(self, title):
+        if self.ws is None:
+            raise KeyError(title)
+        return self.ws
+
+    def add_worksheet(self, title, rows, cols):
+        self.ws = FakeWS()
+        return self.ws
+
+    def batch_update(self, body):
+        self.reqs = body
+
+
+def test_review_sheet_roundtrip():
+    from bank_sync.bank_ledger import apply_review, read_review, write_review
+    txs = [tx("fubon", "****990 (新店分行)", "富邦", 2, -100, "行動自轉", "不認得的店"),
+           tx("fubon", "****990 (新店分行)", "富邦", 3, -80, "行動自轉", "早餐店")]
+    entries = classify(txs, RULES)
+    book = FakeBook()
+    url = write_review(book, entries, ["x"] * 60, {})
+    assert url.endswith("gid=7")
+    rows = book.ws.rows
+    assert rows[1][0].startswith("⚠️") and rows[1][6] == "不認得的店"  # 要確認的排最上面
+    rows[1][10] = "零用金-用品"  # 你改記到
+    answers = read_review(book)
+    applied = apply_review(classify(txs, RULES), answers)
+    first = [e for e in applied if e.tx.note == "不認得的店"][0]
+    assert [(p.row, p.amount) for p in first.postings] == [(38, -100), ("零用金-用品", 100)]
+    # 沒填答案的待確認項目 → 這次不寫
+    pending = apply_review(classify(txs, RULES), {})
+    waiting = [e for e in pending if e.tx.note == "不認得的店"][0]
+    assert waiting.skip and waiting.waiting

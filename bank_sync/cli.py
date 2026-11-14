@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
         fx = sub.add_parser(f"fetch-{code}", help=f"{label}：自動查詢交易明細，存在本機")
         fx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
         fx.add_argument("--keep-open", action="store_true")
+    br = sub.add_parser("bank-review", help="把抓到的銀行明細列在總帳「銀行明細確認」分頁，要確認的標黃")
+    br.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
@@ -144,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date as _date
         from .table_tx import fetch as table_fetch
         table_fetch(args.command.split("-", 1)[1], _date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "bank-review":
+        from .bank_ledger import review
+        review(args.year)
     elif args.command == "bank-ledger":
         from .bank_ledger import run as bank_ledger_run
         bank_ledger_run(args.year, args.apply)
