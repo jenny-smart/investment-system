@@ -84,7 +84,15 @@ def job_panel() -> None:
     except Exception:
         text = ""
     st.code(text[-12000:] or "（等待輸出…）", language=None)
-    if running:
+    if running and job["args"][:1] == ["explore"]:
+        c1, c2, c3 = st.columns([1, 1, 1])
+        if c1.button("📸 記錄目前頁面", key="exp_snap", type="primary"):
+            send_enter()
+        if c2.button("✅ 結束探索", key="exp_quit"):
+            send_enter("q")
+        if c3.button("停止", key="exp_stop"):
+            stop_job()
+    elif running:
         c1, c2, c3 = st.columns([1, 1, 3])
         if c1.button("繼續（Enter）", key="bank_enter", help="程式說「按 Enter」時按這裡"):
             send_enter()
@@ -166,7 +174,7 @@ def render_bank_page() -> None:
                 from bank_sync.app_service import restart_self
                 restart_self()
 
-    tab_bank, tab_card, tab_login = st.tabs(["台新明細", "信用卡帳單", "登入銀行"])
+    tab_bank, tab_card, tab_login, tab_explore = st.tabs(["台新明細", "信用卡帳單", "登入銀行", "探索新銀行"])
 
     with tab_bank:
         st.markdown("每個帳戶從**上次抓到的最後一筆日期**查到今天。按下後會開 Chrome，請輸入驗證碼登入，之後會自動查詢並登出。")
@@ -203,6 +211,18 @@ def render_bank_page() -> None:
         picked = st.multiselect("要登入的銀行", list(LOGIN_BANKS), format_func=LOGIN_BANKS.get, key="login_pick")
         if st.button("🔐 登入", key="login_go", disabled=not picked):
             start_job("登入：" + "、".join(LOGIN_BANKS[k] for k in picked), ["login", *picked])
+
+    with tab_explore:
+        st.markdown("給還沒自動化的銀行用：程式幫你登入後，你在 Chrome 用平常方式點到**交易明細**頁（選帳戶、期間、按查詢），"
+                    "每到一頁按下方「📸 記錄目前頁面」；完成按「✅ 結束探索」。只記錄頁面結構（帳號遮蔽、不含金額），"
+                    "存在 ~/Bank account/_explore/，看過後上傳給 Claude。")
+        bank = st.selectbox("銀行", [k for k in LOGIN_BANKS if k != "sc"], format_func=LOGIN_BANKS.get, key="exp_bank")
+        if st.button("🧭 開始探索", key="exp_go"):
+            start_job(f"探索：{LOGIN_BANKS[bank]}", ["explore", bank])
+        latest = _latest(BANK_DIR / "_explore", f"{bank}_2*.json")
+        if latest:
+            st.caption(f"最近一次探索記錄：{latest}")
+            st.download_button("下載這份記錄（上傳給 Claude 用）", latest.read_bytes(), file_name=latest.name, key="exp_dl")
 
     st.divider()
     st.markdown("#### 執行過程")
