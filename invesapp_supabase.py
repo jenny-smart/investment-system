@@ -235,7 +235,7 @@ with st.container():
     except Exception as _e:  # 對帳只是輔助，失敗不影響首頁
         st.caption(f"總帳對帳暫時無法顯示：{_e}")
     st.markdown("</div>", unsafe_allow_html=True)
-PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "台指期夜盤", "配息記錄", "台股股利"]
+PAGE_NAMES = ["投資總覽", "非投資總覽", "歷史記錄", *PLATFORMS, "股票研究", "台指期夜盤", "配息記錄", "台股股利", "銀行帳戶"]
 
 # 功能列：只執行選到的那一頁（st.tabs 會每次把全部分頁都跑一遍，載入慢）。
 # 選擇記在網址 ?page=，重新整理後停在同一頁。
@@ -272,6 +272,10 @@ try:
 
     if page == "台股股利":
         render_stock_dividend_tab(enriched, positions)
+
+    if page == "銀行帳戶":
+        from invest_app.bank_page import render_bank_page
+        render_bank_page()
 except Exception as _page_error:
     st.error(f"「{page}」載入失敗：{_page_error}")
     st.exception(_page_error)

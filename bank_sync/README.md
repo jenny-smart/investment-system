@@ -71,3 +71,14 @@ python3 -m bank_sync ledger --apply                 # 確認報表後才寫入
   refresh token 存進帳密檔（沿用 tool-system 的電腦版 OAuth 用戶端，從 ~/lemon/.streamlit/secrets.toml 讀；或給 client_secret JSON 路徑）。
   需要 `pip3 install gspread google-auth google-auth-oauthlib openpyxl`。
 - 渣打 PDF 的中文字抽不出來（只有數字）：金額可對，商店名稱待處理。
+
+## 介面操作（不用終端機）
+
+在 Finder 雙擊 repo 裡的 `bank_app.command`（或 `python3 -m streamlit run bank_app.py`），瀏覽器會打開「銀行帳戶與信用卡」頁：
+
+- **台新明細**：按「抓台新明細」→ Chrome 輸入驗證碼 → 自動查詢台幣／外幣明細並登出，結果直接顯示在頁面。
+- **信用卡帳單**：下載新帳單、解析預覽、比對細帳（不寫入）、寫入細帳（要再按一次確定）。
+- **登入銀行**：選銀行後一次登入一家。
+- **執行過程**：即時顯示輸出；程式要求「按 Enter」時按頁面上的「繼續（Enter）」。
+
+主 App（invesapp_supabase.py）功能列最後也有「銀行帳戶」，但只有在本機開 App 時能用；雲端版只顯示說明。
