@@ -1,1 +1,5 @@
 __pycache__/
+
+# 個人銀行帳密與明細只留在本機
+personal_bank_accounts.json
+bank_sync_output/

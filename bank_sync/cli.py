@@ -5,27 +5,42 @@ import csv
 import getpass
 from pathlib import Path
 
-from .adapters import BANKS, open_and_prefill
-from .catalog import BANK_ACCOUNTS, get_account
-from .credentials import has_secret, save_secret
+from .banks import WEB_BANKS
+from .catalog import BANK_ACCOUNTS, get_account, login_bank_code, web_login_keys
+from .credentials import DEFAULT_CREDENTIALS_FILE, FIELDS, configured_logins, has_credentials, save_credentials
 from .importer import import_csv
 from .store import DEFAULT_DB, save_transactions
 
+FIELD_LABELS = {"id_number": "身分證字號", "user_code": "使用者代號（沒有就直接按 Enter）", "password": "密碼"}
 
-def _setup(account_key: str) -> None:
-    account = get_account(account_key)
-    if account.channel != "web":
-        raise ValueError(f"{account.bank} 不需要設定網銀帳密")
-    for field in BANKS[account.bank].credential_fields:
-        save_secret(account.login_key, field, getpass.getpass(f"{field}: "))
-    print("已安全存入 macOS Keychain。")
+
+def _setup(login_key: str) -> None:
+    bank = WEB_BANKS[login_bank_code(login_key)]
+    print(f"設定 {bank.name}（{login_key}）帳密，輸入時不會顯示在畫面上。")
+    values = {field: getpass.getpass(f"{FIELD_LABELS[field]}: ") for field in FIELDS}
+    if not values["password"]:
+        raise ValueError("密碼不可為空")
+    save_credentials(login_key, values)
+    print(f"已存入 {DEFAULT_CREDENTIALS_FILE}（權限 600）。")
 
 
 def _list() -> None:
+    print(f"帳密檔：{DEFAULT_CREDENTIALS_FILE}")
+    for key in web_login_keys():
+        bank = WEB_BANKS[login_bank_code(key)]
+        print(f"{'✓' if has_credentials(key) else '·'} {key:<11} {bank.name}")
     for item in BANK_ACCOUNTS:
-        fields = BANKS[item.bank].credential_fields if item.bank in BANKS else ()
-        ready = item.channel == "app_import" or all(has_secret(item.login_key, field) for field in fields)
-        print(f"{'✓' if ready else '·'} {item.key}: {item.bank}/{item.owner} {','.join(item.currencies)} [{item.channel}]")
+        if item.channel != "web":
+            print(f"  {item.key:<11} {item.bank}（{item.channel}：不需網銀帳密）")
+
+
+def _login(keys: list[str], keep_open: bool, timeout_min: float) -> None:
+    from .login import login_banks
+    if not keys:
+        keys = [k for k in web_login_keys() if k in configured_logins()]
+        if not keys:
+            raise SystemExit(f"{DEFAULT_CREDENTIALS_FILE} 還沒有任何帳密；請先執行 python -m bank_sync setup <登入名稱>")
+    login_banks([(k, login_bank_code(k)) for k in keys], keep_open=keep_open, timeout_s=timeout_min * 60)
 
 
 def _import(args) -> None:
@@ -40,16 +55,31 @@ def _import(args) -> None:
     print(f"已轉換 {len(rows)} 筆、新增 {inserted} 筆：{args.output}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="investment-system 本機銀行明細工具")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("list")
-    setup = sub.add_parser("setup"); setup.add_argument("account")
-    launch = sub.add_parser("open"); launch.add_argument("account"); launch.add_argument("--no-prompt", action="store_true")
-    imp = sub.add_parser("import-csv"); imp.add_argument("account"); imp.add_argument("input", type=Path); imp.add_argument("--currency", default="TWD"); imp.add_argument("--output", type=Path, default=Path("bank_sync_output/transactions.csv")); imp.add_argument("--db", type=Path, default=DEFAULT_DB)
-    args = parser.parse_args()
-    if args.command == "list": _list()
-    elif args.command == "setup": _setup(args.account)
-    elif args.command == "open": open_and_prefill(get_account(args.account), interactive=not args.no_prompt)
-    else: _import(args)
+    sub.add_parser("list", help="列出各銀行與帳密設定狀態")
+    setup = sub.add_parser("setup", help="輸入一家銀行的帳密")
+    setup.add_argument("login", choices=web_login_keys())
+    login = sub.add_parser("login", help="開 Chrome 預填帳密；不指定銀行 = 帳密檔裡有的全部")
+    login.add_argument("logins", nargs="*", metavar="登入名稱")
+    login.add_argument("--close", action="store_true", help="全部登入後直接關閉 Chrome")
+    login.add_argument("--timeout", type=float, default=15, help="等待輸入驗證碼的分鐘數（預設 15）")
+    imp = sub.add_parser("import-csv")
+    imp.add_argument("account"); imp.add_argument("input", type=Path)
+    imp.add_argument("--currency", default="TWD")
+    imp.add_argument("--output", type=Path, default=Path("bank_sync_output/transactions.csv"))
+    imp.add_argument("--db", type=Path, default=DEFAULT_DB)
+    args = parser.parse_args(argv)
+    if args.command == "list":
+        _list()
+    elif args.command == "setup":
+        _setup(args.login)
+    elif args.command == "login":
+        unknown = [k for k in args.logins if k not in web_login_keys()]
+        if unknown:
+            parser.error(f"不認得的登入名稱：{', '.join(unknown)}（可用：{', '.join(web_login_keys())}）")
+        _login(args.logins, keep_open=not args.close, timeout_min=args.timeout)
+    else:
+        _import(args)
     return 0

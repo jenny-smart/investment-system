@@ -1,0 +1,11 @@
+{
+  "_說明": "複製到 ~/Bank account/personal_bank_accounts.json 後填入，並執行 chmod 600。沒有的欄位留空字串；不要放進 git。",
+  "taishin":  {"id_number": "", "user_code": "", "password": ""},
+  "fubon":    {"id_number": "", "user_code": "", "password": ""},
+  "sc":       {"id_number": "", "user_code": "", "password": ""},
+  "linebank": {"id_number": "", "user_code": "", "password": ""},
+  "yuanta":   {"id_number": "", "user_code": "", "password": ""},
+  "next":     {"id_number": "", "user_code": "", "password": ""},
+  "ubot":     {"id_number": "", "user_code": "", "password": ""},
+  "cathay":   {"id_number": "", "user_code": "", "password": ""}
+}
