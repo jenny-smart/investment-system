@@ -141,11 +141,24 @@ def test_rules_from_review_feedback():
         tx("taishin", "****867 古亭外幣綜存", "台新外幣", 4, 3.2, "存入", "INT202611", "美元"),
     ]
     got = {(e.tx.note, e.tx.day.day): e for e in classify(txs, RULES)}
-    assert [(p.row, p.amount) for p in got[("基金配息 0056FUND", 11)].postings] == [(43, 8590), (116, 8590)]
-    assert [(p.row, p.amount) for p in got[("基金配息00740B", 12)].postings] == [(43, 360), (116, 360)]
-    assert [(p.row, p.amount) for p in got[("信用卡款星展銀行", 10)].postings] == [(47, -4896), (135, 4896)]
+    assert [(p.row, p.amount) for p in got[("基金配息 0056FUND", 11)].postings] == [(116, 8590)]
+    assert [(p.row, p.amount) for p in got[("基金配息00740B", 12)].postings] == [(116, 360)]
+    assert [(p.row, p.amount) for p in got[("信用卡款星展銀行", 10)].postings] == [(135, 4896)]
     assert [(p.row, p.amount) for p in got[("040750032867ZAR", 6)].postings] == [(110, 68643)]
     assert got[("040750032867ZAR", 9)].skip
-    assert got[("88872B0RC170", 9)].skip and "請確認" in got[("88872B0RC170", 9)].reason
+    td = got[("88872B0RC170", 9)]
+    assert [(p.row, p.note_only) for p in td.postings] == [(92, True)]
     assert [(p.row, p.amount) for p in got[("ABC1基金XX12345", 3)].postings] == [(92, 1234.5), (126, 1234.5)]
     assert [(p.row, p.amount) for p in got[("INT202611", 4)].postings] == [(90, 3.2)]
+
+
+def test_plan_cells_note_only_and_linked_formula():
+    labels = [""] * 130
+    formulas = [[""] * 13 for _ in range(130)]
+    formulas[37][11] = "=1000+L119"  # 富邦 38 列公式已引用 119
+    e1 = classify([tx("fubon", "****990 (新店分行)", "富邦", 10, 5000, "集保基金", "配息新興國家")], RULES)
+    td = classify([tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 9, -11773.76, "支出", "88872B0RC170", "南非幣", True)], RULES)
+    values, notes, errors = plan_cells(e1 + td, formulas, labels, {"2026-11": 11}, date(2026, 11, 14))
+    assert errors == []
+    assert values == {"L119": "=5000"}  # 38 列公式已帶入 119，不重複加；定存只加備註
+    assert "L38" not in values and "只記備註" in notes["L92"][0]

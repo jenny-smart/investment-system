@@ -82,6 +82,7 @@ class Posting:
     row: object        # 列號（int）或列名（str，零用金分類）
     amount: float
     label: str = ""
+    note_only: bool = False  # 只加備註、不加金額（例：轉入定存）
 
 
 @dataclass
@@ -258,8 +259,9 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
                     e.reason = f"敦南投資基金 → {FX_FUND_ROWS[t.currency]} 台新-{t.currency[:2]}"
                 elif t.amount > 0:
                     e.skip, e.reason = True, "古亭轉入敦南（過路，古亭那邊已記）"
-                else:
-                    e.skip, e.reason = True, "敦南轉出（例：轉入定存）— 請確認要不要記、記哪一列"
+                else:  # Jenny：轉入定存只加備註，到期利息（INT）再加進幣別列
+                    e.postings = [Posting(own, t.amount, note_only=True)]
+                    e.reason = "轉入定存（只加備註，不加金額；到期利息再記）"
             elif t.amount > 0:
                 e.postings = [Posting(own, t.amount), Posting(FX_DIVIDEND_ROWS[t.currency], t.amount)]
                 e.reason = "外幣基金收入（配息）"
@@ -288,10 +290,11 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
             card = next((r for w, r in CARD_ROWS if w.lower() in low), None)
             if card is None:
                 e.postings, e.reason = [mine], "信用卡扣款（哪一家卡？請確認）"
-            else:
-                e.postings, e.reason = [mine, Posting(card, -t.amount)], "信用卡扣款 → 信用卡列"
+            else:  # Jenny：只記信用卡列，帳戶列公式會自動帶入
+                e.postings, e.reason = [Posting(card, -t.amount)], "信用卡扣款 → 只記信用卡列（帳戶列公式自動帶入）"
         elif t.amount > 0 and "配息" in text and "集保" not in text and re.search(r"\b0\d{3,4}[A-Z]?\b|\d{4}FUND|0\d{3,4}[A-Z]?$", text.upper().replace(" ", " ")):
-            e.postings, e.reason = [mine, Posting(ROW_STOCK_DIVIDEND, t.amount)], "台股（ETF）配息 → 股利-台股"
+            e.postings = [Posting(ROW_STOCK_DIVIDEND, t.amount)]  # Jenny：只記 116，帳戶列公式會自動帶入
+            e.reason = "台股（ETF）配息 → 只記 116（帳戶列公式自動帶入）"
         elif "集保" in text and "配息" in text and t.amount > 0:
             e.postings, e.reason = [mine, Posting(ROW_FUBON_FUND_DIVIDEND, t.amount)], "集保基金配息"
         elif t.amount > 0 and any(w in text for w in DIVIDEND_WORDS):
@@ -364,8 +367,13 @@ def save_applied(keys: set) -> None:
     os.chmod(APPLIED_FILE, 0o600)
 
 
+def _refs(formula: str) -> set:
+    return set(re.findall(r"\$?([A-Z]{1,2})\$?(\d+)", str(formula or "").upper()))
+
+
 def plan_cells(entries: list[Entry], formulas: list, labels: list, cols: dict, stamp: date):
-    """→ ({儲存格: 新公式}, {儲存格: 新備註行}, 錯誤)。"""
+    """→ ({儲存格: 新公式}, {儲存格: 新備註行}, 錯誤)。
+    帳戶列的公式如果已經引用另一邊那一格（例：建北 43 列公式含 116 列），就不在帳戶列重複加。"""
     values, notes, errors = {}, {}, []
     for e in entries:
         if e.skip:
@@ -374,17 +382,26 @@ def plan_cells(entries: list[Entry], formulas: list, labels: list, cols: dict, s
         if month not in cols:
             errors.append(f"細帳沒有 {month} 欄")
             continue
-        for p in e.postings:
-            r = _row_index(labels, p.row)
-            if r is None:
-                errors.append(f"細帳找不到「{p.row}」")
-                continue
-            c = cols[month]
+        c = cols[month]
+        rows = [(_row_index(labels, p.row), p) for p in e.postings]
+        if any(r is None for r, _ in rows):
+            errors.append("細帳找不到「" + "、".join(str(p.row) for r, p in rows if r is None) + "」")
+            continue
+        if len(rows) >= 2:
+            first_r = rows[0][0]
+            base = formulas[first_r][c] if first_r < len(formulas) and c < len(formulas[first_r]) else ""
+            col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
+            linked = {(col_letter, str(r + 1)) for r, _ in rows[1:]} & _refs(base)
+            if linked:
+                rows = rows[1:]
+                e.reason += "（帳戶列公式已帶入，不重複加）"
+        for r, p in rows:
             cell = a1(r, c)
-            base = values.get(cell, formulas[r][c] if r < len(formulas) and c < len(formulas[r]) else "")
-            amount = round(p.amount, 2) if e.tx.currency != "TWD" else int(round(p.amount))
-            values[cell] = add_term(base, amount)
-            notes.setdefault(cell, []).append(note_line(e.tx, p.amount))
+            if not p.note_only:
+                base = values.get(cell, formulas[r][c] if r < len(formulas) and c < len(formulas[r]) else "")
+                amount = round(p.amount, 2) if e.tx.currency != "TWD" else int(round(p.amount))
+                values[cell] = add_term(base, amount)
+            notes.setdefault(cell, []).append(note_line(e.tx, p.amount) + ("（只記備註）" if p.note_only else ""))
     return values, notes, errors
 
 
@@ -417,7 +434,8 @@ def _describe(e: Entry, labels: list) -> str:
         if isinstance(row, str):
             return row
         return f"{row} {labels[row - 1] if row - 1 < len(labels) else ''}".strip()
-    return "；".join(f"{name(p.row)}：{p.amount:+,.2f}".replace(".00", "") for p in e.postings)
+    return "；".join(f"{name(p.row)}：" + ("只加備註" if p.note_only else f"{p.amount:+,.2f}".replace(".00", ""))
+                    for p in e.postings)
 
 
 def read_review(book) -> dict:
