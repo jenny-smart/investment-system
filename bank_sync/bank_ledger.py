@@ -43,6 +43,10 @@ ACCOUNT_ROWS = {
 FX_ROWS = {"人民幣": 83, "日圓": 91, "美元": 90, "南非幣": 92}
 FX_DIVIDEND_ROWS = {"人民幣": 120, "日圓": 121, "美元": 125, "南非幣": 126}
 FUND_ROWS = {"TWD": 105, "人民幣": 104, "日圓": 106}
+FX_FUND_ROWS = {"美元": 109, "南非幣": 110}  # 台新-美金、台新-南非（基金投資）
+CARD_WORDS = ("信用卡", "卡款", "卡費")
+CARD_ROWS = (("渣打", 132), ("富邦", 133), ("聯邦", 134), ("星展", 135), ("DBS", 135), ("台新", 136),
+             ("國泰", 137))  # Jenny：信用卡扣款金額記在 132–137
 ROW_STOCK_DIVIDEND = 116
 ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
@@ -241,20 +245,32 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
         low = text.lower()
         if t.ledger == "台新外幣":
             own = FX_ROWS.get(t.currency)
+            note_up = text.upper()
+            is_interest = "利息" in text or re.search(r"\bINT", note_up) is not None  # Jenny：有 INT 就是利息
+            is_fund_buy = re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", note_up) is not None  # 例：0407…ZAR＝投資基金
             if own is None:
                 e.skip, e.reason = True, f"幣別 {t.currency} 細帳沒有對應列"
-            elif t.interest_only and "利息" not in text:
-                e.skip, e.reason = True, "敦南外幣帳戶只記利息"
-            elif "利息" in text:
-                e.postings, e.reason = [Posting(own, t.amount)], "外幣利息"
-            elif t.amount > 0 and any(w in text for w in FX_DIVIDEND_WORDS):
+            elif is_interest:
+                e.postings, e.reason = [Posting(own, t.amount)], "外幣利息（加在幣別列）"
+            elif t.interest_only:  # 敦南外幣：過路帳戶
+                if t.amount < 0 and is_fund_buy and t.currency in FX_FUND_ROWS:
+                    e.postings = [Posting(FX_FUND_ROWS[t.currency], -t.amount)]
+                    e.reason = f"敦南投資基金 → {FX_FUND_ROWS[t.currency]} 台新-{t.currency[:2]}"
+                elif t.amount > 0:
+                    e.skip, e.reason = True, "古亭轉入敦南（過路，古亭那邊已記）"
+                else:
+                    e.skip, e.reason = True, "敦南轉出（例：轉入定存）— 請確認要不要記、記哪一列"
+            elif t.amount > 0:
                 e.postings = [Posting(own, t.amount), Posting(FX_DIVIDEND_ROWS[t.currency], t.amount)]
-                e.reason = "外幣配息"
-            elif t.amount < 0 and any(w in text for w in FUND_WORDS) and t.currency in FUND_ROWS:
+                e.reason = "外幣基金收入（配息）"
+            elif is_fund_buy and t.currency in FX_FUND_ROWS:
+                e.postings = [Posting(own, t.amount), Posting(FX_FUND_ROWS[t.currency], -t.amount)]
+                e.reason = "外幣投資基金"
+            elif t.currency in FUND_ROWS and any(w in text for w in FUND_WORDS):
                 e.postings = [Posting(own, t.amount), Posting(FUND_ROWS[t.currency], -t.amount)]
                 e.reason = "基富通投資（外幣）"
             else:
-                e.postings, e.reason = [Posting(own, t.amount)], "外幣進出（另一邊請確認）"
+                e.postings, e.reason = [Posting(own, t.amount)], "外幣轉出（例：轉敦南）— 另一邊請確認"
             out.append(e)
             continue
         row, interest_row, _ = ACCOUNT_ROWS[t.ledger]
@@ -268,6 +284,14 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
         elif "利息" in text:
             e.postings = [mine] + ([Posting(interest_row, t.amount)] if interest_row else [])
             e.reason = "利息"
+        elif t.amount < 0 and any(w in text for w in CARD_WORDS):
+            card = next((r for w, r in CARD_ROWS if w.lower() in low), None)
+            if card is None:
+                e.postings, e.reason = [mine], "信用卡扣款（哪一家卡？請確認）"
+            else:
+                e.postings, e.reason = [mine, Posting(card, -t.amount)], "信用卡扣款 → 信用卡列"
+        elif t.amount > 0 and "配息" in text and "集保" not in text and re.search(r"\b0\d{3,4}[A-Z]?\b|\d{4}FUND|0\d{3,4}[A-Z]?$", text.upper().replace(" ", " ")):
+            e.postings, e.reason = [mine, Posting(ROW_STOCK_DIVIDEND, t.amount)], "台股（ETF）配息 → 股利-台股"
         elif "集保" in text and "配息" in text and t.amount > 0:
             e.postings, e.reason = [mine, Posting(ROW_FUBON_FUND_DIVIDEND, t.amount)], "集保基金配息"
         elif t.amount > 0 and any(w in text for w in DIVIDEND_WORDS):
@@ -427,8 +451,12 @@ def apply_review(entries: list[Entry], answers: dict) -> list[Entry]:
             e.skip, e.reason = True, "你在確認表選了略過"
         elif target:
             row = int(target) if target.isdigit() else target
-            mine = e.postings[0] if e.postings else Posting(ACCOUNT_ROWS.get(e.tx.ledger, (None,))[0], e.tx.amount)
-            e.postings, e.reason, e.skip = [mine, Posting(row, -e.tx.amount)], f"你改記到 {target}", False
+            if e.tx.ledger == "台新外幣":
+                own = None if e.tx.interest_only else FX_ROWS.get(e.tx.currency)
+            else:
+                own = ACCOUNT_ROWS.get(e.tx.ledger, (None,))[0]
+            mine = [Posting(own, e.tx.amount)] if own else []
+            e.postings, e.reason, e.skip = mine + [Posting(row, -e.tx.amount)], f"你改記到 {target}", False
         elif needs_check(e) and choice != "確認":
             e.skip, e.reason, e.waiting = True, "等你在確認表確認（這次先不寫）", True
         out.append(e)

@@ -127,3 +127,25 @@ def test_review_sheet_roundtrip():
     pending = apply_review(classify(txs, RULES), {})
     waiting = [e for e in pending if e.tx.note == "不認得的店"][0]
     assert waiting.skip and waiting.waiting
+
+
+def test_rules_from_review_feedback():
+    txs = [
+        tx("taishin", "****159 建北綜活儲存款", "台新-建北", 11, 8590, "授權轉入", "基金配息 0056FUND"),
+        tx("taishin", "****159 建北綜活儲存款", "台新-建北", 12, 360, "授權轉入", "基金配息00740B"),
+        tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 10, -4896, "媒體轉出", "信用卡款星展銀行"),
+        tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 6, -68643, "支出", "040750032867ZAR", "南非幣", True),
+        tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 9, 11772.86, "存入", "040750032867ZAR", "南非幣", True),
+        tx("taishin", "****780 敦南外幣證券交割", "台新外幣", 9, -11773.76, "支出", "88872B0RC170", "南非幣", True),
+        tx("taishin", "****867 古亭外幣綜存", "台新外幣", 3, 1234.5, "存入", "ABC1基金XX12345", "南非幣"),
+        tx("taishin", "****867 古亭外幣綜存", "台新外幣", 4, 3.2, "存入", "INT202611", "美元"),
+    ]
+    got = {(e.tx.note, e.tx.day.day): e for e in classify(txs, RULES)}
+    assert [(p.row, p.amount) for p in got[("基金配息 0056FUND", 11)].postings] == [(43, 8590), (116, 8590)]
+    assert [(p.row, p.amount) for p in got[("基金配息00740B", 12)].postings] == [(43, 360), (116, 360)]
+    assert [(p.row, p.amount) for p in got[("信用卡款星展銀行", 10)].postings] == [(47, -4896), (135, 4896)]
+    assert [(p.row, p.amount) for p in got[("040750032867ZAR", 6)].postings] == [(110, 68643)]
+    assert got[("040750032867ZAR", 9)].skip
+    assert got[("88872B0RC170", 9)].skip and "請確認" in got[("88872B0RC170", 9)].reason
+    assert [(p.row, p.amount) for p in got[("ABC1基金XX12345", 3)].postings] == [(92, 1234.5), (126, 1234.5)]
+    assert [(p.row, p.amount) for p in got[("INT202611", 4)].postings] == [(90, 3.2)]
