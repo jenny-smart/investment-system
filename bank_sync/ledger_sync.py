@@ -486,9 +486,13 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
         pending = [s for s in plan.spends if s.charge.amount != 0 and s.file.key not in applied]
         if pending:
             formulas = copy.get_values(value_render_option="FORMULA")
+            shown = copy.get_values()                   # 月份標題、列名用顯示值（公式模式下是日期序號或公式）
             notes = copy.get_notes()
-            labels = [r[0] if r else "" for r in formulas]
-            cols = month_columns(formulas[0] if formulas else [])
+            labels = [r[0] if r else "" for r in shown]
+            labels += [""] * (len(formulas) - len(labels))
+            cols = month_columns(shown[0] if shown else [])
+            if not cols:
+                raise SystemExit(f"{copy_title} 第 1 列找不到月份標題（例如 2026-04），無法寫入")
             block = ensure_card_block(copy, formulas, labels, cols, log, copy_title)
             by_cell: dict[tuple[int, int], list[SpendAction]] = {}
             for s in pending:

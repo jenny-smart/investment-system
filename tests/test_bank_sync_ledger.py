@@ -193,7 +193,11 @@ class FakeSheet:
         self.row_count += n
 
     def get_values(self, value_render_option=None):
-        return [list(r) for r in self.values]
+        rows = [list(r) for r in self.values]
+        if value_render_option == "FORMULA" and rows:      # 仿 Google：公式模式下月份標題是日期公式
+            rows[0] = [v if i == 0 else (f"=DATE({v[:4]},{int(v[5:7])},1)" if len(v) == 7 and v[4] == "-" else v)
+                       for i, v in enumerate(rows[0])]
+        return rows
 
     def get_notes(self):
         return [[self.notes.get((r, c), "") for c in range(len(row))] for r, row in enumerate(self.values)]
