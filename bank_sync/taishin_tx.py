@@ -231,7 +231,7 @@ def shape_report(results: list[dict], per_account: int = 4) -> str:
 
 def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
     from playwright.sync_api import sync_playwright
-    from .login import acquire_lock, launch_context, open_bank, wait_for_logins
+    from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
 
     TX_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -258,6 +258,7 @@ def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
                 print(f"⚠️ 中斷：{exc}（目前網址 {page.url.split('?')[0]}）")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
+            logout_all(context)
             context.close()
     finally:
         lock.close()

@@ -360,6 +360,66 @@ def launch_context(playwright):
         return context
 
 
+LOGOUT_JS = r"""
+(names) => {
+  const vis = e => e.getClientRects().length > 0;
+  const els = [...document.querySelectorAll('button,a,input[type=button],input[type=submit],[role=button],span,div')].filter(vis);
+  for (const n of names) {
+    const e = els.find(x => (x.innerText || x.value || '').replace(/\s+/g, '') === n && (x.children.length === 0 || x.tagName === 'A' || x.tagName === 'BUTTON'));
+    if (e) { e.click(); return n; }
+  }
+  return null;
+}
+"""
+LOGOUT_NAMES = ["登出", "安全登出", "登出系統", "立即登出", "Logout", "登出網銀"]
+CONFIRM_NAMES = ["確定登出", "確認登出", "確定", "確認", "是"]
+
+
+def logout(page) -> bool:
+    """在銀行頁面按「登出」（含確認視窗），避免下次登入出錯。"""
+    if page is None or page.is_closed():
+        return False
+    try:
+        page.on("dialog", lambda d: d.accept())
+        hit = None
+        for ctx in _contexts(page):
+            try:
+                hit = ctx.evaluate(LOGOUT_JS, LOGOUT_NAMES)
+            except Exception:
+                hit = None
+            if hit:
+                break
+        if not hit:
+            return False
+        page.wait_for_timeout(1500)
+        for ctx in _contexts(page):
+            try:
+                if ctx.evaluate(LOGOUT_JS, CONFIRM_NAMES):
+                    break
+            except Exception:
+                pass
+        page.wait_for_timeout(2500)
+        return True
+    except Exception:
+        return False
+
+
+def logout_all(context) -> None:
+    """程式開的 Chrome 關閉前，每家已登入的銀行都按登出。"""
+    if context is None:
+        return
+    for page in list(context.pages):
+        try:
+            url = page.url
+        except Exception:
+            continue
+        bank = next((b for b in WEB_BANKS.values() if b.host in url), None)
+        if bank is None:
+            continue
+        ok = logout(page)
+        print(f"  {'✓ 已登出' if ok else '⚠️ 找不到登出按鈕，請手動登出'}：{bank.name}")
+
+
 def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_s: float = 300) -> list[LoginState]:
     """targets: [(登入名稱, 銀行代碼)]。一次一家：開好、預填，等本人登入完成才開下一家。"""
     try:
@@ -406,8 +466,9 @@ def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_
                 mark = "✓" if s.logged_in else "✗"
                 print(f"  {mark} {s.bank.name}{'' if s.logged_in else '（' + (s.error or '未完成登入') + '）'}")
             if keep_open and context is not None:
-                input("\n查詢完成後，回到終端機按 Enter 關閉程式開的 Chrome…")
+                input("\n查詢完成後，回到終端機按 Enter（程式會先幫每家按登出，再關閉 Chrome）…")
             if context is not None:
+                logout_all(context)
                 context.close()
             return states
     finally:

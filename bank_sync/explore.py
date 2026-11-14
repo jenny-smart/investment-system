@@ -81,7 +81,7 @@ def describe_download(path: Path) -> dict:
 
 def explore(login_key: str, bank_code: str) -> Path:
     from playwright.sync_api import sync_playwright
-    from .login import acquire_lock, launch_context, open_bank, wait_for_logins
+    from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
     bank = WEB_BANKS[bank_code]
     if bank.native:
         raise SystemExit(f"{bank.name} 用的是一般模式 Chrome，探索模式目前只支援程式開的 Chrome。")
@@ -123,6 +123,7 @@ def explore(login_key: str, bank_code: str) -> Path:
             time.sleep(1)
             record["downloads"] = [describe_download(f) for f in sorted(dl_dir.glob("*")) if f.is_file()]
             save()
+            logout_all(context)
             context.close()
     finally:
         lock.close()
