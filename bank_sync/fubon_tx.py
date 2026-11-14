@@ -112,33 +112,50 @@ def _goto_query(page, timeout_s: float = 30):
     return frame
 
 
-def _read_table(frame, timeout_s: float = 20, before: str = "null") -> dict:
+NO_DATA = ("查無", "無交易", "無資料", "沒有資料")
+
+
+def _read_table(frame, timeout_s: float = 25, before: str = "null") -> dict:
+    """等結果表格出現。只有「表格裡」寫查無資料才算沒資料（頁面說明文字裡也可能有「查無」）。"""
     deadline = time.time() + timeout_s
     result = None
     while time.time() < deadline:
         frame.wait_for_timeout(800)
         try:
             result = frame.evaluate(TABLE_JS, NEED)
-            body = frame.evaluate("() => document.body.innerText")
         except Exception:
             continue  # 送出查詢後頁面重新載入中
-        if result and json.dumps(result, ensure_ascii=False) != before and result.get("rows"):
+        if not result:
+            continue
+        joined = " ".join(" ".join(r) for r in result.get("rows", []))
+        if result.get("rows") and any(k in joined for k in NO_DATA):
+            return {"head": result["head"], "rows": []}
+        if result.get("rows") and json.dumps(result, ensure_ascii=False) != before:
             break
-        if any(k in body for k in ("查無", "無交易", "無資料", "沒有資料")):
-            return {"head": (result or {}).get("head", []), "rows": []}
     else:
-        return {"head": (result or {}).get("head", []), "rows": []}
-    rows = list(result["rows"])
+        return {"head": (result or {}).get("head", []), "rows": [], "note": "逾時沒有看到結果"}
+    rows = [r for r in result["rows"] if parse_day(r[0] if r else "")]
     for _ in range(30):  # 下一頁
         if not frame.evaluate(CLICK_JS, ["下一頁", "下頁"]):
             break
         frame.wait_for_timeout(1500)
         more = frame.evaluate(TABLE_JS, NEED) or {}
-        new = [r for r in more.get("rows", []) if r not in rows]
+        new = [r for r in more.get("rows", []) if r not in rows and parse_day(r[0] if r else "")]
         if not new:
             break
         rows.extend(new)
     return {"head": result["head"], "rows": rows}
+
+
+def _debug_snapshot(page, name: str) -> None:
+    """結果是 0 筆時，存一份遮蔽過的頁面結構（不含金額），方便查原因。"""
+    try:
+        from .explore import snapshot
+        path = BANK_DIR / "_explore" / f"fubon_debug_{name}_{datetime.now():%H%M%S}.json"
+        path.write_text(json.dumps(snapshot(page), ensure_ascii=False, indent=1), "utf-8")
+        print(f"  （已存頁面結構供檢查：{path.name}）")
+    except Exception:
+        pass
 
 
 def _load_state() -> dict:
@@ -165,8 +182,13 @@ def fetch_all(page, state: dict, since: date) -> list[dict]:
         raise RuntimeError(f"填日期失敗：{msg}")
     if not frame.evaluate(LINK_JS, "開始查詢") and not frame.evaluate(CLICK_JS, ["開始查詢", "查詢"]):
         raise RuntimeError("找不到「開始查詢」")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(3000)
     frame = _eval_any(page, READY_JS) or frame
+    try:
+        filled = frame.evaluate("() => [document.getElementById('form1:startDate')?.value, document.getElementById('form1:endDate')?.value]")
+        print(f"  送出後日期欄：{filled}")
+    except Exception:
+        pass
     out = []
     for kind, tab in (("TWD", "臺幣活期存款"), ("FX", "外幣活期存款")):
         before = "null"
@@ -180,6 +202,8 @@ def fetch_all(page, state: dict, since: date) -> list[dict]:
             page.wait_for_timeout(1500)
             frame = _eval_any(page, READY_JS) or frame
         data = _read_table(frame, before=before if kind == "FX" else "null")
+        if not data["rows"]:
+            _debug_snapshot(page, kind)
         key = f"{kind}:富邦"
         total = len(data["rows"])
         data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), start)
