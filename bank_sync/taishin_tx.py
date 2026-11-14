@@ -60,7 +60,8 @@ TABLE_JS = r"""
 
 SELECT_JS = r"""
 ([marker, index, label]) => {
-  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.text.includes(marker)) && s.getClientRects().length > 0)
+  const sel = [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.text.includes(marker)) && s.options.length > 1 && s.getClientRects().length > 0)
+           || [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.text.includes(marker)) && s.options.length > 1)
            || [...document.querySelectorAll('select')].find(s => [...s.options].some(o => o.text.includes(marker)));
   if (!sel) return null;
   const opts = [...sel.options];
@@ -172,10 +173,21 @@ def _app_frame(page):
     return None
 
 
+READY_JS = r"""
+(marker) => {
+  const sels = [...document.querySelectorAll('select')];
+  const acct = sels.find(s => [...s.options].some(o => o.text.includes(marker)) && s.options.length > 1);
+  const period = sels.find(s => [...s.options].some(o => o.text.includes('請選擇查詢期間')));
+  return !!(acct && period);
+}
+"""
+
+
 def _find_select_frame(page, marker: str):
+    """要同時有「帳號選單（有帳號）」和「查詢期間」才算到了明細頁（首頁也有「請選擇帳號」的選單）。"""
     for frame in page.frames:
         try:
-            if frame.evaluate(SELECT_JS, [marker, -1, ""]):
+            if frame.evaluate(READY_JS, marker):
                 return frame
         except Exception:
             continue
@@ -265,7 +277,8 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
 
 def fetch_twd(page, state: dict, since: date) -> list[dict]:
     page = _goto(page, TWD_URL, "查詢交易明細", "請選擇帳號")
-    options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""])
+    options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""]) or []
+    print(f"  帳號選單共 {max(len(options) - 1, 0)} 個帳戶")
     out = []
     for i, label in enumerate(options):
         if i == 0 or "請選擇" in label or any(k in label for k in TWD_SKIP):
