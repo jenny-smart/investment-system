@@ -252,16 +252,20 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
         raise RuntimeError(f"找不到按鈕：{button_names}")
     deadline = time.time() + timeout_s
     result = None
+    fresh = False
     while time.time() < deadline:
         page.wait_for_timeout(700)
         if _logged_out(page):
             raise RuntimeError("台新已登出")
         result = page.evaluate(TABLE_JS, need)
-        body = page.evaluate("() => document.body.innerText")
-        if result and json.dumps(result, ensure_ascii=False) != before:
+        if result and result.get("rows") and json.dumps(result, ensure_ascii=False) != before:
+            fresh = True
             break
-        if "查無" in body or "無交易" in body:
+        body = page.evaluate("() => document.body.innerText")
+        if any(k in body for k in ("查無", "無交易", "無資料", "沒有資料")):
             return {"head": [], "rows": []}
+    if not fresh:  # 表格沒有更新＝這個帳戶這段期間沒有交易（不能拿上一個帳戶的結果）
+        return {"head": (result or {}).get("head", []), "rows": []}
     rows = list((result or {}).get("rows", []))
     for _ in range(30):  # 有「更多」就一直點
         if not page.evaluate(CLICK_JS, ["載入更多", "顯示更多", "更多", "下一頁"]):
@@ -275,6 +279,16 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
     return {"head": (result or {}).get("head", []), "rows": rows}
 
 
+def _fresh(frame, url: str, other_url: str, link_text: str, marker: str):
+    """切到別頁再切回來，讓查詢結果清空，避免沿用上一個帳戶的表格。"""
+    try:
+        frame.evaluate("h => { window.location.hash = h; }", "#" + other_url.split("#", 1)[1])
+        frame.wait_for_timeout(1500)
+    except Exception:
+        pass
+    return _goto(frame.page, url, link_text, marker)
+
+
 def fetch_twd(page, state: dict, since: date) -> list[dict]:
     page = _goto(page, TWD_URL, "查詢交易明細", "請選擇帳號")
     options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""]) or []
@@ -283,6 +297,8 @@ def fetch_twd(page, state: dict, since: date) -> list[dict]:
     for i, label in enumerate(options):
         if i == 0 or "請選擇" in label or any(k in label for k in TWD_SKIP):
             continue
+        if out:
+            page = _fresh(page, TWD_URL, FX_URL, "查詢交易明細", "請選擇帳號")
         name = _short(label)
         key = "TWD:" + name
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
@@ -312,6 +328,8 @@ def fetch_fx(page, state: dict, since: date) -> list[dict]:
     for i, label in enumerate(options):
         if i == 0 or "請選擇" in label:
             continue
+        if out:
+            page = _fresh(page, FX_URL, TWD_URL, "查詢外幣交易明細", "請選擇查詢帳號")
         name = _short(label)
         key = "FX:" + name
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
