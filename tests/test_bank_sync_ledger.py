@@ -1,0 +1,134 @@
+import unittest
+from datetime import date
+
+from bank_sync.ledger_sync import (FALLBACK_ROW, DEFAULT_RULES, ParsedFile, add_term, build_plan, categorize,
+                                   merge_note, month_columns)
+from bank_sync.statement_parser import note_text, parse
+from pathlib import Path
+
+# 合成的帳單文字（格式仿各銀行，內容虛構）
+TAISHIN = """帳    務    資    訊
+帳單結帳日 115/11/02
+繳款截止日 115/11/17
+上期應繳總額 1,000
+=本期累計應繳金額 1,350
+消費日 入帳起息日 消費明細 新臺幣金額 外幣折算日 消費地 幣別 外幣金額
+115/10/19 115/10/19 台新銀行帳戶自動轉帳扣繳台新信用卡款 -1,000
+  Richart卡 (卡號末四碼:1111)
+115/10/02 115/10/05 範例咖啡店TAIPEI 150  TW
+115/10/07 115/10/12 高鐵智慧型手機TAIPEI 700  TW
+115/10/06 115/10/08 EXAMPLE SaaS SAN FR 491 1006 US USD 15.00
+115/10/06 115/10/08 國外交易服務費－491.00 9
+*若您要使用金融卡繳交信用卡款
+"""
+FUBON = """本期應繳總額 316元
+115/11 250,000
+25,000 115/11/02 115/11/18 6.46% ---% 0/0
+消費日期 消費說明 入帳日期 外幣折算日/幣別 外幣金額/消費地 台幣金額
+115/10/20 ACH自動扣繳 115/10/21 -500
+MASTER鈦金正卡末４碼2222
+115/10/27 11510電話費        866***89 115/10/27 TWD 289
+115/11/02 數位卡現金回饋退款 115/11/02 -3
+115/10/09 範例購物-EC 115/10/12 TWD 30
+本期應繳金額 316
+"""
+DBS = """您本期的消費明細如下
+消費日 入帳起息日 消費明細（含消費地） 外幣折算日 幣別金額/幣別 新台幣金額
+2026/10/08 2026/10/12 銀行自動扣繳 -100
+以下為範例卡 正卡（卡號末4碼 3333）新增消費小計 260
+2026/09/21 2026/09/29 連支＊範例早午餐 / TW Taipei 60
+2026/10/10 2026/10/13 範例商店 / TW Taipei 200
+繳交截止日：2026年11月09日
+應繳總金額
+260
+"""
+CATHAY = """信用卡帳單 115年9月
+消費日 入帳起息日 交易說明 新臺幣金額 卡號後四碼 行動卡號後四碼 消費國家 幣別 外幣金額 折算日
+09/07 09/07 範例年費優惠 0 4444
+本期應繳總額 0
+"""
+
+
+class ParserTest(unittest.TestCase):
+    def test_taishin(self):
+        st = parse("taishin", TAISHIN)
+        self.assertEqual((st.due, st.total_due, st.ledger_month), (date(2026, 11, 17), 1350, "2026-11"))
+        self.assertEqual([c.amount for c in st.purchases], [150, 700, 491, 9])
+        self.assertEqual(st.purchases[0].card, "1111")
+        self.assertEqual(st.warnings, [])
+
+    def test_fubon(self):
+        st = parse("fubon", FUBON)
+        self.assertEqual((st.due, st.total_due), (date(2026, 11, 18), 316))
+        self.assertEqual(sum(c.amount for c in st.purchases), 316)
+        self.assertEqual(st.purchases[0].description, "11510電話費")
+        self.assertTrue(st.charges[0].is_payment)
+
+    def test_dbs(self):
+        st = parse("dbs", DBS)
+        self.assertEqual((st.due, st.total_due), (date(2026, 11, 9), 260))
+        self.assertEqual([c.description for c in st.purchases], ["連支＊範例早午餐", "範例商店"])
+        self.assertEqual(st.warnings, [])
+
+    def test_cathay_zero(self):
+        st = parse("cathay", CATHAY)
+        self.assertEqual((st.ledger_month, st.total_due), ("2026-09", 0))
+
+    def test_mismatch_warns(self):
+        st = parse("dbs", DBS.replace("\n260\n", "\n999\n"))
+        self.assertTrue(any("不同" in w for w in st.warnings))
+
+    def test_note_has_stamp(self):
+        note = note_text(parse("dbs", DBS), date(2026, 11, 14))
+        self.assertIn("加註日期：2026-11-14", note)
+        self.assertIn("09/21 連支＊範例早午餐 60", note)
+
+
+class LedgerTest(unittest.TestCase):
+    def test_add_term(self):
+        self.assertEqual(add_term("", 120), "=120")
+        self.assertEqual(add_term("=4289+12", 30), "=4289+12+30")
+        self.assertEqual(add_term("1,000", 5), "=1000+5")
+        self.assertEqual(add_term("=10", -3), "=10-3")
+
+    def test_categorize(self):
+        self.assertEqual(categorize("高鐵智慧型手機", DEFAULT_RULES)[0], "零用金-交通1")
+        self.assertEqual(categorize("連支＊範例早午餐", DEFAULT_RULES)[0], "零用金-餐費")
+        self.assertEqual(categorize("新光人壽保險 第02/12期", DEFAULT_RULES)[0], "保費支出")
+        self.assertEqual(categorize("不知名商行", DEFAULT_RULES)[0], FALLBACK_ROW)
+        self.assertEqual(categorize("連支＊ＷＴＣ　Ｃａｆ？Taipei", DEFAULT_RULES)[0], "零用金-餐費")  # 全形
+        self.assertEqual(categorize("ｙｏｘｉTAIPEI", DEFAULT_RULES)[0], "零用金-交通1")
+
+    def test_merge_note_replaces_same_statement(self):
+        old = "使用者自己的備註\n【星展 信用卡帳單】本期應繳 260\n繳款截止日 2026/11/09\n舊明細\n加註日期：2026-11-01（bank_sync）"
+        new = "【星展 信用卡帳單】本期應繳 260\n繳款截止日 2026/11/09\n新明細\n加註日期：2026-11-14（bank_sync）"
+        merged = merge_note(old, new)
+        self.assertIn("使用者自己的備註", merged)
+        self.assertIn("新明細", merged)
+        self.assertNotIn("舊明細", merged)
+
+    def test_month_columns(self):
+        self.assertEqual(month_columns(["2026", "2026-10", "2026/11/1", "x"]), {"2026-10": 1, "2026-11": 2})
+
+    def test_build_plan(self):
+        values = [["2026", "2026-10", "2026-11"],
+                  ["零用金-餐費", "", "100"],
+                  ["零用金-其他", "", ""],
+                  ["零用金-交通1", "", "=1000"],
+                  ["信用卡-星展 08", "780", ""],
+                  ["信用卡-台新 18", "", "1350"]]
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS)),
+                 ParsedFile("taishin", Path("ts.pdf"), parse("taishin", TAISHIN))]
+        plan = build_plan(files, values, date(2026, 11, 14), {})
+        self.assertEqual(plan.cards[0].cell, "C5")
+        self.assertTrue(plan.cards[0].status.startswith("細帳空白"))
+        self.assertEqual(plan.cards[1].cell, "C6")
+        self.assertTrue(plan.cards[1].status.startswith("相符"))
+        cells = {(s.charge.description, s.cell) for s in plan.spends}
+        self.assertIn(("連支＊範例早午餐", "C2"), cells)
+        self.assertIn(("範例商店", "C3"), cells)       # 對不到規則 → 零用金-其他
+        self.assertIn(("高鐵智慧型手機TAIPEI", "C4"), cells)
+
+
+if __name__ == "__main__":
+    unittest.main()
