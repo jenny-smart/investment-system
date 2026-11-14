@@ -371,21 +371,30 @@ def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_
         print(warning)
     lock = acquire_lock()
     try:
+        # 用本人平常 Chrome 的銀行（渣打）先做：程式自己的 Chrome 還沒開，
+        # Mac 送指令時才不會找錯 Chrome。
+        native = [(k, c) for k, c in targets if WEB_BANKS[c].native]
+        others = [(k, c) for k, c in targets if not WEB_BANKS[c].native]
+        states: list[LoginState] = []
+        total = len(targets)
+        for index, (key, code) in enumerate(native, 1):
+            from .native_chrome import native_login
+            print(f"\n[{index}/{total}] {WEB_BANKS[code].name}")
+            state = LoginState(key, WEB_BANKS[code])
+            try:
+                state.logged_in = native_login(key, code, timeout_s)
+                if not state.logged_in:
+                    print(f"✗ {state.bank.name}：{int(timeout_s // 60)} 分鐘內沒有完成登入，先跳到下一家")
+            except Exception as exc:
+                state.error = f"{type(exc).__name__}: {exc}"
+                print(f"! {state.bank.name}：{state.error}")
+            states.append(state)
+        context = None
         with sync_playwright() as playwright:
-            context = launch_context(playwright)
-            states = []
-            for index, (key, code) in enumerate(targets, 1):
-                print(f"\n[{index}/{len(targets)}] {WEB_BANKS[code].name}")
-                if WEB_BANKS[code].native:
-                    from .native_chrome import native_login
-                    state = LoginState(key, WEB_BANKS[code])
-                    try:
-                        state.logged_in = native_login(key, code, timeout_s)
-                    except Exception as exc:
-                        state.error = f"{type(exc).__name__}: {exc}"
-                        print(f"! {state.bank.name}：{state.error}")
-                    states.append(state)
-                    continue
+            if others:
+                context = launch_context(playwright)
+            for index, (key, code) in enumerate(others, len(native) + 1):
+                print(f"\n[{index}/{total}] {WEB_BANKS[code].name}")
                 state = open_bank(context, key, code)
                 states.append(state)
                 if not state.error and not state.logged_in:
@@ -396,9 +405,10 @@ def login_banks(targets: list[tuple[str, str]], keep_open: bool = True, timeout_
             for s in states:
                 mark = "✓" if s.logged_in else "✗"
                 print(f"  {mark} {s.bank.name}{'' if s.logged_in else '（' + (s.error or '未完成登入') + '）'}")
-            if keep_open:
-                input("\n查詢完成後，回到終端機按 Enter 關閉 Chrome…")
-            context.close()
+            if keep_open and context is not None:
+                input("\n查詢完成後，回到終端機按 Enter 關閉程式開的 Chrome…")
+            if context is not None:
+                context.close()
             return states
     finally:
         lock.close()

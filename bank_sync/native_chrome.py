@@ -162,7 +162,8 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
             break
         time.sleep(1)
     if filled is None:
-        print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫")
+        print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫。"
+              "（若程式開的另一個 Chrome 還開著，請先把它關掉再試）")
     else:
         extra = f"（找不到欄位：{'、'.join(filled['missing'])}，請手動填）" if filled["missing"] else ""
         print(f"   已預填 {len(filled['filled'])} 欄，請輸入驗證碼並按登入{extra}")
@@ -205,7 +206,8 @@ def inspect_page(bank_code: str) -> list[dict]:
     bank = WEB_BANKS[bank_code]
     output = _applescript(bank.host, f"bank-sync-{bank_code}", INSPECT_JS)
     if output == "TAB_NOT_FOUND":
-        raise SystemExit(f"Chrome 裡找不到{bank.name}的分頁；請先執行 login 打開登入頁。")
+        raise SystemExit(f"Chrome 裡找不到{bank.name}的分頁。若程式開的另一個 Chrome 還開著（login 還在等其他銀行），"
+                         "請先在那個終端機按 Control+C 關掉，再執行 inspect。")
     if not output.startswith("["):
         raise SystemExit(f"{bank.name}分頁沒有回應正確結果：{output[:200] or '（空白，可能還在載入，或 Chrome 沒開啟 Apple 事件的 JavaScript）'}")
     rows = json.loads(output)
