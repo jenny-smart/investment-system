@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import email
+import email.utils
 import imaplib
 import json
 import re
