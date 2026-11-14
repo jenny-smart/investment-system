@@ -65,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("logins", nargs="*", metavar="登入名稱")
     login.add_argument("--close", action="store_true", help="全部登入後直接關閉 Chrome")
     login.add_argument("--timeout", type=float, default=5, help="每一家等待登入的分鐘數（預設 5）")
+    exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
+    exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
     insp.add_argument("login")
     fetch = sub.add_parser("fetch-statements", help="從信箱下載信用卡電子帳單 PDF 並試開")
@@ -104,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
         if unknown:
             parser.error(f"不認得的登入名稱：{', '.join(unknown)}（可用：{', '.join(web_login_keys())}）")
         _login(args.logins, keep_open=not args.close, timeout_min=args.timeout)
+    elif args.command == "explore":
+        from .explore import explore
+        explore(args.login, login_bank_code(args.login))
     elif args.command == "inspect":
         from .native_chrome import inspect_page
         inspect_page(login_bank_code(args.login))
