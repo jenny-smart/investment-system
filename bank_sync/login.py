@@ -410,16 +410,29 @@ FUBON_LOGOUT = ('[id="header_form:header_logout"]', 'a[onclick*="logout" i]', 'i
 
 MENU_JS = r"""
 () => {
-  // 右上角三橫線選單鈕：aria-label/title 寫選單、menu，或 class 含 menu/hamburger
+  // 右上角三橫線選單鈕：aria-label/title/圖片 alt 寫選單、menu；找不到就點畫面最上方最右邊的按鈕
   const vis = e => e.getClientRects().length > 0;
-  const els = [...document.querySelectorAll('button,a,[role=button],div,span,i')].filter(vis);
-  const hit = els.find(e => /選單|menu|Menu|MENU|導覽/.test((e.getAttribute('aria-label') || '') + (e.getAttribute('title') || '')))
-           || els.find(e => /^(≡|☰|選單|MENU|Menu)$/.test((e.innerText || '').trim()))
-           || els.find(e => /hamburger|menu-btn|menu_btn|btn-menu|nav-toggle|navbar-toggler/i.test(e.className || ''));
+  const label = e => (e.getAttribute('aria-label') || '') + (e.getAttribute('title') || '') +
+    [...e.querySelectorAll('img,svg title')].map(i => i.getAttribute('alt') || i.textContent || '').join('');
+  const clickables = [...document.querySelectorAll('button,a,[role=button],[onclick]')].filter(vis);
+  let hit = clickables.find(e => /選單|menu|Menu|MENU|導覽|功能/.test(label(e)))
+         || clickables.find(e => /^(≡|☰|選單|MENU|Menu)$/.test((e.innerText || '').trim()))
+         || clickables.find(e => /hamburger|menu-btn|menu_btn|btn-menu|nav-toggle|navbar-toggler|menu/i.test(e.className || ''));
+  if (!hit) {
+    const top = clickables.map(e => [e, e.getBoundingClientRect()]).filter(([e, r]) => r.top < 160 && r.width < 120 && r.height < 120);
+    top.sort((a, b) => b[1].right - a[1].right);
+    if (top.length) hit = top[0][0];
+  }
   if (hit) { hit.click(); return true; }
   return false;
 }
 """
+
+
+def drain_stdin() -> None:
+    """丟掉之前多按的 Enter，免得下一個「請按 Enter」被直接跳過。"""
+    while _enter_pressed():
+        pass
 
 
 def open_menu(page) -> bool:

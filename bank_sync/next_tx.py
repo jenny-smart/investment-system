@@ -22,7 +22,7 @@ KEY = "TWD:將來主帳戶"
 CLICK_TEXT_JS = r"""
 (names) => {
   const vis = e => e.getClientRects().length > 0;
-  const els = [...document.querySelectorAll('a,button,[role=button],[role=tab],li,span')].filter(vis);
+  const els = [...document.querySelectorAll('a,button,[role=button],[role=tab],[onclick],li,span,div')].filter(vis);
   for (const n of names) {
     const e = els.find(x => (x.innerText || '').replace(/\s+/g, '') === n.replace(/\s+/g, ''));
     if (e) { e.click(); return n; }
@@ -63,9 +63,11 @@ def _wait_lines(page, before: list, timeout_ms: int = 15000) -> list:
 
 def _goto_details(page) -> None:
     """只用點選切頁，不重新載入網址（重新載入會被將來銀行登出）。"""
-    from .login import open_menu
+    from .login import drain_stdin, open_menu
     # 首頁「功能清單」→ 新臺幣帳戶總覽（/transaction-details）→ 主帳戶明細查詢（/transaction-details/main）
-    for step in range(4):
+    menu_tried = False
+    for step in range(25):  # 登入後首頁要一點時間才出現按鈕
+        page.wait_for_timeout(1000)
         if "/transaction-details/main" in page.url:
             return
         if page.evaluate(CLICK_TEXT_JS, ["主帳戶明細查詢"]):
@@ -74,10 +76,12 @@ def _goto_details(page) -> None:
         if page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"]):
             page.wait_for_timeout(2500)
             continue
-        if open_menu(page):  # 不在首頁時，從右上角三橫線選單找
+        if step >= 8 and not menu_tried and open_menu(page):  # 等了一陣子還找不到，再從右上角三橫線選單找
+            menu_tried = True
             page.evaluate(CLICK_TEXT_JS, ["新臺幣帳戶總覽"])
             page.wait_for_timeout(2500)
     if "/transaction-details/main" not in page.url:
+        drain_stdin()
         input("  請在 Chrome 點到「主帳戶明細查詢」頁，回到這裡按 Enter：")
 
 
@@ -167,7 +171,13 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 _goto_details(page)
                 for label in _months(since, date.today()):
                     before = page.evaluate(CONTENT_JS)
-                    if not page.evaluate(CLICK_TEXT_JS, [label]):
+                    clicked = None
+                    for _ in range(15):  # 按鈕可能還沒出現
+                        clicked = page.evaluate(CLICK_TEXT_JS, [label])
+                        if clicked:
+                            break
+                        page.wait_for_timeout(700)
+                    if not clicked:
                         print(f"  找不到「{label}」按鈕，略過")
                         continue
                     lines = _wait_lines(page, before)
