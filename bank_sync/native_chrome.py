@@ -96,21 +96,42 @@ def _cdp(target: dict, calls: list) -> list:
     return results
 
 
+def _focus_check(page: dict, field: str) -> bool:
+    out = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps("?" + field)), "returnByValue": True})])
+    return out[0].get("result", {}).get("value") == "FOCUSED"
+
+
 def type_into(host: str, field: str, text: str) -> bool:
-    """聚焦已標記的欄位，再用鍵盤事件逐字輸入（跟真的打字一樣會觸發 keydown/keypress/input）。"""
+    """像真人一樣：滑鼠點進已標記的欄位、確認游標在那格，再用鍵盤逐字輸入。"""
     targets = _targets(host)
     if not targets:
         return False
     page = targets[0]
-    focus = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps(field)), "returnByValue": True})])
-    if focus[0].get("result", {}).get("value") != "OK":
+    out = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps(field)), "returnByValue": True})])
+    value = out[0].get("result", {}).get("value") or ""
+    if not value.startswith("{"):
         return False
-    calls = [("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+    point = json.loads(value)
+    time.sleep(0.3)  # 等捲動完成
+    click = {"x": point["x"], "y": point["y"], "button": "left", "clickCount": 1}
+    for _ in range(3):
+        _cdp(page, [("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": point["x"], "y": point["y"]}),
+                    ("Input.dispatchMouseEvent", {"type": "mousePressed", **click}),
+                    ("Input.dispatchMouseEvent", {"type": "mouseReleased", **click})])
+        time.sleep(0.3)
+        if _focus_check(page, field):
+            break
+    else:
+        return False
+    calls = [("Input.dispatchKeyEvent", {"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 4, "commands": ["selectAll"]}),
+             ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 4}),
+             ("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
              ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8})]
     for ch in text:
         calls.append(("Input.dispatchKeyEvent", {"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch}))
         calls.append(("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch}))
     _cdp(page, calls)
+    time.sleep(0.2)
     return True
 
 
@@ -226,14 +247,17 @@ FOCUS_JS = r"""
   const roots = [];
   const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
   walk(document);
-  const input = roots.flatMap(r => [...r.querySelectorAll('[data-bank-sync]')]).find(e => e.getAttribute('data-bank-sync') === want);
+  const input = roots.flatMap(r => [...r.querySelectorAll('[data-bank-sync]')]).find(e => e.getAttribute('data-bank-sync') === want.replace(/^\?/, ''));
   if (!input) return 'MISSING';
+  if (want.startsWith('?')) { let a = document.activeElement; while (a) { if (a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; else if ((a.tagName === 'IFRAME' || a.tagName === 'FRAME') && a.contentDocument && a.contentDocument.activeElement) a = a.contentDocument.activeElement; else break; } return a === input ? 'FOCUSED' : 'NOT'; }
   input.removeAttribute('readonly');
   input.scrollIntoView({block: 'center'});
-  input.focus();
-  input.click();
-  if (input.select) input.select();
-  return 'OK';
+  let x = 0, y = 0, w = window;
+  const r = input.getBoundingClientRect();
+  x = r.left + Math.min(20, r.width / 2); y = r.top + r.height / 2;
+  let fe = input.ownerDocument.defaultView.frameElement;
+  while (fe) { const fr = fe.getBoundingClientRect(); x += fr.left; y += fr.top; fe = fe.ownerDocument.defaultView.frameElement; }
+  return JSON.stringify({x: x, y: y});
 } catch (err) { return 'JS_ERROR:' + err; } })()
 """
 
