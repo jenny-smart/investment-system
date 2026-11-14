@@ -446,6 +446,8 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
                                        f"25 列同額加回，現金餘額不變\n加註日期：{stamp:%Y-%m-%d}"))
     for s in pending:
         applied[s.file.key] = stamp.isoformat()  # 含信用卡表已加過這份帳單
+    if pending:
+        log.extend(check_net_rows(detail, copy, detail_title, copy_title))
 
     if calendar:
         for key, title, body in events:
@@ -455,6 +457,31 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
 
 CASH_ROW = "零用金"
 TOTAL_ROW = "零用金--總支出"
+NET_ROW = "零用金-淨值"
+
+
+def check_net_rows(detail, copy, detail_title: str, copy_title: str) -> list[str]:
+    """兩張表的「零用金-淨值」每個月都應相等（刷卡同額加在 25 列與分類列，淨值不變）。回傳檢查結果。"""
+    try:
+        d_vals, c_vals = detail.get_values(), copy.get_values()
+    except Exception as exc:
+        return [f"⚠️ 無法比對淨值列：{exc}"]
+    d_row = find_row([r[0] if r else "" for r in d_vals], NET_ROW)
+    c_row = find_row([r[0] if r else "" for r in c_vals], NET_ROW)
+    if d_row is None or c_row is None:
+        return [f"⚠️ 找不到「{NET_ROW}」列，無法比對"]
+    cols = month_columns(d_vals[0])
+    diffs = []
+    for month, col in sorted(cols.items()):
+        a = to_number(d_vals[d_row][col]) if col < len(d_vals[d_row]) else None
+        b = to_number(c_vals[c_row][col]) if col < len(c_vals[c_row]) else None
+        if a is None and b is None:
+            continue
+        if a is None or b is None or round(a) != round(b):
+            diffs.append(f"{month}：{detail_title} {a if a is None else f'{a:,.0f}'}／{copy_title} {b if b is None else f'{b:,.0f}'}")
+    if diffs:
+        return [f"⚠️ 「{NET_ROW}」兩表不一致，請確認：" + "；".join(diffs)]
+    return [f"✓ 「{NET_ROW}」兩表每月相等（現金餘額沒有被刷卡影響）"]
 CARD_SUM_ROW = "零用金-信用卡消費"
 CASH_SUM_ROW = "零用金-現金消費"
 
