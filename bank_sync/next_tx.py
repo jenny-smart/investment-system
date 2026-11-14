@@ -64,6 +64,39 @@ def _click(page, name: str) -> bool:
         return False
 
 
+def logout_next(page) -> bool:
+    """將來：右上角三橫線 → 選單最下面「登出」（→ 確認視窗）。用真的滑鼠點。"""
+    from .login import open_menu
+    page.on("dialog", lambda d: d.accept())
+    if not _click(page, "登出"):
+        opened = False
+        for name in ("選單", "開啟選單", "功能選單", "menu", "Menu"):
+            try:
+                loc = page.get_by_role("button", name=name)
+                if loc.count() and loc.first.is_visible():
+                    loc.first.click(timeout=3000)
+                    opened = True
+                    break
+            except Exception:
+                continue
+        if not opened:
+            open_menu(page)
+        page.wait_for_timeout(1200)
+        if not _click(page, "登出"):
+            return False
+    page.wait_for_timeout(1500)
+    for name in ("確定登出", "確認登出", "確定", "確認", "是"):
+        try:
+            loc = page.get_by_role("button", name=name, exact=True)
+            if loc.count() and loc.first.is_visible():
+                loc.first.click(timeout=3000)
+                break
+        except Exception:
+            continue
+    page.wait_for_timeout(2000)
+    return True
+
+
 def _months(since: date, today: date) -> list[str]:
     out, y, m = [], today.year, today.month
     while (y, m) >= (since.year, since.month):
@@ -218,7 +251,13 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
-            logout_all(context)
+            try:
+                if logout_next(page):
+                    print("  ✓ 已登出：將來銀行")
+                else:
+                    logout_all(context)
+            except Exception:
+                logout_all(context)
             context.close()
     finally:
         lock.close()
