@@ -71,6 +71,8 @@ class Tx:
     note: str
     key: str
     interest_only: bool = False
+    balance: float | None = None   # 這筆交易後的帳戶餘額（銀行給的）
+    when: str = ""                 # 排序用：日期＋時間
 
     @property
     def text(self) -> str:
@@ -150,7 +152,20 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
 ONLY_ACCOUNTS = {"yuanta": ("大同",), "linebank": ("主帳戶",)}  # Jenny：元大只記大同、LINE Bank 只記主帳戶
 
 
-def _to_tx(bank: str, block: dict, head: list, row: list) -> Tx | None:
+def _to_tx(bank: str, block: dict, head: list, row: list):
+    tx = _to_tx_core(bank, block, head, row)
+    if isinstance(tx, Tx):
+        get = lambda i: row[i] if i is not None and i < len(row) else ""
+        if bank == "linebank":
+            tx.balance = None  # LINE Bank 明細沒有餘額
+        else:
+            tx.balance = _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+        clock = get(_col(head, "交易時間", "時間"))
+        tx.when = f"{tx.day.isoformat()} {clock or row[0]}"
+    return tx
+
+
+def _to_tx_core(bank: str, block: dict, head: list, row: list):
     get = lambda i: row[i] if i is not None and i < len(row) else ""
     only = ONLY_ACCOUNTS.get(bank)
     if only and not any(k in block.get("account", "") for k in only):
@@ -579,6 +594,15 @@ def review(year: int) -> str:
         print(f"⚠️ {dup} 筆在細帳那一格已有相同金額，可能你已手動記過，標成要確認")
     answers = read_review(book)
     url = write_review(book, entries, labels, answers)
+    sim_entries = apply_review(classify([t for t in txs if t.key not in applied]), answers)
+    mark_existing(sim_entries, detail.get_values(value_render_option="FORMULA"), labels, month_columns(shown[0] if shown else []))
+    sim = simulate(sim_entries, txs, detail.get_values(value_render_option="FORMULA"),
+                   detail.get_values(value_render_option="UNFORMATTED_VALUE"), labels, month_columns(shown[0] if shown else []))
+    print("\n模擬記入後的餘額核對（只算已確認／自動的項目）：")
+    bad = print_balance(sim)
+    print(f"餘額核對表：{write_balance_sheet(book, sim)}")
+    if bad:
+        print(f"⚠️ {bad} 列對不上：可能還有沒確認的項目、手動記過的重複、或帳戶沒有餘額資料")
     n_check = sum(needs_check(e) for e in entries)
     print(f"還沒寫進細帳的明細 {len(entries)} 筆，其中要你確認 {n_check} 筆（排最上面、標黃）。")
     print(f"確認表：{url}")
@@ -589,7 +613,109 @@ def review(year: int) -> str:
     return url
 
 
-def run(year: int, apply: bool = False) -> Path:
+# ---------------------------------------------------------------- 餘額核對（模擬記入後，細帳要等於銀行餘額）
+
+BALANCE_TITLE = "銀行餘額核對"
+
+
+def bank_balances(txs: list[Tx]) -> dict:
+    """{(細帳列號): {帳戶: (時間, 餘額)}}：每個帳戶最後一筆交易後的銀行餘額。"""
+    out = {}
+    for t in txs:
+        if t.balance is None:
+            continue
+        if t.ledger == "台新外幣":
+            if t.interest_only:
+                continue  # 敦南外幣不在細帳列裡
+            row = FX_ROWS.get(t.currency)
+        else:
+            row = ACCOUNT_ROWS[t.ledger][0]
+        if row is None:
+            continue
+        acct = out.setdefault(row, {})
+        name = t.account + ("" if t.currency == "TWD" else f" {t.currency}")
+        if name not in acct or t.when >= acct[name][0]:
+            acct[name] = (t.when, t.balance)
+    return out
+
+
+def _linked_sign(formula: str, col_letter: str, row_no: int) -> int:
+    """帳戶列公式引用另一格時的正負號（=…+L116 → +1；=…-L135 → -1；沒引用 → 0）。"""
+    m = re.search(rf"([+\-]?)\s*\$?{col_letter}\$?{row_no}(?!\d)", str(formula or "").upper())
+    if not m:
+        return 0
+    return -1 if m.group(1) == "-" else 1
+
+
+def simulate(entries: list[Entry], all_txs: list[Tx], formulas: list, numbers: list, labels: list, cols: dict,
+             month: str = "") -> list[list]:
+    """模擬把這次的明細記進細帳後，每個帳戶列的金額，跟銀行最後餘額比對。"""
+    month = month or max((e.tx.day for e in entries if not e.skip), default=date.today()).strftime("%Y-%m")
+    c = cols.get(month)
+    if c is None:
+        return [["細帳沒有 " + month + " 欄"]]
+    col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
+    adds = {}
+    for e in entries:
+        if e.skip or f"{e.tx.day:%Y-%m}" != month:
+            continue
+        for p in e.postings:
+            if p.note_only:
+                continue
+            r = _row_index(labels, p.row)
+            if r is not None:
+                adds[r] = adds.get(r, 0) + p.amount
+    balances = bank_balances(all_txs)
+    rows = [["細帳列", "列名", f"{month} 細帳目前", "本次要加", "模擬記入後", "銀行最後餘額", "差額", "銀行餘額來源", "結果"]]
+    targets = sorted({v[0] for v in ACCOUNT_ROWS.values()} | set(FX_ROWS.values()))
+    for row_no in targets:
+        r = row_no - 1
+        cur = numbers[r][c] if r < len(numbers) and c < len(numbers[r]) else ""
+        cur_v = _num(str(cur)) or 0.0
+        add = adds.get(r, 0.0)
+        f = formulas[r][c] if r < len(formulas) and c < len(formulas[r]) else ""
+        for other_r, amount in adds.items():  # 帳戶列公式自動帶入的另一格（例：43 含 116、47 含 −135）
+            if other_r != r:
+                add += _linked_sign(f, col_letter, other_r + 1) * amount
+        sim = cur_v + add
+        bank = balances.get(row_no, {})
+        if not bank:
+            if add:
+                rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, "", "", "沒有銀行餘額資料", "⚠️ 無法核對"])
+            continue
+        total = sum(v for _, v in bank.values())
+        diff = round(sim - total, 2)
+        src = "；".join(f"{k}：{w[:16]}" for k, (w, _) in bank.items())
+        ok = abs(diff) < 0.5
+        rows.append([row_no, labels[r] if r < len(labels) else "", cur_v, add, sim, total, diff, src,
+                     "✓ 相符" if ok else "⚠️ 不相符"])
+    return rows
+
+
+def write_balance_sheet(book, rows: list[list]) -> str:
+    try:
+        ws = book.worksheet(BALANCE_TITLE)
+    except Exception:
+        ws = book.add_worksheet(BALANCE_TITLE, rows=60, cols=10)
+    ws.clear()
+    ws.update(rows, "A1", value_input_option="RAW")
+    return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
+
+
+def print_balance(rows: list[list]) -> int:
+    bad = 0
+    for r in rows[1:]:
+        if len(r) < 9:
+            print("⚠️", r[0])
+            continue
+        mark = r[8]
+        bad += mark != "✓ 相符"
+        bank = f"{r[5]:,.2f}" if isinstance(r[5], (int, float)) else "—"
+        print(f"  {mark}  {r[0]} {r[1]}：模擬後 {r[4]:,.2f}　銀行 {bank}　差 {r[6]}")
+    return bad
+
+
+def run(year: int, apply: bool = False, force: bool = False) -> Path:
     txs, warn = load_transactions()
     for w in warn[:10]:
         print("⚠️", w)
@@ -623,11 +749,21 @@ def run(year: int, apply: bool = False) -> Path:
     bad = check_rows(labels)
     for b in bad:
         print("⚠️", b)
+    ws_detail = book.worksheet(detail_title)
+    sim = simulate(entries, txs, ws_detail.get_values(value_render_option="FORMULA"),
+                   ws_detail.get_values(value_render_option="UNFORMATTED_VALUE"), labels, cols)
+    month = next((r[2].split(" ")[0] for r in sim[:1] if len(r) > 2), "")
+    print("\n模擬記入後的餘額核對：")
+    mismatch = print_balance(sim)
+    write_balance_sheet(book, sim)
     if not apply:
-        print("（只比對，沒有寫入。確認報表後加 --apply 才會寫入總帳。）")
+        print("（只模擬，沒有寫入。餘額都相符、確認表也確認過，再加 --apply 寫入總帳。）")
         return report
     if bad:
         raise SystemExit("細帳列號跟設定對不上，先不寫入。")
+    if mismatch and not force:
+        raise SystemExit(f"模擬記入後有 {mismatch} 列餘額跟銀行對不上，先不寫入。"
+                         "看「銀行餘額核對」分頁找原因；確定要寫可加 --force。")
     for title in (detail_title, f"{year}細帳(含信用卡)"):
         if title not in [w.title for w in book.worksheets()]:
             continue
@@ -656,6 +792,13 @@ def run(year: int, apply: bool = False) -> Path:
         if not getattr(e, "waiting", False):  # 等你確認的下次再寫
             applied.add(e.tx.key)
     save_applied(applied)
+    after = simulate([], txs, ws_detail.get_values(value_render_option="FORMULA"),
+                     ws_detail.get_values(value_render_option="UNFORMATTED_VALUE"), labels, cols, month=month)
+    print("\n寫入後的餘額核對（細帳 vs 銀行）：")
+    after_bad = print_balance(after)
+    write_balance_sheet(book, after)
+    if after_bad:
+        print(f"⚠️ 寫入後還有 {after_bad} 列跟銀行餘額不同，請看「銀行餘額核對」分頁")
     from .progress_log import log_run
     banks_done = {}
     for e in entries:

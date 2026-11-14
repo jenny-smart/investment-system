@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
+    bl.add_argument("--force", action="store_true", help="模擬餘額對不上也照寫（不建議）")
     exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
     exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
@@ -151,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         review(args.year)
     elif args.command == "bank-ledger":
         from .bank_ledger import run as bank_ledger_run
-        bank_ledger_run(args.year, args.apply)
+        bank_ledger_run(args.year, args.apply, args.force)
     elif args.command == "explore":
         from .explore import explore
         explore(args.login, login_bank_code(args.login))

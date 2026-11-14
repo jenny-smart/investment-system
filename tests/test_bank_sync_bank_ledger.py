@@ -183,3 +183,22 @@ def test_mark_existing_and_dedupe(tmp_path, monkeypatch):
     (tmp_path / "taishin" / "20261114_2146.json").write_text(json.dumps({"accounts": blocks}), "utf-8")
     txs, _ = bl.load_transactions()
     assert [t.account for t in txs] == ["****313 敦南Richart外幣綜存"]
+
+
+def test_simulate_balance_check():
+    from bank_sync.bank_ledger import simulate
+    labels = [""] * 140
+    labels[42], labels[46] = "台新-建北", "台新-Richard"
+    formulas = [[""] * 13 for _ in range(140)]
+    numbers = [[""] * 13 for _ in range(140)]
+    formulas[42][11], numbers[42][11] = "=K43+L116", 10000     # 建北公式含 116
+    formulas[46][11], numbers[46][11] = "=K47-L135+500", 20000  # Richard 公式減 135（卡費）
+    t1 = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 11, 8590, "授權轉入", "基金配息 0056FUND")
+    t1.balance, t1.when = 18590, "2026-11-11 10:00"
+    t2 = tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 10, -4896, "媒體轉出", "信用卡款星展銀行")
+    t2.balance, t2.when = 15000, "2026-11-10 09:00"   # 銀行是 15,104 才對 → 故意差 104
+    entries = classify([t1, t2], RULES)
+    rows = simulate(entries, [t1, t2], formulas, numbers, labels, {"2026-11": 11})
+    got = {r[0]: r for r in rows[1:]}
+    assert got[43][4] == 18590 and got[43][8] == "✓ 相符"         # 只記 116，43 透過公式 +8590
+    assert got[47][4] == 15104 and got[47][8] == "⚠️ 不相符"      # 47 透過公式 −4896
