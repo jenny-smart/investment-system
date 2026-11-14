@@ -13,7 +13,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .credentials import BANK_DIR
@@ -95,9 +95,69 @@ def _mask_shape(text: str) -> str:
 
 def _short(label: str) -> str:
     """帳戶選項文字只留名稱與末 3 碼。"""
-    m = re.search(r"(\d{3})\D*$", label.split(" ")[0]) if label else None
-    name = re.sub(r"^[\d\-\s*]+", "", label).strip()
-    return f"****{m.group(1) if m else ''} {name}".strip()
+    digits = re.sub(r"\D", "", (label or "").split(" ")[0])[-3:]
+    name = re.sub(r"^[\d\-\s*]+", "", label or "").strip()
+    return f"****{digits} {name}".strip()
+
+
+# ---------- 從「上次最後一筆日期」查到今天 ----------
+STATE_FILE = TX_DIR / "_state.json"
+PERIODS = [(7, "7天"), (14, "14天"), (31, "1個月"), (62, "2個月"), (92, "3個月"), (183, "6個月"), (365, "12個月")]
+
+
+def parse_day(text: str):
+    m = re.search(r"(\d{2,4})[/\-.](\d{1,2})[/\-.](\d{1,2})", text or "")
+    if not m:
+        return None
+    y = int(m.group(1))
+    if y < 1911:
+        y += 1911  # 民國年
+    try:
+        return date(y, int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def period_for(since: date, today: date) -> str:
+    need = (today - since).days + 1
+    return next((label for days, label in PERIODS if days >= need), PERIODS[-1][1])
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text("utf-8"))
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), "utf-8")
+    os.chmod(STATE_FILE, 0o600)
+
+
+def keep_new(rows: list, last: dict, since: date) -> tuple[list, dict]:
+    """只留「上次最後一筆日期」當天之後（含當天但沒抓過）的交易，並回傳新的進度。"""
+    last_day = parse_day(last.get("last_date", "")) if last else None
+    seen = set(last.get("seen", [])) if last else set()
+    start = last_day or since
+    new = []
+    for row in rows:
+        day = parse_day(row[0] if row else "")
+        if day is None or day < start:
+            continue
+        key = "|".join(row)
+        if last_day and day == last_day and key in seen:
+            continue
+        new.append(row)
+    days = [parse_day(r[0]) for r in rows if r and parse_day(r[0])]
+    if not days:
+        return new, last or {}
+    newest = max(days)
+    newest_keys = ["|".join(r) for r in rows if r and parse_day(r[0]) == newest]
+    if last_day == newest:
+        newest_keys = sorted(seen | set(newest_keys))
+    return new, {"last_date": newest.isoformat(), "seen": newest_keys}
 
 
 def _ledger_row(name: str) -> str:
@@ -203,13 +263,17 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
     return {"head": (result or {}).get("head", []), "rows": rows}
 
 
-def fetch_twd(page, period: str = "2個月") -> list[dict]:
+def fetch_twd(page, state: dict, since: date) -> list[dict]:
     page = _goto(page, TWD_URL, "查詢交易明細", "請選擇帳號")
     options = page.evaluate(SELECT_JS, ["請選擇帳號", -1, ""])
     out = []
     for i, label in enumerate(options):
         if i == 0 or "請選擇" in label or any(k in label for k in TWD_SKIP):
             continue
+        name = _short(label)
+        key = "TWD:" + name
+        start = parse_day(state.get(key, {}).get("last_date", "")) or since
+        period = period_for(start, date.today())
         page.evaluate(SELECT_JS, ["請選擇帳號", i, ""])
         page.evaluate(SELECT_JS, ["請選擇查詢期間", 0, period])
         page.evaluate(SELECT_JS, ["由新到舊", 0, "由舊到新"])
@@ -220,19 +284,25 @@ def fetch_twd(page, period: str = "2個月") -> list[dict]:
             if "登出" in str(exc):
                 raise
             data = {"head": [], "rows": [], "error": str(exc)}
-        name = _short(label)
-        out.append({"type": "TWD", "account": name, "ledger_row": _ledger_row(name), **data})
-        print(f"  台幣 {name}：{len(data['rows'])} 筆{'' if _ledger_row(name) else '（細帳未對應）'}{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
+        total = len(data["rows"])
+        if not data.get("error"):
+            data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), since)
+        out.append({"type": "TWD", "account": name, "ledger_row": _ledger_row(name), "from": start.isoformat(), **data})
+        print(f"  台幣 {name}：{start:%m/%d} 起查「{period}」共 {total} 筆，新的 {len(data['rows'])} 筆{'' if _ledger_row(name) else '（細帳未對應）'}{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 
 
-def fetch_fx(page, period: str = "2個月") -> list[dict]:
+def fetch_fx(page, state: dict, since: date) -> list[dict]:
     page = _goto(page, FX_URL, "查詢外幣交易明細", "請選擇查詢帳號")
     options = page.evaluate(SELECT_JS, ["請選擇查詢帳號", -1, ""])
     out = []
     for i, label in enumerate(options):
         if i == 0 or "請選擇" in label:
             continue
+        name = _short(label)
+        key = "FX:" + name
+        start = parse_day(state.get(key, {}).get("last_date", "")) or since
+        period = period_for(start, date.today())
         page.evaluate(SELECT_JS, ["請選擇查詢帳號", i, ""])
         page.wait_for_timeout(600)
         page.evaluate(SELECT_JS, ["請選擇幣別", 0, "全部"])
@@ -245,9 +315,11 @@ def fetch_fx(page, period: str = "2個月") -> list[dict]:
             if "登出" in str(exc):
                 raise
             data = {"head": [], "rows": [], "error": str(exc)}
-        name = _short(label)
-        out.append({"type": "FX", "account": name, "ledger_row": "台新外幣各幣別列（全部）" if FX_LEDGER_ACCOUNT in name else ("台新外幣各幣別列（只取利息）" if FX_INTEREST_ONLY in name else ""), **data})
-        print(f"  外幣 {name}：{len(data['rows'])} 筆{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
+        total = len(data["rows"])
+        if not data.get("error"):
+            data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), since)
+        out.append({"type": "FX", "account": name, "from": start.isoformat(), "ledger_row": "台新外幣各幣別列（全部）" if FX_LEDGER_ACCOUNT in name else ("台新外幣各幣別列（只取利息）" if FX_INTEREST_ONLY in name else ""), **data})
+        print(f"  外幣 {name}：{start:%m/%d} 起查「{period}」共 {total} 筆，新的 {len(data['rows'])} 筆{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 
 
@@ -266,7 +338,10 @@ def shape_report(results: list[dict], per_account: int = 4) -> str:
     return "\n".join(lines)
 
 
-def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
+def fetch(since: date = None, keep_open: bool = False) -> Path:
+    """每個帳戶從「上次抓到的最後一筆日期」查到今天；第一次沒有紀錄時從 since（預設本月 1 日）開始。"""
+    progress = {} if since else load_state()  # 有指定 --since 就從那天重抓
+    since = since or date.today().replace(day=1)
     from playwright.sync_api import sync_playwright
     from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
 
@@ -288,9 +363,9 @@ def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
             results = []
             try:
                 print("查詢台幣交易明細…")
-                results += fetch_twd(page, period)
+                results += fetch_twd(page, progress, since)
                 print("查詢外幣交易明細…")
-                results += fetch_fx(page, period)
+                results += fetch_fx(page, progress, since)
             except Exception as exc:
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:
@@ -299,8 +374,9 @@ def fetch(period: str = "2個月", keep_open: bool = False) -> Path:
             context.close()
     finally:
         lock.close()
+    save_state(progress)
     raw_path = TX_DIR / f"{stamp}.json"
-    raw_path.write_text(json.dumps({"fetched_at": stamp, "period": period, "accounts": results}, ensure_ascii=False, indent=1), "utf-8")
+    raw_path.write_text(json.dumps({"fetched_at": stamp, "accounts": results}, ensure_ascii=False, indent=1), "utf-8")
     os.chmod(raw_path, 0o600)
     shape_path = BANK_DIR / "_explore" / f"taishin_shape_{stamp}.txt"
     shape_path.parent.mkdir(parents=True, exist_ok=True)
