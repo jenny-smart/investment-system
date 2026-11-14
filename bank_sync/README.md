@@ -74,7 +74,9 @@ python3 -m bank_sync ledger --apply                 # 確認報表後才寫入
 
 ## 介面操作（不用終端機）
 
-在 Finder 雙擊 repo 裡的 `bank_app.command`（或 `python3 -m streamlit run bank_app.py`），瀏覽器會打開「銀行帳戶與信用卡」頁：
+建議裝成背景服務（只要做一次）：`python3 -m bank_sync app-install`，之後 Mac 開機就會在 http://localhost:8502 執行，雲端 App「銀行帳戶」頁的「開啟本機銀行頁」按鈕會連過來；側邊欄可「更新程式並重新啟動」。
+
+也可以在 Finder 雙擊 repo 裡的 `bank_app.command`（或 `python3 -m streamlit run bank_app.py`），瀏覽器會打開「銀行帳戶與信用卡」頁：
 
 - **台新明細**：按「抓台新明細」→ Chrome 輸入驗證碼 → 自動查詢台幣／外幣明細並登出，結果直接顯示在頁面。
 - **信用卡帳單**：下載新帳單、解析預覽、比對細帳（不寫入）、寫入細帳（要再按一次確定）。

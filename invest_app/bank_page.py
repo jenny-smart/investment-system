@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import date, datetime
@@ -83,7 +84,15 @@ def job_panel() -> None:
     except Exception:
         text = ""
     st.code(text[-12000:] or "（等待輸出…）", language=None)
-    if running:
+    if running and job["args"][:1] == ["explore"]:
+        c1, c2, c3 = st.columns([1, 1, 1])
+        if c1.button("📸 記錄目前頁面", key="exp_snap", type="primary"):
+            send_enter()
+        if c2.button("✅ 結束探索", key="exp_quit"):
+            send_enter("q")
+        if c3.button("停止", key="exp_stop"):
+            stop_job()
+    elif running:
         c1, c2, c3 = st.columns([1, 1, 3])
         if c1.button("繼續（Enter）", key="bank_enter", help="程式說「按 Enter」時按這裡"):
             send_enter()
@@ -152,12 +161,20 @@ def render_statement_results() -> None:
 def render_bank_page() -> None:
     st.subheader("銀行帳戶與信用卡")
     if not is_local():
-        st.info("這一頁要在你的 Mac 本機開 App 才能用（帳密只存在 ~/Bank account/，也要開本機的 Chrome）。\n\n"
-                "在 Mac 終端機執行：\n\n`cd ~/Documents/codex-workspace/investment-system-bank && git pull && "
-                "python3 -m streamlit run bank_app.py`")
+        st.link_button("🏦 開啟本機銀行頁", "http://localhost:8502", type="primary")
+        st.caption("銀行帳密和登入用的 Chrome 都只在你的 Mac 上，所以操作在本機頁面進行；這個按鈕只有在你的 Mac 上點才打得開。\n\n"
+                   "還沒安裝本機服務的話，在 Mac 終端機執行一次："
+                   "`cd ~/Documents/codex-workspace/investment-system-bank && git pull && python3 -m bank_sync app-install`")
         return
+    if os.environ.get("BANK_APP_SERVICE") == "1":
+        with st.sidebar:
+            st.caption("本機背景服務 http://localhost:8502")
+            if st.button("⬇️ 更新程式並重新啟動", help="git pull 後重新啟動，約 10 秒後重新整理頁面"):
+                st.info("更新中…約 10 秒後請重新整理頁面。")
+                from bank_sync.app_service import restart_self
+                restart_self()
 
-    tab_bank, tab_card, tab_login = st.tabs(["台新明細", "信用卡帳單", "登入銀行"])
+    tab_bank, tab_card, tab_login, tab_explore = st.tabs(["台新明細", "信用卡帳單", "登入銀行", "探索新銀行"])
 
     with tab_bank:
         st.markdown("每個帳戶從**上次抓到的最後一筆日期**查到今天。按下後會開 Chrome，請輸入驗證碼登入，之後會自動查詢並登出。")
@@ -194,6 +211,18 @@ def render_bank_page() -> None:
         picked = st.multiselect("要登入的銀行", list(LOGIN_BANKS), format_func=LOGIN_BANKS.get, key="login_pick")
         if st.button("🔐 登入", key="login_go", disabled=not picked):
             start_job("登入：" + "、".join(LOGIN_BANKS[k] for k in picked), ["login", *picked])
+
+    with tab_explore:
+        st.markdown("給還沒自動化的銀行用：程式幫你登入後，你在 Chrome 用平常方式點到**交易明細**頁（選帳戶、期間、按查詢），"
+                    "每到一頁按下方「📸 記錄目前頁面」；完成按「✅ 結束探索」。只記錄頁面結構（帳號遮蔽、不含金額），"
+                    "存在 ~/Bank account/_explore/，看過後上傳給 Claude。")
+        bank = st.selectbox("銀行", [k for k in LOGIN_BANKS if k != "sc"], format_func=LOGIN_BANKS.get, key="exp_bank")
+        if st.button("🧭 開始探索", key="exp_go"):
+            start_job(f"探索：{LOGIN_BANKS[bank]}", ["explore", bank])
+        latest = _latest(BANK_DIR / "_explore", f"{bank}_2*.json")
+        if latest:
+            st.caption(f"最近一次探索記錄：{latest}")
+            st.download_button("下載這份記錄（上傳給 Claude 用）", latest.read_bytes(), file_name=latest.name, key="exp_dl")
 
     st.divider()
     st.markdown("#### 執行過程")
