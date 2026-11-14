@@ -96,37 +96,40 @@ def _cdp(target: dict, calls: list) -> list:
     return results
 
 
-def _focus_check(page: dict, field: str) -> bool:
-    out = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps("?" + field)), "returnByValue": True})])
-    return out[0].get("result", {}).get("value") == "FOCUSED"
-
-
 def type_into(host: str, field: str, text: str) -> bool:
     """像真人一樣：滑鼠點進已標記的欄位、確認游標在那格，再用鍵盤逐字輸入。"""
     targets = _targets(host)
     if not targets:
         return False
     page = targets[0]
-    out = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps(field)), "returnByValue": True})])
-    value = out[0].get("result", {}).get("value") or ""
-    if not value.startswith("{"):
+    def ask(arg: str) -> str:
+        out = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps(arg)), "returnByValue": True})])
+        return out[0].get("result", {}).get("value") or ""
+
+    if ask("!" + field) != "SCROLLED":
         return False
-    point = json.loads(value)
-    time.sleep(0.3)  # 等捲動完成
-    click = {"x": point["x"], "y": point["y"], "button": "left", "clickCount": 1}
+    time.sleep(0.5)  # 等捲動完成
     for _ in range(3):
+        value = ask(field)  # 每次點之前重新取位置
+        if not value.startswith("{"):
+            return False
+        point = json.loads(value)
+        click = {"x": point["x"], "y": point["y"], "button": "left", "clickCount": 1}
         _cdp(page, [("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": point["x"], "y": point["y"]}),
                     ("Input.dispatchMouseEvent", {"type": "mousePressed", **click}),
                     ("Input.dispatchMouseEvent", {"type": "mouseReleased", **click})])
         time.sleep(0.3)
-        if _focus_check(page, field):
+        if ask("?" + field) == "FOCUSED":
             break
+        time.sleep(0.5)
     else:
         return False
     calls = [("Input.dispatchKeyEvent", {"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 4, "commands": ["selectAll"]}),
              ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 4}),
              ("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
              ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8})]
+    if ask("?" + field) != "FOCUSED":
+        return False
     for ch in text:
         calls.append(("Input.dispatchKeyEvent", {"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch}))
         calls.append(("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch}))
@@ -220,6 +223,15 @@ FILL_JS = r"""
     return null;
   };
   const below = (a, b) => box(b).top > box(a).top + 2;
+  const wanted = ['id_number', 'user_code', 'password'].filter(f => creds[f]);
+  const plain = inputs.filter(e => !isCaptcha(e) && (e.type || '').toLowerCase() !== 'search' && box(e).left > -1000);
+  if (plain.length === wanted.length) {
+    wanted.forEach((field, i) => { used.add(plain[i]); plain[i].setAttribute('data-bank-sync', field); result.filled.push(field); });
+    const cap = inputs.find(e => !used.has(e) && isCaptcha(e));
+    if (cap) cap.setAttribute('data-bank-sync', 'captcha');
+    result.order = true;
+    return JSON.stringify(result);
+  }
   const pwdField = creds.password ? findFor(hints.password || []) : null;
   let previous = null;
   for (const field of ['id_number', 'user_code', 'password']) {
@@ -247,12 +259,12 @@ FOCUS_JS = r"""
   const roots = [];
   const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
   walk(document);
-  const input = roots.flatMap(r => [...r.querySelectorAll('[data-bank-sync]')]).find(e => e.getAttribute('data-bank-sync') === want.replace(/^\?/, ''));
+  const input = roots.flatMap(r => [...r.querySelectorAll('[data-bank-sync]')]).find(e => e.getAttribute('data-bank-sync') === want.replace(/^[?!]/, ''));
   if (!input) return 'MISSING';
   if (want.startsWith('?')) { let a = document.activeElement; while (a) { if (a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; else if ((a.tagName === 'IFRAME' || a.tagName === 'FRAME') && a.contentDocument && a.contentDocument.activeElement) a = a.contentDocument.activeElement; else break; } return a === input ? 'FOCUSED' : 'NOT'; }
   input.removeAttribute('readonly');
-  input.scrollIntoView({block: 'center'});
-  let x = 0, y = 0, w = window;
+  if (want.startsWith('!')) { input.scrollIntoView({block: 'center', behavior: 'instant'}); return 'SCROLLED'; }
+  let x = 0, y = 0;
   const r = input.getBoundingClientRect();
   x = r.left + Math.min(20, r.width / 2); y = r.top + r.height / 2;
   let fe = input.ownerDocument.defaultView.frameElement;
