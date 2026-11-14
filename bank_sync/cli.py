@@ -74,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
     dump.add_argument("--bank", action="append", default=[])
+    dump.add_argument("--file", default="", help="只轉檔名含這段文字的帳單（例：2026-04）；不給則每家最新一期")
     led = sub.add_parser("ledger", help="信用卡帳單 → 2026細帳 備註＋2026細帳(含信用卡)；預設只比對")
     led.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     led.add_argument("--apply", action="store_true", help="確認比對報表後才加：寫入總帳並發行事曆")
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                   + (f"  ⚠️ {'；'.join(st.warnings)}" if st.warnings else ""))
     elif args.command == "dump-statements":
         from .mail_statements import dump_statements
-        dump_statements(banks=tuple(args.bank))
+        dump_statements(banks=tuple(args.bank), match=args.file)
     elif args.command == "check-statements":
         from .mail_statements import check_statements
         check_statements()

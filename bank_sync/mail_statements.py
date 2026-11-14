@@ -183,7 +183,7 @@ def mask_text(text: str) -> str:
     return text
 
 
-def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[Path]:
+def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = (), match: str = "") -> list[Path]:
     """每家最新一期帳單轉成文字檔（卡號、身分證遮蔽），存在 statements/_文字樣本/，給本人檢查後再分享。"""
     out_dir = STATEMENT_DIR / "_文字樣本"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -199,14 +199,15 @@ def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) ->
             password = load_section(source.code, ("pdf_password",), path)["pdf_password"]
         except (KeyError, ValueError):
             password = ""
-        latest = pdfs[-1]
-        try:
-            text = open_pdf_text(latest, password)
-        except Exception as exc:
-            print(f"✗ {source.name}：{exc}")
-            continue
-        target = out_dir / f"{source.name}_{latest.stem}.txt"
-        target.write_text(mask_text(text), "utf-8")
-        written.append(target)
-        print(f"✓ {source.name}：{target}")
+        chosen = [p for p in pdfs if match in p.name] if match else pdfs[-1:]
+        for pdf in chosen:
+            try:
+                text = open_pdf_text(pdf, password)
+            except Exception as exc:
+                print(f"✗ {source.name}：{exc}")
+                continue
+            target = out_dir / f"{source.name}_{pdf.stem}.txt"
+            target.write_text(mask_text(text), "utf-8")
+            written.append(target)
+            print(f"✓ {source.name}：{target}")
     return written
