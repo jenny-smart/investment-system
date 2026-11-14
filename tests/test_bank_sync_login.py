@@ -109,3 +109,12 @@ class CatalogTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeJsTest(unittest.TestCase):
+    def test_native_js_has_no_line_comments(self):
+        # AppleScript 會把 JavaScript 併成一行；行內 // 註解會吃掉後面所有程式
+        from bank_sync import native_chrome
+        for js in (native_chrome.FILL_JS, native_chrome.STATE_JS, native_chrome.INSPECT_JS):
+            for line in js.splitlines():
+                self.assertFalse(line.strip().startswith("//"), line)

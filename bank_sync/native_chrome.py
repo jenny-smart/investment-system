@@ -37,24 +37,31 @@ FILL_JS = r"""
     if (!inputs.some(e => (e.type || '').toLowerCase() === 'password') && inputs.length < 2) continue;
     const used = new Set();
     const result = {filled: [], missing: []};
-    const labels = [...d.querySelectorAll('label,span,div,td,th,p,dt')].filter(e => visible(e));
+    const squash = t => (t || '').replace(/\s+/g, '');
+    const labels = [...d.querySelectorAll('label,span,div,td,th,p,dt,dd,li,strong,b')]
+      .filter(e => visible(e) && squash(e.innerText).length > 0 && squash(e.innerText).length <= 20);
+    const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     const findFor = words => {
       for (const w of words) {
-        const ph = inputs.find(e => !used.has(e) && !isCaptcha(e) && ((e.placeholder || '').includes(w) || (e.getAttribute('aria-label') || '').includes(w)));
+        const ph = inputs.find(e => !used.has(e) && !isCaptcha(e) && (squash(e.placeholder).includes(w) || squash(e.getAttribute('aria-label')).includes(w)));
         if (ph) return ph;
-        const label = labels.find(e => [...e.childNodes].some(c => c.nodeType === 3 && c.textContent.includes(w)));
-        if (!label) continue;
-        const after = inputs.find(e => !used.has(e) && !isCaptcha(e) && (label.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
-        if (after) return after;
+        for (const label of labels.filter(e => squash(e.innerText).includes(w) && !e.closest('a,button'))) {
+          const after = inputs.find(e => !used.has(e) && !isCaptcha(e) && follows(label, e));
+          if (after) return after;
+        }
       }
       return null;
     };
     let previous = null;
+    const pwdField = creds.password ? (findFor(hints.password || []) || inputs.find(e => (e.type || '').toLowerCase() === 'password')) : null;
     for (const field of ['id_number', 'user_code', 'password']) {
       if (!creds[field]) continue;
-      let input = findFor(hints[field] || []);
+      let input = field === 'password' && pwdField && !used.has(pwdField) ? pwdField : findFor(hints[field] || []);
+      if (field === 'user_code' && input === pwdField) input = null;
+      if (!input && field === 'user_code' && previous && pwdField)
+        input = inputs.find(e => !used.has(e) && e !== pwdField && !isCaptcha(e) && follows(previous, e) && follows(e, pwdField));
       if (!input && field === 'password') input = inputs.find(e => !used.has(e) && (e.type || '').toLowerCase() === 'password');
-      if (!input && field === 'password' && previous) input = inputs.find(e => !used.has(e) && !isCaptcha(e) && (previous.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (!input && field === 'password' && previous) input = inputs.find(e => !used.has(e) && !isCaptcha(e) && follows(previous, e));
       if (!input) { result.missing.push(field); continue; }
       used.add(input);
       input.removeAttribute('readonly');
