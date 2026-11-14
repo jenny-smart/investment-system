@@ -149,8 +149,7 @@ def _goto(page, bank: TableBank):
         found = _find(page, bank)
         if found is not None:
             return found
-        if step == 6 and bank.direct_url:
-            print(f"  點選單沒反應，直接開明細頁（{bank.direct_url}）")
+        if step == 1 and bank.direct_url:  # 元大點首頁圖示沒反應，直接開明細頁網址（實測不會登出）
             try:
                 page.goto(bank.direct_url, wait_until="domcontentloaded")
             except Exception:
