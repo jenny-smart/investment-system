@@ -415,10 +415,10 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, note
                            f"{copy_title}!{cell}：{formula or '（空白）'} → {new}\n" + "\n".join(lines)
                            + f"\n加註日期：{stamp:%Y-%m-%d}"))
         # 第 25 列「零用金」同額 +，現金餘額不變（照 Jenny 記銀行支出的規則）；只算加進零用金各項的刷卡
-        cash_terms = _cash_offsets(pending)
+        labels = [r[0] if r else "" for r in formulas]
+        cols = month_columns(formulas[0] if formulas else [])
+        cash_terms = _cash_offsets(pending, _total_coefs(formulas, labels, cols), labels)
         if cash_terms:
-            labels = [r[0] if r else "" for r in formulas]
-            cols = month_columns(formulas[0] if formulas else [])
             cash_row = find_row(labels, CASH_ROW)
             card_sum_row = _ensure_summary_rows(copy, formulas, labels, cols, log, copy_title)
             if cash_row is None:
@@ -480,19 +480,84 @@ def check_net_rows(detail, copy, detail_title: str, copy_title: str) -> list[str
         if a is None or b is None or round(a) != round(b):
             diffs.append(f"{month}：{detail_title} {a if a is None else f'{a:,.0f}'}／{copy_title} {b if b is None else f'{b:,.0f}'}")
     if diffs:
-        return [f"⚠️ 「{NET_ROW}」兩表不一致，請確認：" + "；".join(diffs)]
+        return [f"⚠️ 「{NET_ROW}」兩表不一致，請確認：" + "；".join(diffs),
+                "   （可執行 python3 -m bank_sync ledger --fix-cash 依總支出公式校正）"]
     return [f"✓ 「{NET_ROW}」兩表每月相等（現金餘額沒有被刷卡影響）"]
 CARD_SUM_ROW = "零用金-信用卡消費"
 CASH_SUM_ROW = "零用金-現金消費"
 
 
-def _cash_offsets(pending: list) -> dict[str, tuple[int, int]]:
-    """每個月加進零用金各項的刷卡合計：{月份: (金額, 筆數)}。只算 零用金- 開頭的列（保費支出等不算）。"""
+def _col_letter(col0: int) -> str:
+    return a1(0, col0)[:-1]
+
+
+def total_coefficients(formula: str) -> dict[int, int] | None:
+    """解析「總支出」公式，回傳 {列號(1-based): 係數}。例：=SUM(F2:F23)-F17 → 2..23 為 1，17 為 0。
+    看不懂的公式回傳 None。"""
+    f = str(formula or "").strip()
+    if not f.startswith("="):
+        return None
+    body = f[1:].replace("$", "").replace(" ", "")
+    coef: dict[int, int] = {}
+    terms, depth, cur, sign = [], 0, "", 1
+    for ch in body:
+        if ch in "+-" and depth == 0:
+            if cur:
+                terms.append((sign, cur))
+            sign, cur = (1 if ch == "+" else -1), ""
+            continue
+        depth += ch == "("
+        depth -= ch == ")"
+        cur += ch
+    if cur:
+        terms.append((sign, cur))
+
+    def refs(text: str):
+        for part in text.split(","):
+            m = re.fullmatch(r"[A-Z]+(\d+)(?::[A-Z]+(\d+))?", part)
+            if not m:
+                return None
+            a, b = int(m.group(1)), int(m.group(2) or m.group(1))
+            yield from range(min(a, b), max(a, b) + 1)
+
+    for sign, term in terms:
+        m = re.fullmatch(r"SUM\((.+)\)", term, re.I)
+        rows = list(refs(m.group(1) if m else term) or [])
+        if not rows and not re.fullmatch(r"\d+(\.\d+)?", term):
+            return None
+        for r in rows:
+            coef[r] = coef.get(r, 0) + sign
+    return coef
+
+
+def _cash_offsets(pending: list, coef_by_month: dict | None = None, labels: list | None = None) -> dict[str, tuple[int, int]]:
+    """每個月要加回「零用金」列的刷卡金額：{月份: (金額, 筆數)}。
+    有總支出公式時：只算被總支出加總到的列（依公式係數）；沒有時：所有 零用金- 開頭的列。"""
     out: dict[str, list[int]] = {}
     for s in pending:
-        if s.row_label.startswith("零用金-"):
-            out.setdefault(s.file.statement.ledger_month, []).append(s.charge.amount)
+        month = s.file.statement.ledger_month
+        coef = (coef_by_month or {}).get(month)
+        if coef is not None and labels is not None:
+            row = find_row(labels, s.row_label)
+            k = coef.get(row + 1, 0) if row is not None else 0
+            if k:
+                out.setdefault(month, []).append(k * s.charge.amount)
+        elif s.row_label.startswith("零用金-"):
+            out.setdefault(month, []).append(s.charge.amount)
     return {m: (sum(v), len(v)) for m, v in out.items()}
+
+
+def _total_coefs(formulas: list, labels: list, cols: dict) -> dict[str, dict[int, int]]:
+    total_row = find_row(labels, TOTAL_ROW)
+    if total_row is None:
+        return {}
+    out = {}
+    for month, col in cols.items():
+        f = formulas[total_row][col] if col < len(formulas[total_row]) else ""
+        c = total_coefficients(f)
+        if c is not None:
+            out[month] = c
+    return out
 
 
 def _ensure_summary_rows(copy, formulas: list, labels: list, cols: dict, log: list, copy_title: str):
@@ -524,44 +589,81 @@ def _ensure_summary_rows(copy, formulas: list, labels: list, cols: dict, log: li
 
 
 def fix_cash_offsets(plan: Plan, book, stamp: date, applied: dict) -> list[str]:
-    """補救：含信用卡表已加過刷卡、但 25 列還沒同額加回的月份，補上抵銷金額與統計列（可重複執行）。"""
+    """補救／校正：依「總支出」公式實際加總的列，算出每月應加回「零用金」列的刷卡金額；
+    沒加過的補上，加錯的改成正確金額（只改 bank_sync 自己加的那一項）。可重複執行。"""
     detail_title, copy_title = f"{plan.year}細帳", f"{plan.year}細帳(含信用卡)"
     detail = book.worksheet(detail_title)
     if copy_title not in [w.title for w in book.worksheets()]:
         return [f"還沒有「{copy_title}」，不需要補救"]
     copy = book.worksheet(copy_title)
     done = [s for s in plan.spends if s.cell and s.row_label != SKIP_ROW and s.file.key in applied]
-    terms = _cash_offsets(done)
     formulas = copy.get_values(value_render_option="FORMULA")
     notes = copy.get_notes()
     labels = [r[0] if r else "" for r in formulas]
     cols = month_columns(formulas[0] if formulas else [])
+    coefs = _total_coefs(formulas, labels, cols)
+    terms = _cash_offsets(done, coefs, labels)
     cash_row = find_row(labels, CASH_ROW)
     log: list[str] = []
+    total_row = find_row(labels, TOTAL_ROW)
+    if total_row is not None:
+        sample = next(iter(sorted(cols.items())), None)
+        if sample:
+            f = formulas[total_row][sample[1]]
+            rows = sorted(r for r, k in (coefs.get(sample[0]) or {}).items() if k)
+            names = [labels[r - 1] for r in rows if r - 1 < len(labels)]
+            log.append(f"「{TOTAL_ROW}」{sample[0]} 公式 {f}；加總的列：{'、'.join(names) or '（看不懂公式，改用全部零用金列）'}")
     card_sum_row = _ensure_summary_rows(copy, formulas, labels, cols, log, copy_title)
     if cash_row is None:
         return log + [f"⚠️ 找不到「{CASH_ROW}」列"]
-    for month, (total, count) in sorted(terms.items()):
-        col = cols.get(month)
-        if col is None:
-            continue
-        for row, label, text in ((cash_row, CASH_ROW, f"信用卡消費合計 +{total:,}（{count} 筆；抵銷，現金不變）"),
-                                 (card_sum_row, CARD_SUM_ROW, f"信用卡消費合計 +{total:,}（{count} 筆）")):
+    for month, col in sorted(cols.items()):
+        total, count = terms.get(month, (0, 0))
+        for row, label in ((cash_row, CASH_ROW), (card_sum_row, CARD_SUM_ROW)):
             if row is None:
-                continue
-            existing = notes[row][col] if row < len(notes) and col < len(notes[row]) else ""
-            if f"【信用卡 {month}】" in (existing or ""):
-                log.append(f"{copy_title}!{a1(row, col)} {label} {month} 已補過，略過")
                 continue
             cell = a1(row, col)
             formula = formulas[row][col] if row < len(formulas) and col < len(formulas[row]) else ""
-            new = add_term(formula, total)
+            existing = notes[row][col] if row < len(notes) and col < len(notes[row]) else ""
+            m = re.search(rf"【信用卡 {month}】信用卡消費合計 \+(-?[\d,]+)", existing or "")
+            old = _int_or_none(m.group(1)) if m else None
+            if old == total or (old is None and total == 0):
+                continue
+            text = (f"信用卡消費合計 +{total:,}（{count} 筆；抵銷，現金不變）" if label == CASH_ROW
+                    else f"信用卡消費合計 +{total:,}（{count} 筆）")
             block = f"【信用卡 {month}】{text}\n加註日期：{stamp:%Y-%m-%d}（bank_sync）"
+            if old is None:
+                new = add_term(formula, total)
+                note = (existing + "\n" + block).strip() if existing else block
+            else:
+                new = _replace_last_term(formula, old, total)
+                note = re.sub(rf"【信用卡 {month}】信用卡消費合計[^\n]*\n加註日期：[^\n]*", block, existing)
+            if new is None:
+                log.append(f"⚠️ {copy_title}!{cell} 找不到之前加的 +{old:,}，請手動把它改成 +{total:,}")
+                continue
             copy.update(range_name=cell, values=[[new]], value_input_option="USER_ENTERED")
-            copy.update_note(cell, (existing + "\n" + block).strip() if existing else block)
-            log.append(f"{copy_title}!{cell} {label} {formula or '（空白）'} → {new}")
+            copy.update_note(cell, note)
+            log.append(f"{copy_title}!{cell} {label} {month}：{formula or '（空白）'} → {new}")
     log.extend(check_net_rows(detail, copy, detail_title, copy_title))
     return log
+
+
+def _int_or_none(text: str):
+    try:
+        return int(text.replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _replace_last_term(formula: str, old: int, new: int) -> str | None:
+    """把公式裡最後一個「+old」換成「+new」（new 為 0 時直接拿掉）。"""
+    f = str(formula or "")
+    token = f"+{old}" if old >= 0 else f"{old}"
+    i = f.rfind(token)
+    if i < 0 or (i + len(token) < len(f) and f[i + len(token)].isdigit()):
+        return None
+    repl = "" if new == 0 else (f"+{new}" if new >= 0 else f"{new}")
+    out = f[:i] + repl + f[i + len(token):]
+    return out if out not in ("=", "") else "=0"
 
 
 def _rc(cell: str) -> tuple[int, int]:

@@ -310,7 +310,30 @@ class FixCashTest(unittest.TestCase):
         self.assertEqual(copy.values[7][2], "=260")
         log2 = fix_cash_offsets(plan, book, date(2026, 11, 14), applied)
         self.assertEqual(copy.values[4][2], "=4000+1000+260")   # 不重複
-        self.assertTrue(any("已補過" in l for l in log2))
+        self.assertFalse(any("!C5 零用金" in l for l in log2))     # 金額正確 → 不再改
+
+
+class TotalFormulaTest(unittest.TestCase):
+    def test_only_rows_in_total_are_offset_and_wrong_offset_corrected(self):
+        from bank_sync.ledger_sync import fix_cash_offsets
+        values = [list(r) for r in ApplyTest.VALUES]
+        values[5] = ["零用金--總支出", "=SUM(B2:B2)", "=SUM(C2:C2)"]   # 總支出只算「餐費」
+        detail = FakeSheet("2026細帳", values)
+        book = FakeBook(detail)
+        copy = book.duplicate_sheet(1, 1, "2026細帳(含信用卡)")
+        # 舊版結果：餐費 +60、其他 +200，25 列錯加了全部 260
+        copy.values[1][2] = "=100+60"; copy.values[2][2] = "=200"; copy.values[4][2] = "=4000+1000+260"
+        copy.notes[(4, 2)] = "【信用卡 2026-11】信用卡消費合計 +260（2 筆；抵銷，現金不變）\n加註日期：2026-11-14（bank_sync）"
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
+        applied = {"dbs:dbs.pdf": "2026-11-14"}
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        log = fix_cash_offsets(plan, book, date(2026, 11, 15), applied)
+        self.assertEqual(copy.values[4][2], "=4000+1000+60")         # 只加回總支出有算的 60
+        self.assertIn("+60（1 筆", copy.notes[(4, 2)])
+        self.assertNotIn("+260", copy.notes[(4, 2)])
+        self.assertTrue(any("加總的列：零用金-餐費" in l for l in log))
+        fix_cash_offsets(plan, book, date(2026, 11, 15), applied)    # 再跑不變
+        self.assertEqual(copy.values[4][2], "=4000+1000+60")
 
 
 class GoogleAuthTest(unittest.TestCase):
