@@ -289,13 +289,16 @@ def ensure_copy(book, source_title: str, copy_title: str):
     return book.duplicate_sheet(src.id, insert_sheet_index=src.index + 1, new_sheet_name=copy_title), True
 
 
-def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None) -> list[str]:
-    """寫入：2026細帳 只加備註；含信用卡表加金額＋備註。回傳改到的格子說明。"""
+def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None, notes_only: bool = False) -> list[str]:
+    """寫入：2026細帳 只加備註；含信用卡表加金額＋備註（notes_only=True 時跳過）。回傳改到的格子說明。"""
     detail_title = f"{plan.year}細帳"
     copy_title = f"{plan.year}細帳(含信用卡)"
     detail = book.worksheet(detail_title)
-    copy, created = ensure_copy(book, detail_title, copy_title)
-    log = [f"已建立工作表「{copy_title}」"] if created else []
+    log: list[str] = []
+    if not notes_only:
+        copy, created = ensure_copy(book, detail_title, copy_title)
+        if created:
+            log.append(f"已建立工作表「{copy_title}」")
     events: list[tuple[str, str, str]] = []
 
     # 1) 2026細帳：信用卡格子只加備註
@@ -314,7 +317,7 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None) -> l
                            f"{detail_title}!{a.cell}｜{a.status}\n{a.note}"))
 
     # 2) 含信用卡表：刷卡加進零用金各項（同一份帳單只加一次）
-    pending = [s for s in plan.spends if s.cell and s.file.key not in applied]
+    pending = [] if notes_only else [s for s in plan.spends if s.cell and s.file.key not in applied]
     by_cell: dict[str, list[SpendAction]] = {}
     for s in pending:
         by_cell.setdefault(s.cell, []).append(s)
@@ -339,10 +342,7 @@ def apply_plan(plan: Plan, book, stamp: date, applied: dict, calendar=None) -> l
                            f"{copy_title}!{cell}：{formula or '（空白）'} → {new}\n" + "\n".join(lines)
                            + f"\n加註日期：{stamp:%Y-%m-%d}"))
     for s in pending:
-        applied[s.file.key] = stamp.isoformat()
-    for a in plan.cards:
-        if a.cell:
-            applied.setdefault(a.file.key, stamp.isoformat())
+        applied[s.file.key] = stamp.isoformat()  # 含信用卡表已加過這份帳單
 
     if calendar:
         for key, title, body in events:
@@ -367,7 +367,21 @@ def save_applied(data: dict) -> None:
     APPLIED_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
 
 
-def run(year: int, apply: bool = False, banks: tuple = ()) -> Path:
+def unclassified_summary(plan: Plan) -> list[tuple[str, int, int]]:
+    """對不到規則的消費，依商店名稱歸納：(名稱, 筆數, 金額合計)，金額大到小。"""
+    groups: dict[str, list[int]] = {}
+    for s in plan.spends:
+        if "待分類" not in s.reason:
+            continue
+        name = re.sub(r"(TAIPEI|Taipei|TAICHU|New Ta|TAINAN)\s*$", "", s.charge.description)
+        name = re.sub(r"[A-Z]\d{4}\s*$", "", name)                 # 收單代碼 A9131
+        name = re.sub(r"[\(（].*$", "", name).strip()                  # 括號後的分店名
+        name = re.sub(r"\d{5,}.*$", "", name).strip()                 # 保單號、期數
+        groups.setdefault(name or s.charge.description, []).append(s.charge.amount)
+    return sorted(((k, len(v), sum(v)) for k, v in groups.items()), key=lambda x: -abs(x[2]))
+
+
+def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = False, show_unclassified: bool = False) -> Path:
     stamp = date.today()
     files = parsed_statements(year, banks=banks)
     if not files:
@@ -383,12 +397,16 @@ def run(year: int, apply: bool = False, banks: tuple = ()) -> Path:
         print(f"{BANK_NAME[a.file.bank]} {a.file.statement.ledger_month} {a.cell or '-'}：{a.status}")
     print(f"刷卡 {len(plan.spends)} 筆，其中待分類 {sum('待分類' in s.reason for s in plan.spends)} 筆")
     print(f"比對報表：{report}")
+    if show_unclassified:
+        print("\n待分類的商店（筆數／金額合計）：")
+        for name, n, total in unclassified_summary(plan):
+            print(f"  {name:<28} {n:>3} 筆 {total:>9,}")
     if not apply:
         print("（只比對，沒有寫入。確認報表後加 --apply 才會寫入總帳。）")
         return report
     calendar = lambda key, day, title, body: print(
         "   行事曆：", title, "→", calendar_add_once(creds, "bank_sync:" + key, day, title, body))
-    for line in apply_plan(plan, book, stamp, applied, calendar):
+    for line in apply_plan(plan, book, stamp, applied, calendar, notes_only=notes_only):
         print("✓", line)
     save_applied(applied)
     return report

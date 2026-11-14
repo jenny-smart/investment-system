@@ -232,6 +232,24 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(detail.notes[(4, 2)].count("【星展"), 1)
 
 
+class NotesOnlyTest(unittest.TestCase):
+    def test_notes_only_leaves_copy_alone(self):
+        from bank_sync.ledger_sync import apply_plan
+        detail = FakeSheet("2026細帳", ApplyTest.VALUES)
+        book = FakeBook(detail)
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
+        applied = {}
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        apply_plan(plan, book, date(2026, 11, 14), applied, None, notes_only=True)
+        self.assertEqual([s.title for s in book.sheets], ["2026細帳"])
+        self.assertIn("加註日期", detail.notes[(4, 2)])
+        self.assertEqual(applied, {})  # 含信用卡表還沒加過，之後 --apply 仍會加
+        # 之後完整 apply 時含信用卡表照常加
+        plan2 = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        apply_plan(plan2, book, date(2026, 11, 14), applied, None)
+        self.assertEqual(book.worksheet("2026細帳(含信用卡)").values[1][2], "=100+60")
+
+
 class GoogleAuthTest(unittest.TestCase):
     def test_refresh_token_credentials(self):
         import json, tempfile
