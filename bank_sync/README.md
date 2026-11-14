@@ -64,8 +64,21 @@ python3 -m bank_sync ledger --apply                 # 確認報表後才寫入
 ```
 
 - **2026細帳**：金額不動，只在「信用卡-xx」列該月格子加備註（逐筆消費＋加註日期）；同一份帳單重跑會更新同一段備註。
-- **2026細帳(含信用卡)**：第一次 --apply 時整張複製 2026細帳；每筆刷卡依分類規則以「+金額」加進零用金各項並附備註；同一份帳單只加一次（記在 statements/_ledger_applied.json）。
-- 每改一格發一則行事曆事件到 jennytsai26888@gmail.com。
+- **2026細帳(含信用卡)**：第一次 --apply 時整張複製 2026細帳；**上方第 2–28 列完全不動**（零用金餘額不受影響），刷卡依分類寫在表格最下面的「信用卡消費」區（信用卡-餐費、信用卡-交通1…），另有「信用卡消費合計（零用金類）」與「零用金＋信用卡 總支出（＝總支出＋信用卡合計）」；保費、綜所稅列出但不計入合計。同一份帳單只加一次（記在 statements/_ledger_applied.json）。`--apply --rebuild` 會刪掉含信用卡表重建。
+- 每改一格發一則行事曆事件到 jennytsai26888@gmail.com。`fetch-statements` 抓到新帳單時也會發一則「【信用卡帳單】銀行 月份 應繳 X」（`--due-reminder` 另在截止日前一天提醒；`--no-notify` 關閉）。
 - 分類規則：程式內建，另可在 `~/Bank account/category_rules.json` 加 `[["關鍵字", "零用金-餐費"], ...]`（優先）。對不到的放「零用金-其他」並標待分類。
-- 寫入權限：帳密檔加 `"google": {"service_account_file": "服務帳號金鑰 JSON 路徑"}`。需要 `pip3 install gspread google-auth openpyxl`。
+- 寫入權限：不需服務帳號金鑰。執行一次 `python3 -m bank_sync google-login`，用 jennytsai26888@gmail.com 授權「試算表」「日曆活動」，
+  refresh token 存進帳密檔（沿用 tool-system 的電腦版 OAuth 用戶端，從 ~/lemon/.streamlit/secrets.toml 讀；或給 client_secret JSON 路徑）。
+  需要 `pip3 install gspread google-auth google-auth-oauthlib openpyxl`。
 - 渣打 PDF 的中文字抽不出來（只有數字）：金額可對，商店名稱待處理。
+
+## 介面操作（不用終端機）
+
+在 Finder 雙擊 repo 裡的 `bank_app.command`（或 `python3 -m streamlit run bank_app.py`），瀏覽器會打開「銀行帳戶與信用卡」頁：
+
+- **台新明細**：按「抓台新明細」→ Chrome 輸入驗證碼 → 自動查詢台幣／外幣明細並登出，結果直接顯示在頁面。
+- **信用卡帳單**：下載新帳單、解析預覽、比對細帳（不寫入）、寫入細帳（要再按一次確定）。
+- **登入銀行**：選銀行後一次登入一家。
+- **執行過程**：即時顯示輸出；程式要求「按 Enter」時按頁面上的「繼續（Enter）」。
+
+主 App（invesapp_supabase.py）功能列最後也有「銀行帳戶」，但只有在本機開 App 時能用；雲端版只顯示說明。

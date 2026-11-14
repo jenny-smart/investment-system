@@ -183,7 +183,7 @@ def mask_text(text: str) -> str:
     return text
 
 
-def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[Path]:
+def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = (), match: str = "") -> list[Path]:
     """每家最新一期帳單轉成文字檔（卡號、身分證遮蔽），存在 statements/_文字樣本/，給本人檢查後再分享。"""
     out_dir = STATEMENT_DIR / "_文字樣本"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -199,14 +199,58 @@ def dump_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) ->
             password = load_section(source.code, ("pdf_password",), path)["pdf_password"]
         except (KeyError, ValueError):
             password = ""
-        latest = pdfs[-1]
-        try:
-            text = open_pdf_text(latest, password)
-        except Exception as exc:
-            print(f"✗ {source.name}：{exc}")
-            continue
-        target = out_dir / f"{source.name}_{latest.stem}.txt"
-        target.write_text(mask_text(text), "utf-8")
-        written.append(target)
-        print(f"✓ {source.name}：{target}")
+        chosen = [p for p in pdfs if match in p.name] if match else pdfs[-1:]
+        for pdf in chosen:
+            try:
+                text = open_pdf_text(pdf, password)
+            except Exception as exc:
+                print(f"✗ {source.name}：{exc}")
+                continue
+            target = out_dir / f"{source.name}_{pdf.stem}.txt"
+            target.write_text(mask_text(text), "utf-8")
+            written.append(target)
+            print(f"✓ {source.name}：{target}")
     return written
+
+
+def notify_new_statements(saved: list[dict], path: Path = DEFAULT_CREDENTIALS_FILE, due_reminder: bool = False) -> None:
+    """新下載的帳單各發一則行事曆提醒（同一份只發一次）；due_reminder=True 時再於繳款截止日前一天加一則。"""
+    if not saved:
+        return
+    from datetime import date, timedelta
+    from .google_auth import calendar_add_once, credentials
+    from .statement_parser import parse
+    try:
+        creds = credentials(path)
+    except SystemExit as exc:
+        print(f"（沒有發行事曆：{exc}）")
+        return
+    code_by_name = {s.name: s.code for s in SOURCES}
+    today = date.today()
+    for item in saved:
+        code = code_by_name.get(item["bank"], "")
+        files = item.get("files") or []
+        summary = f"【信用卡帳單】{item['bank']} {item['month']}"
+        body = f"帳單已存到 {files[0]}" if files else "帳單信沒有 PDF 附件"
+        due = None
+        if code in ("fubon", "taishin", "sc", "dbs", "cathay") and files:
+            try:
+                password = load_section(code, ("pdf_password",), path)["pdf_password"]
+                st = parse(code, open_pdf_text(Path(files[0]), password))
+                if st.total_due is not None:
+                    summary += f" 應繳 {st.total_due:,}"
+                due = st.due
+                body = (f"繳款截止 {st.due:%Y/%m/%d}、" if st.due else "") + f"消費 {len(st.purchases)} 筆\n" + body
+                if st.warnings:
+                    body += "\n⚠️ " + "；".join(st.warnings)
+            except Exception as exc:  # 打不開也照樣提醒
+                body += f"\n⚠️ 讀不出內容：{exc}"
+        elif code in ("hsbc", "ubot"):
+            summary = f"⚠️【信用卡帳單】{item['bank']} {item['month']}（平常不刷，請確認）"
+        key = f"stmt:{code}:{Path(files[0]).name if files else item['month']}"
+        print(f"   行事曆：{summary} → {calendar_add_once(creds, 'bank_sync:' + key, today, summary, body)}")
+        if due_reminder and due and due > today:
+            remind = max(due - timedelta(days=1), today)
+            due_title = "⏰ " + item["bank"] + "信用卡 明天繳款截止"
+            result = calendar_add_once(creds, "bank_sync:due:" + key, remind, due_title, body)
+            print(f"   行事曆：{due_title} → {result}")

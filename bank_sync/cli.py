@@ -65,19 +65,33 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("logins", nargs="*", metavar="登入名稱")
     login.add_argument("--close", action="store_true", help="全部登入後直接關閉 Chrome")
     login.add_argument("--timeout", type=float, default=5, help="每一家等待登入的分鐘數（預設 5）")
+    ftx = sub.add_parser("fetch-taishin", help="台新：自動查詢台幣／外幣交易明細，存在本機")
+    ftx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01；平常不用給，會從上次最後一筆日期查到今天")
+    ftx.add_argument("--keep-open", action="store_true")
+    exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
+    exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
     insp.add_argument("login")
     fetch = sub.add_parser("fetch-statements", help="從信箱下載信用卡電子帳單 PDF 並試開")
     fetch.add_argument("--months", type=int, default=3, help="往回抓幾個月（預設 3）")
     fetch.add_argument("--bank", action="append", default=[], help="只抓這家（可重複）：fubon taishin sc dbs cathay hsbc ubot")
     fetch.add_argument("--force", action="store_true", help="已下載過的也重新下載")
+    fetch.add_argument("--no-notify", action="store_true", help="新帳單不發行事曆提醒")
+    fetch.add_argument("--due-reminder", action="store_true", help="另在繳款截止日前一天加一則提醒")
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     dump = sub.add_parser("dump-statements", help="每家最新一期帳單轉成文字檔（卡號、身分證遮蔽）")
     dump.add_argument("--bank", action="append", default=[])
+    dump.add_argument("--file", default="", help="只轉檔名含這段文字的帳單（例：2026-04）；不給則每家最新一期")
+    gl = sub.add_parser("google-login", help="用 jennytsai26888@gmail.com 授權寫入總帳與行事曆（只要做一次）")
+    gl.add_argument("client_json", nargs="?", type=Path, help="OAuth 用戶端 JSON（不給則讀 ~/lemon/.streamlit/secrets.toml）")
     led = sub.add_parser("ledger", help="信用卡帳單 → 2026細帳 備註＋2026細帳(含信用卡)；預設只比對")
     led.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     led.add_argument("--apply", action="store_true", help="確認比對報表後才加：寫入總帳並發行事曆")
     led.add_argument("--bank", action="append", default=[])
+    led.add_argument("--notes-only", action="store_true", help="只在 2026細帳 加備註，不建／不動 含信用卡 表")
+    led.add_argument("--unclassified", action="store_true", help="列出對不到分類規則的商店（筆數、金額）")
+    led.add_argument("--check", action="store_true", help="只比對兩表「零用金-淨值」是否每月相等")
+    led.add_argument("--rebuild", action="store_true", help="刪掉 含信用卡 表後重新複製並寫入（搭配 --apply）")
     prev = sub.add_parser("preview-statements", help="列出每份帳單解析結果（不需要 Google 權限）")
     prev.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     imp = sub.add_parser("import-csv")
@@ -95,16 +109,29 @@ def main(argv: list[str] | None = None) -> int:
         if unknown:
             parser.error(f"不認得的登入名稱：{', '.join(unknown)}（可用：{', '.join(web_login_keys())}）")
         _login(args.logins, keep_open=not args.close, timeout_min=args.timeout)
+    elif args.command == "fetch-taishin":
+        from .taishin_tx import fetch
+        from datetime import date as _date
+        fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "explore":
+        from .explore import explore
+        explore(args.login, login_bank_code(args.login))
     elif args.command == "inspect":
         from .native_chrome import inspect_page
         inspect_page(login_bank_code(args.login))
     elif args.command == "fetch-statements":
-        from .mail_statements import check_statements, fetch_statements
-        fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
+        from .mail_statements import check_statements, fetch_statements, notify_new_statements
+        saved = fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
         check_statements(banks=tuple(args.bank))
+        if not args.no_notify:
+            notify_new_statements(saved, due_reminder=args.due_reminder)
+    elif args.command == "google-login":
+        from .google_auth import login
+        login(args.client_json)
     elif args.command == "ledger":
         from .ledger_sync import run
-        run(args.year, apply=args.apply, banks=tuple(args.bank))
+        run(args.year, apply=args.apply, banks=tuple(args.bank), notes_only=args.notes_only,
+            show_unclassified=args.unclassified, check=args.check, rebuild=args.rebuild)
     elif args.command == "preview-statements":
         from .ledger_sync import BANK_NAME, parsed_statements
         for f in parsed_statements(args.year):
@@ -115,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
                   + (f"  ⚠️ {'；'.join(st.warnings)}" if st.warnings else ""))
     elif args.command == "dump-statements":
         from .mail_statements import dump_statements
-        dump_statements(banks=tuple(args.bank))
+        dump_statements(banks=tuple(args.bank), match=args.file)
     elif args.command == "check-statements":
         from .mail_statements import check_statements
         check_statements()

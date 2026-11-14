@@ -94,3 +94,16 @@ def save_credentials(login_key: str, values: dict[str, str], path: Path = DEFAUL
         json.dump(data, handle, ensure_ascii=False, indent=2)
     os.chmod(tmp, 0o600)
     tmp.replace(path)
+
+
+def save_section(key: str, values: dict, path: Path = DEFAULT_CREDENTIALS_FILE) -> None:
+    """寫入（覆蓋）帳密檔裡的一個區塊（例如 "google"），權限固定 600。"""
+    data = _read(path)
+    data[key] = values
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
+    tmp.replace(path)

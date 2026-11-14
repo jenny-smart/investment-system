@@ -74,6 +74,21 @@ class ParserTest(unittest.TestCase):
         st = parse("cathay", CATHAY)
         self.assertEqual((st.ledger_month, st.total_due), ("2026-09", 0))
 
+    def test_taishin_rows_after_page_break(self):
+        text = TAISHIN.replace("*若您要使用金融卡繳交信用卡款\n",
+                               "*若您要使用金融卡繳交信用卡款\n◎自動提款機繳款說明\n115/10/09 115/10/12 範例日本商店MIYAZA 100 1008 JP JPY 500.00\n")
+        text = text.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 1,450")
+        st = parse("taishin", text)
+        self.assertEqual(sum(c.amount for c in st.purchases), 1450)
+        self.assertEqual(st.warnings, [])
+
+    def test_dbs_wrapped_row(self):
+        text = DBS.replace("2026/10/10 2026/10/13 範例商店 / TW Taipei 200",
+                           "2026/10/10 2026/10/13 範例很長的商店名稱 / TW\nTAIPEI\n200")
+        st = parse("dbs", text)
+        self.assertEqual([c.amount for c in st.purchases], [60, 200])
+        self.assertEqual(st.purchases[1].description, "範例很長的商店名稱")
+
     def test_mismatch_warns(self):
         st = parse("dbs", DBS.replace("\n260\n", "\n999\n"))
         self.assertTrue(any("不同" in w for w in st.warnings))
@@ -82,6 +97,16 @@ class ParserTest(unittest.TestCase):
         note = note_text(parse("dbs", DBS), date(2026, 11, 14))
         self.assertIn("加註日期：2026-11-14", note)
         self.assertIn("09/21 連支＊範例早午餐 60", note)
+
+
+class ScTest(unittest.TestCase):
+    def test_sc_uses_purchase_total(self):
+        u = lambda txt: "".join(f"/UNIC{ord(ch):04X}" for ch in txt)
+        lines = [u("$ 12,719"), u("$ 12,719"), u("$ 0"), u("$ 14,292"), u("$ 9"), u("$ 14,301"), u("$ 14,301"),
+                 u("2026"), u("04"), u("06"), u("NT$14,301")]
+        st = parse("sc", "\n".join(lines))
+        self.assertEqual(st.total_due, 14292)
+        self.assertEqual(st.ledger_month, "2026-04")
 
 
 class LedgerTest(unittest.TestCase):
@@ -98,6 +123,30 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(categorize("不知名商行", DEFAULT_RULES)[0], FALLBACK_ROW)
         self.assertEqual(categorize("連支＊ＷＴＣ　Ｃａｆ？Taipei", DEFAULT_RULES)[0], "零用金-餐費")  # 全形
         self.assertEqual(categorize("ｙｏｘｉTAIPEI", DEFAULT_RULES)[0], "零用金-交通1")
+
+    def test_jenny_rules(self):
+        self.assertEqual(categorize("彭園新店館New Ta", DEFAULT_RULES)[0], "零用金-公司代墊")
+        self.assertEqual(categorize("連加＊ＬＩＮＥ 官方帳", DEFAULT_RULES)[0], "零用金-公司代墊")
+        self.assertEqual(categorize("OPENAI *CHATGPT SUBSCRO9393SAN FR", DEFAULT_RULES)[0], "零用金-用品")
+        self.assertEqual(categorize("＿支付連-女人夢想堂", DEFAULT_RULES)[0], "零用金-衣飾")
+        self.assertEqual(categorize("綠界科技股＊ｐｄ　ｐｉｌａ 第01/06期/TW", DEFAULT_RULES)[0], "零用金-化妝保養＋按摩")
+        self.assertEqual(categorize("JEIRINMEDICARLSENTEOA9131 PUSAN", DEFAULT_RULES)[0], "零用金-化妝保養＋按摩")
+        self.assertEqual(categorize("MEGADONQUIJOTE MIYAZAK0985-2", DEFAULT_RULES)[0], "零用金-旅行")
+        self.assertEqual(categorize("114年度綜所稅款 第01/12期 /TW", DEFAULT_RULES)[0], "（不列零用金）")
+
+    def test_foreign_fee_follows_base_and_tax_skipped(self):
+        text = TAISHIN.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 17,868").replace(
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n",
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n115/06/01 115/10/08 114年度綜所稅款 第05/12期 /TW 16,518  TW\n")
+        values = [["2026", "2026-11"], ["零用金-餐費", ""], ["零用金-其他", ""], ["零用金-交通1", ""], ["零用金-用品", ""],
+                  ["信用卡-台新 18", ""]]
+        plan = build_plan([ParsedFile("taishin", Path("t.pdf"), parse("taishin", text))], values, date(2026, 11, 14), {})
+        by = {s.charge.description: s for s in plan.spends}
+        self.assertEqual(by["EXAMPLE SaaS SAN FR"].row_label, "零用金-其他")     # 美國線上服務不是旅行 → 待分類
+        self.assertEqual(by["國外交易服務費－491.00"].row_label, "零用金-其他")   # 跟隨 491 那筆
+        self.assertEqual(by["國外交易服務費－491.00"].reason, "跟隨對應消費")
+        tax = by["114年度綜所稅款 第05/12期 /TW"]
+        self.assertEqual((tax.row_label, tax.cell), ("（不列零用金）", ""))
 
     def test_merge_note_replaces_same_statement(self):
         old = "使用者自己的備註\n【星展 信用卡帳單】本期應繳 260\n繳款截止日 2026/11/09\n舊明細\n加註日期：2026-11-01（bank_sync）"
@@ -132,3 +181,170 @@ class LedgerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeSheet:
+    def __init__(self, title, values, index=0, sid=1):
+        self.title, self.values, self.index, self.id = title, [list(r) for r in values], index, sid
+        self.notes = {}
+        self.row_count = len(values) + 3
+
+    def add_rows(self, n):
+        self.row_count += n
+
+    def get_values(self, value_render_option=None):
+        rows = [list(r) for r in self.values]
+        if value_render_option == "FORMULA" and rows:      # 仿 Google：公式模式下月份標題是日期公式
+            rows[0] = [v if i == 0 else (f"=DATE({v[:4]},{int(v[5:7])},1)" if len(v) == 7 and v[4] == "-" else v)
+                       for i, v in enumerate(rows[0])]
+        return rows
+
+    def get_notes(self):
+        return [[self.notes.get((r, c), "") for c in range(len(row))] for r, row in enumerate(self.values)]
+
+    def update_notes(self, notes):
+        from bank_sync.ledger_sync import _rc
+        for cell, text in notes.items():
+            self.notes[_rc(cell)] = text
+
+    def batch_update(self, items, value_input_option=None):
+        for it in items:
+            self.update(it["range"], it["values"])
+
+    def update(self, range_name, values, value_input_option=None):
+        from bank_sync.ledger_sync import _rc
+        r, c = _rc(range_name.split(":")[0])
+        assert r + len(values) <= self.row_count, "超出表格列數"
+        for i, row in enumerate(values):
+            while len(self.values) <= r + i:
+                self.values.append([""] * len(self.values[0]))
+            for j, v in enumerate(row):
+                while len(self.values[r + i]) <= c + j:
+                    self.values[r + i].append("")
+                self.values[r + i][c + j] = v
+
+
+class FakeBook:
+    def __init__(self, sheet):
+        self.sheets = [sheet]
+
+    def worksheets(self):
+        return self.sheets
+
+    def worksheet(self, title):
+        return next(s for s in self.sheets if s.title == title)
+
+    def del_worksheet(self, ws):
+        self.sheets.remove(ws)
+
+    def duplicate_sheet(self, sid, insert_sheet_index, new_sheet_name):
+        src = next(s for s in self.sheets if s.id == sid)
+        copy = FakeSheet(new_sheet_name, src.values, insert_sheet_index, sid + 100)
+        copy.notes = dict(src.notes)
+        self.sheets.append(copy)
+        return copy
+
+
+TAX = """消費日 入帳起息日 消費明細 新臺幣金額 外幣折算日 消費地 幣別 外幣金額
+"""
+
+
+class ApplyTest(unittest.TestCase):
+    VALUES = [["2026", "2026-10", "2026-11"],
+              ["零用金-餐費", "", "100"],
+              ["零用金-其他", "", ""],
+              ["零用金-交通1", "", "=1000"],
+              ["零用金", "5000", "=4000+1000"],
+              ["零用金--總支出", "=SUM(B2:B4)", "=SUM(C2:C4)"],
+              ["零用金-淨值", "=B5-B6", "=C5-C6"],
+              ["", "", ""],
+              ["保費支出", "", ""],
+              ["信用卡-星展 08", "780", "260"]]
+
+    def run_apply(self, **kw):
+        from bank_sync.ledger_sync import apply_plan
+        detail = FakeSheet("2026細帳", self.VALUES)
+        detail.notes[(9, 2)] = "我自己的備註"
+        book = FakeBook(detail)
+        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
+        applied, events = {}, []
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        apply_plan(plan, book, date(2026, 11, 14), applied, lambda *a: events.append(a), **kw)
+        return detail, book, files, applied, events
+
+    def test_top_rows_untouched_card_block_at_bottom(self):
+        from bank_sync.ledger_sync import apply_plan
+        detail, book, files, applied, events = self.run_apply()
+        # 2026細帳：金額不動，只加備註
+        self.assertEqual(detail.values, self.VALUES)
+        self.assertIn("我自己的備註", detail.notes[(9, 2)])
+        self.assertIn("加註日期：2026-11-14", detail.notes[(9, 2)])
+        copy = book.worksheet("2026細帳(含信用卡)")
+        # 上方 2–28 列（含 25 零用金）完全不動
+        self.assertEqual(copy.values[:10], self.VALUES)
+        labels = [r[0] for r in copy.values]
+        h = labels.index("信用卡消費（bank_sync；不影響上方零用金餘額）")
+        self.assertEqual(h, 11)                                      # 空一列後開始
+        self.assertEqual(labels[h + 1:h + 4], ["信用卡-餐費", "信用卡-其他", "信用卡-交通1"])
+        food, other = labels.index("信用卡-餐費"), labels.index("信用卡-其他")
+        self.assertEqual(copy.values[food][2], "=60")
+        self.assertEqual(copy.values[other][2], "=200")
+        self.assertIn("範例早午餐", copy.notes[(food, 2)])
+        s_row = labels.index("信用卡消費合計（零用金類）")
+        self.assertEqual(copy.values[s_row][2], f"=SUM(C{h + 2}:C{h + 4})")
+        g_row = labels.index("零用金＋信用卡 總支出")
+        self.assertEqual(copy.values[g_row][2], f"=C6+C{s_row + 1}")
+        # 重跑：同一份帳單不重複加
+        plan2 = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        apply_plan(plan2, book, date(2026, 11, 14), applied, None)
+        self.assertEqual(copy.values[food][2], "=60")
+        self.assertEqual(detail.notes[(9, 2)].count("【星展"), 1)
+
+    def test_notes_only(self):
+        detail, book, files, applied, events = self.run_apply(notes_only=True)
+        self.assertEqual([s.title for s in book.sheets], ["2026細帳"])
+        self.assertIn("加註日期", detail.notes[(9, 2)])
+        self.assertEqual(applied, {})
+
+    def test_rebuild(self):
+        from bank_sync.ledger_sync import rebuild_copy
+        detail, book, files, applied, events = self.run_apply()
+        book.worksheet("2026細帳(含信用卡)").values[4][2] = "=999"      # 模擬舊版改過 25 列
+        self.assertIn("已刪除", rebuild_copy(book, 2026))
+        self.assertNotIn("2026細帳(含信用卡)", [s.title for s in book.sheets])
+
+    def test_tax_and_insurance_rows(self):
+        from bank_sync.ledger_sync import apply_plan
+        text = TAISHIN.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 18,868").replace(
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n",
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n115/06/01 115/10/08 114年度綜所稅款 第05/12期 /TW 16,518  TW\n"
+            "115/09/30 115/11/02 新光人壽保險 第02/12期/TW 1,000  TW\n")
+        values = [list(r) for r in self.VALUES]
+        values[9] = ["信用卡-台新 18", "", ""]
+        detail = FakeSheet("2026細帳", values)
+        book = FakeBook(detail)
+        files = [ParsedFile("taishin", Path("t.pdf"), parse("taishin", text))]
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), {})
+        apply_plan(plan, book, date(2026, 11, 14), {}, None)
+        copy = book.worksheet("2026細帳(含信用卡)")
+        labels = [r[0] for r in copy.values]
+        self.assertEqual(copy.values[labels.index("信用卡-綜所稅（不計入合計）")][2], "=16518")
+        self.assertEqual(copy.values[labels.index("信用卡-保費支出（不計入合計）")][2], "=1000")
+        self.assertEqual(copy.values[:10], values)                  # 上方不動
+
+    def test_block_labels(self):
+        from bank_sync.ledger_sync import block_label, SKIP_ROW
+        self.assertEqual(block_label("零用金-公司代墊"), "信用卡-公司代墊")
+        self.assertEqual(block_label("保費支出"), "信用卡-保費支出（不計入合計）")
+        self.assertEqual(block_label(SKIP_ROW), "信用卡-綜所稅（不計入合計）")
+
+
+class GoogleAuthTest(unittest.TestCase):
+    def test_refresh_token_credentials(self):
+        import json, tempfile
+        from bank_sync.google_auth import credentials
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "a.json"
+            p.write_text(json.dumps({"google": {"client_id": "x", "client_secret": "y", "refresh_token": "z"}}))
+            creds = credentials(p)
+            self.assertEqual(creds.refresh_token, "z")
