@@ -35,6 +35,11 @@ SNAPSHOT_JS = r"""
     if (head.some(Boolean)) out.tables.push({columns: head.slice(0, 20), rows: rows});
   });
   document.querySelectorAll('iframe,frame').forEach(f => out.iframes.push((f.src || '').split('?')[0]));
+  // 結果不是表格的網站（例：將來、渣打）：把畫面文字做成「格式樣本」——重複出現的短標籤保留，其他數字→9、英文→x、中文→○
+  const lines = (document.body ? document.body.innerText : '').split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const cnt = {}; lines.forEach(l => cnt[l] = (cnt[l] || 0) + 1);
+  out.text_shape = lines.slice(0, 150).map(l => (cnt[l] >= 2 && l.length <= 8 && !/\d/.test(l)) ? l
+    : l.replace(/\d/g, '9').replace(/[A-Za-z]/g, 'x').replace(/[\u4e00-\u9fff]/g, '○'));
   out.links = [...new Set(out.links)].slice(0, 60);
   out.buttons = [...new Set(out.buttons)].slice(0, 40);
   return out;
@@ -84,7 +89,7 @@ def explore(login_key: str, bank_code: str) -> Path:
     from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
     bank = WEB_BANKS[bank_code]
     if bank.native:
-        raise SystemExit(f"{bank.name} 用的是一般模式 Chrome，探索模式目前只支援程式開的 Chrome。")
+        return explore_native(login_key, bank_code)
     EXPLORE_DIR.mkdir(parents=True, exist_ok=True)
     dl_dir = EXPLORE_DIR / "downloads"
     dl_dir.mkdir(exist_ok=True)
@@ -148,3 +153,59 @@ def _watch(page, record: dict, dl_dir: Path) -> None:
 
     page.on("framenavigated", on_nav)
     page.on("download", on_download)
+
+
+# ---------------------------------------------------------------- 一般模式 Chrome（渣打）
+
+DEEP_SNAPSHOT_JS = "(() => { try {" + r"""
+  const roots = [];
+  const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
+  walk(document);
+  const all = sel => roots.flatMap(r => [...r.querySelectorAll(sel)]);
+  const mask = t => (t || '').replace(/\s+/g, ' ').trim().replace(/\d[\d,\-]{3,}\d/g, m => '****' + m.replace(/\D/g, '').slice(-3)).slice(0, 80);
+  const vis = e => e.getClientRects().length > 0;
+  const out = {title: document.title, url: location.href.split('?')[0], headings: [], selects: [], inputs: [], buttons: [], links: [], tables: [], custom: []};
+  all('h1,h2,h3,h4,legend').forEach(e => { if (vis(e)) { const t = mask(e.innerText); if (t && t.length < 40 && !out.headings.includes(t)) out.headings.push(t); } });
+  all('select').forEach(e => out.selects.push({name: e.name, id: e.id, visible: vis(e), options: [...e.options].slice(0, 30).map(o => mask(o.text))}));
+  all('input,textarea').forEach(e => { if (vis(e) && !['hidden', 'password'].includes(e.type)) out.inputs.push({type: e.type, name: e.name, id: e.id, placeholder: mask(e.placeholder), aria: e.getAttribute('aria-label') || ''}); });
+  all('button,[role=button],[role=tab],[role=option],[role=menuitem]').forEach(e => { if (vis(e)) { const t = mask(e.innerText || e.getAttribute('aria-label')); if (t && t.length < 40) out.buttons.push(t); } });
+  all('a').forEach(e => { if (vis(e)) { const t = mask(e.innerText); if (t && t.length < 30) out.links.push(t); } });
+  all('table').forEach(t => { if (!vis(t)) return; const r = [...t.rows]; const head = r.length ? [...r[0].cells].map(c => mask(c.innerText)) : []; out.tables.push({columns: head.slice(0, 20), rows: r.length}); });
+  all('*').forEach(e => { if (e.shadowRoot && vis(e)) { const n = e.tagName.toLowerCase(); if (!out.custom.includes(n)) out.custom.push(n); } });
+  const raw = roots.map(r => r === document ? (document.body ? document.body.innerText : '') : (r.body ? r.body.innerText : [...r.children].map(c => c.innerText || '').join('\n'))).join('\n');
+  const text = raw.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const cnt = {}; text.forEach(l => cnt[l] = (cnt[l] || 0) + 1);
+  out.text_shape = text.slice(0, 150).map(l => (cnt[l] >= 2 && l.length <= 8 && !/\d/.test(l)) ? l
+    : l.replace(/\d/g, '9').replace(/[A-Za-z]/g, 'x').replace(/[\u4e00-\u9fff]/g, '○'));
+  out.buttons = [...new Set(out.buttons)].slice(0, 60);
+  out.links = [...new Set(out.links)].slice(0, 60);
+  return JSON.stringify(out);
+""" + "} catch (err) { return 'JS_ERROR:' + err; } })()"
+
+
+def explore_native(login_key: str, bank_code: str) -> Path:
+    from .native_chrome import evaluate, native_login
+    bank = WEB_BANKS[bank_code]
+    EXPLORE_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = EXPLORE_DIR / f"{bank_code}_{datetime.now():%Y%m%d_%H%M}.json"
+    record = {"bank": bank.name, "snapshots": []}
+    if not native_login(login_key, bank_code):
+        raise SystemExit(f"{bank.name} 沒有登入成功。")
+    print("\n=== 探索模式 ===")
+    print("請在渣打專用 Chrome 點到交易明細頁（選帳戶、期間、按查詢），每到一頁回這裡按 Enter；完成輸入 q。")
+    print("做完請在 Chrome 手動按「登出」。")
+    while True:
+        if input("Enter＝記錄目前頁面／q＝結束：").strip().lower() == "q":
+            break
+        shots = []
+        for url, output in evaluate(bank.host, DEEP_SNAPSHOT_JS, every=True):
+            try:
+                shots.append(json.loads(output))
+            except Exception:
+                shots.append({"url": url.split("?")[0], "error": output[:200]})
+        record["snapshots"].append({"time": datetime.now().strftime("%H:%M:%S"), "frames": shots})
+        out_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), "utf-8")
+        print(f"  已記錄（累計 {len(record['snapshots'])} 次）")
+    out_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), "utf-8")
+    print(f"\n結構記錄：{out_path}\n請打開檢查（不含金額、帳號已遮蔽），沒問題再上傳給我。")
+    return out_path
