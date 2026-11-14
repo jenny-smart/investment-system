@@ -126,6 +126,8 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
             head = block.get("head") or []
             for row in block.get("rows") or []:
                 tx = _to_tx(bank, block, head, row)
+                if tx == "SKIP":
+                    continue
                 if tx is None:
                     warn.append(f"{bank} {block.get('account')}：看不懂這筆格式 {len(row)} 欄")
                     continue
@@ -136,8 +138,14 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
     return out, warn
 
 
+ONLY_ACCOUNTS = {"yuanta": ("大同",), "linebank": ("主帳戶",)}  # Jenny：元大只記大同、LINE Bank 只記主帳戶
+
+
 def _to_tx(bank: str, block: dict, head: list, row: list) -> Tx | None:
     get = lambda i: row[i] if i is not None and i < len(row) else ""
+    only = ONLY_ACCOUNTS.get(bank)
+    if only and not any(k in block.get("account", "") for k in only):
+        return "SKIP"
     day = parse_day(row[0] if row else "")
     if day is None:
         return None
