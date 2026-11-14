@@ -12,9 +12,12 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .credentials import BANK_DIR
+from .taishin_tx import keep_new, parse_day, shape_report
 
 HOST = "https://accessibility.nextbank.com.tw"
 TX_DIR = BANK_DIR / "transactions" / "next"
+STATE_FILE = TX_DIR / "_state.json"
+KEY = "TWD:將來主帳戶"
 
 CLICK_TEXT_JS = r"""
 (names) => {
@@ -69,6 +72,45 @@ def _goto_details(page) -> None:
         input("  請在 Chrome 點到「主帳戶明細查詢」頁，回到這裡按 Enter：")
 
 
+HEAD = ["交易日", "時間", "摘要", "金額", "餘額", "明細描述", "備註", "交易類型"]
+FIELDS = (("金額", "amount"), ("交易類型", "type"), ("明細描述", "desc"), ("摘要", "memo"),
+          ("交易時間", "time"), ("備註說明", "note"), ("帳戶餘額", "balance"))
+
+
+def _money(text: str) -> str:
+    m = re.search(r"-?\$?\s*-?[\d,]+(?:\.\d+)?", text.replace("新臺幣", ""))
+    return m.group(0).replace("$", "").replace(" ", "") if m else ""
+
+
+def parse_lines(lines: list[str]) -> list[list[str]]:
+    """將來明細是一筆好幾行：金額／交易類型／明細描述／摘要／交易時間／備註說明／帳戶餘額。"""
+    rows, cur = [], None
+    for line in lines:
+        label = next(((lab, key) for lab, key in FIELDS if line.startswith(lab)), None)
+        if label is None:
+            continue
+        lab, key = label
+        value = line[len(lab):].strip()
+        if key == "amount":
+            if cur:
+                rows.append(cur)
+            cur = {"amount": _money(value)}
+            continue
+        if cur is None:
+            continue
+        cur[key] = _money(value) if key == "balance" else value
+    if cur:
+        rows.append(cur)
+    out = []
+    for r in rows:
+        day, _, clock = (r.get("time", "") + " ").partition(" ")
+        if not parse_day(day):
+            continue
+        out.append([day, clock.strip(), r.get("memo", ""), r.get("amount", ""), r.get("balance", ""),
+                    r.get("desc", ""), "" if r.get("note") == "無" else r.get("note", ""), r.get("type", "")])
+    return out
+
+
 def shape(lines: list[str]) -> list[str]:
     """格式樣本：重複出現的短標籤（像「交易日期」）保留，其他中文→○、數字→9、英文→x。"""
     counts = {}
@@ -89,7 +131,14 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
     from playwright.sync_api import sync_playwright
     from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
 
-    since = since or date.today().replace(day=1)
+    progress = {}
+    if not since:
+        try:
+            progress = json.loads(STATE_FILE.read_text("utf-8"))
+        except Exception:
+            progress = {}
+    start = parse_day(progress.get(KEY, {}).get("last_date", "")) or since or date.today().replace(day=1)
+    since = start
     TX_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     pages = []
@@ -125,12 +174,27 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
             context.close()
     finally:
         lock.close()
+    rows = []
+    for pg in pages:
+        for r in parse_lines(pg["lines"]):
+            if r not in rows:
+                rows.append(r)
+    rows.sort(key=lambda r: (r[0], r[1]))
+    total = len(rows)
+    accounts = []
+    if pages:
+        new, progress[KEY] = keep_new(rows, progress.get(KEY, {}), since)
+        accounts.append({"type": "TWD", "account": "將來主帳戶", "ledger_row": "將來", "from": since.isoformat(),
+                         "head": HEAD, "rows": new})
+        print(f"  將來主帳戶：{since:%m/%d} 起共 {total} 筆，新的 {len(new)} 筆")
+        STATE_FILE.write_text(json.dumps(progress, ensure_ascii=False, indent=1), "utf-8")
+        os.chmod(STATE_FILE, 0o600)
     raw_path = TX_DIR / f"{stamp}.json"
-    raw_path.write_text(json.dumps({"fetched_at": stamp, "pages": pages}, ensure_ascii=False, indent=1), "utf-8")
+    raw_path.write_text(json.dumps({"fetched_at": stamp, "accounts": accounts}, ensure_ascii=False, indent=1), "utf-8")
     os.chmod(raw_path, 0o600)
     shape_path = BANK_DIR / "_explore" / f"next_shape_{stamp}.txt"
     shape_path.parent.mkdir(parents=True, exist_ok=True)
-    shape_path.write_text("\n\n".join(f"[{p['period']}]\n" + "\n".join(shape(p["lines"])[:80]) for p in pages), "utf-8")
+    shape_path.write_text(shape_report(accounts), "utf-8")
     print(f"\n明細（只存在本機）：{raw_path}")
     print(f"格式樣本（可上傳給 Claude）：{shape_path}")
     return raw_path
