@@ -187,6 +187,10 @@ class FakeSheet:
     def __init__(self, title, values, index=0, sid=1):
         self.title, self.values, self.index, self.id = title, [list(r) for r in values], index, sid
         self.notes = {}
+        self.row_count = len(values) + 3
+
+    def add_rows(self, n):
+        self.row_count += n
 
     def get_values(self, value_render_option=None):
         return [list(r) for r in self.values]
@@ -194,13 +198,19 @@ class FakeSheet:
     def get_notes(self):
         return [[self.notes.get((r, c), "") for c in range(len(row))] for r, row in enumerate(self.values)]
 
-    def update_note(self, cell, text):
+    def update_notes(self, notes):
         from bank_sync.ledger_sync import _rc
-        self.notes[_rc(cell)] = text
+        for cell, text in notes.items():
+            self.notes[_rc(cell)] = text
+
+    def batch_update(self, items, value_input_option=None):
+        for it in items:
+            self.update(it["range"], it["values"])
 
     def update(self, range_name, values, value_input_option=None):
         from bank_sync.ledger_sync import _rc
         r, c = _rc(range_name.split(":")[0])
+        assert r + len(values) <= self.row_count, "超出表格列數"
         for i, row in enumerate(values):
             while len(self.values) <= r + i:
                 self.values.append([""] * len(self.values[0]))
@@ -220,12 +230,19 @@ class FakeBook:
     def worksheet(self, title):
         return next(s for s in self.sheets if s.title == title)
 
+    def del_worksheet(self, ws):
+        self.sheets.remove(ws)
+
     def duplicate_sheet(self, sid, insert_sheet_index, new_sheet_name):
         src = next(s for s in self.sheets if s.id == sid)
         copy = FakeSheet(new_sheet_name, src.values, insert_sheet_index, sid + 100)
         copy.notes = dict(src.notes)
         self.sheets.append(copy)
         return copy
+
+
+TAX = """消費日 入帳起息日 消費明細 新臺幣金額 外幣折算日 消費地 幣別 外幣金額
+"""
 
 
 class ApplyTest(unittest.TestCase):
@@ -237,103 +254,85 @@ class ApplyTest(unittest.TestCase):
               ["零用金--總支出", "=SUM(B2:B4)", "=SUM(C2:C4)"],
               ["零用金-淨值", "=B5-B6", "=C5-C6"],
               ["", "", ""],
-              ["", "", ""],
+              ["保費支出", "", ""],
               ["信用卡-星展 08", "780", "260"]]
 
-    def test_apply_notes_only_on_detail_and_terms_on_copy(self):
+    def run_apply(self, **kw):
         from bank_sync.ledger_sync import apply_plan
         detail = FakeSheet("2026細帳", self.VALUES)
         detail.notes[(9, 2)] = "我自己的備註"
         book = FakeBook(detail)
         files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
-        stamp = date(2026, 11, 14)
         applied, events = {}, []
-        plan = build_plan(files, detail.get_values(), stamp, applied)
-        apply_plan(plan, book, stamp, applied, lambda *a: events.append(a))
-        # 2026細帳：金額不動，只加備註（保留原備註）
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
+        apply_plan(plan, book, date(2026, 11, 14), applied, lambda *a: events.append(a), **kw)
+        return detail, book, files, applied, events
+
+    def test_top_rows_untouched_card_block_at_bottom(self):
+        from bank_sync.ledger_sync import apply_plan
+        detail, book, files, applied, events = self.run_apply()
+        # 2026細帳：金額不動，只加備註
         self.assertEqual(detail.values, self.VALUES)
         self.assertIn("我自己的備註", detail.notes[(9, 2)])
         self.assertIn("加註日期：2026-11-14", detail.notes[(9, 2)])
-        # 含信用卡表：餐費 100 + 60；其他 + 200
         copy = book.worksheet("2026細帳(含信用卡)")
-        self.assertEqual(copy.values[1][2], "=100+60")
-        self.assertEqual(copy.values[2][2], "=200")
-        self.assertIn("範例早午餐", copy.notes[(1, 2)])
-        # 25 列同額加回（現金不變）；新增兩列統計
-        self.assertEqual(copy.values[4][2], "=4000+1000+260")
-        self.assertIn("抵銷，現金不變", copy.notes[(4, 2)])
-        self.assertEqual(copy.values[7][0], "零用金-信用卡消費")
-        self.assertEqual(copy.values[7][2], "=260")
-        self.assertEqual(copy.values[8][0], "零用金-現金消費")
-        self.assertEqual(copy.values[8][2], "=C6-C8")
-        self.assertEqual(len(events), 4)
-        # 重跑：同一份帳單不會再加一次
-        plan2 = build_plan(files, detail.get_values(), stamp, applied)
-        apply_plan(plan2, book, stamp, applied, lambda *a: events.append(a))
-        self.assertEqual(copy.values[1][2], "=100+60")
-        self.assertEqual(copy.values[4][2], "=4000+1000+260")
-        self.assertEqual(copy.values[7][2], "=260")
-        self.assertEqual(detail.notes[(9, 2)].count("【星展"), 1)
-
-
-class NotesOnlyTest(unittest.TestCase):
-    def test_notes_only_leaves_copy_alone(self):
-        from bank_sync.ledger_sync import apply_plan
-        detail = FakeSheet("2026細帳", ApplyTest.VALUES)
-        book = FakeBook(detail)
-        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
-        applied = {}
-        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
-        apply_plan(plan, book, date(2026, 11, 14), applied, None, notes_only=True)
-        self.assertEqual([s.title for s in book.sheets], ["2026細帳"])
-        self.assertIn("加註日期", detail.notes[(9, 2)])
-        self.assertEqual(applied, {})  # 含信用卡表還沒加過，之後 --apply 仍會加
-        # 之後完整 apply 時含信用卡表照常加
+        # 上方 2–28 列（含 25 零用金）完全不動
+        self.assertEqual(copy.values[:10], self.VALUES)
+        labels = [r[0] for r in copy.values]
+        h = labels.index("信用卡消費（bank_sync；不影響上方零用金餘額）")
+        self.assertEqual(h, 11)                                      # 空一列後開始
+        self.assertEqual(labels[h + 1:h + 4], ["信用卡-餐費", "信用卡-其他", "信用卡-交通1"])
+        food, other = labels.index("信用卡-餐費"), labels.index("信用卡-其他")
+        self.assertEqual(copy.values[food][2], "=60")
+        self.assertEqual(copy.values[other][2], "=200")
+        self.assertIn("範例早午餐", copy.notes[(food, 2)])
+        s_row = labels.index("信用卡消費合計（零用金類）")
+        self.assertEqual(copy.values[s_row][2], f"=SUM(C{h + 2}:C{h + 4})")
+        g_row = labels.index("零用金＋信用卡 總支出")
+        self.assertEqual(copy.values[g_row][2], f"=C6+C{s_row + 1}")
+        # 重跑：同一份帳單不重複加
         plan2 = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
         apply_plan(plan2, book, date(2026, 11, 14), applied, None)
-        self.assertEqual(book.worksheet("2026細帳(含信用卡)").values[1][2], "=100+60")
+        self.assertEqual(copy.values[food][2], "=60")
+        self.assertEqual(detail.notes[(9, 2)].count("【星展"), 1)
 
+    def test_notes_only(self):
+        detail, book, files, applied, events = self.run_apply(notes_only=True)
+        self.assertEqual([s.title for s in book.sheets], ["2026細帳"])
+        self.assertIn("加註日期", detail.notes[(9, 2)])
+        self.assertEqual(applied, {})
 
-class FixCashTest(unittest.TestCase):
-    def test_fix_adds_missing_offsets_once(self):
-        from bank_sync.ledger_sync import fix_cash_offsets
-        detail = FakeSheet("2026細帳", ApplyTest.VALUES)
-        book = FakeBook(detail)
-        # 模擬舊版：只加了分類列，沒加 25 列
-        copy = book.duplicate_sheet(1, 1, "2026細帳(含信用卡)")
-        copy.values[1][2] = "=100+60"; copy.values[2][2] = "=200"
-        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
-        applied = {"dbs:dbs.pdf": "2026-11-14"}
-        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
-        log = fix_cash_offsets(plan, book, date(2026, 11, 14), applied)
-        self.assertEqual(copy.values[4][2], "=4000+1000+260")
-        self.assertEqual(copy.values[7][2], "=260")
-        log2 = fix_cash_offsets(plan, book, date(2026, 11, 14), applied)
-        self.assertEqual(copy.values[4][2], "=4000+1000+260")   # 不重複
-        self.assertFalse(any("!C5 零用金" in l for l in log2))     # 金額正確 → 不再改
+    def test_rebuild(self):
+        from bank_sync.ledger_sync import rebuild_copy
+        detail, book, files, applied, events = self.run_apply()
+        book.worksheet("2026細帳(含信用卡)").values[4][2] = "=999"      # 模擬舊版改過 25 列
+        self.assertIn("已刪除", rebuild_copy(book, 2026))
+        self.assertNotIn("2026細帳(含信用卡)", [s.title for s in book.sheets])
 
-
-class TotalFormulaTest(unittest.TestCase):
-    def test_only_rows_in_total_are_offset_and_wrong_offset_corrected(self):
-        from bank_sync.ledger_sync import fix_cash_offsets
-        values = [list(r) for r in ApplyTest.VALUES]
-        values[5] = ["零用金--總支出", "=SUM(B2:B2)", "=SUM(C2:C2)"]   # 總支出只算「餐費」
+    def test_tax_and_insurance_rows(self):
+        from bank_sync.ledger_sync import apply_plan
+        text = TAISHIN.replace("=本期累計應繳金額 1,350", "=本期累計應繳金額 18,868").replace(
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n",
+            "115/10/06 115/10/08 國外交易服務費－491.00 9\n115/06/01 115/10/08 114年度綜所稅款 第05/12期 /TW 16,518  TW\n"
+            "115/09/30 115/11/02 新光人壽保險 第02/12期/TW 1,000  TW\n")
+        values = [list(r) for r in self.VALUES]
+        values[9] = ["信用卡-台新 18", "", ""]
         detail = FakeSheet("2026細帳", values)
         book = FakeBook(detail)
-        copy = book.duplicate_sheet(1, 1, "2026細帳(含信用卡)")
-        # 舊版結果：餐費 +60、其他 +200，25 列錯加了全部 260
-        copy.values[1][2] = "=100+60"; copy.values[2][2] = "=200"; copy.values[4][2] = "=4000+1000+260"
-        copy.notes[(4, 2)] = "【信用卡 2026-11】信用卡消費合計 +260（2 筆；抵銷，現金不變）\n加註日期：2026-11-14（bank_sync）"
-        files = [ParsedFile("dbs", Path("dbs.pdf"), parse("dbs", DBS))]
-        applied = {"dbs:dbs.pdf": "2026-11-14"}
-        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), applied)
-        log = fix_cash_offsets(plan, book, date(2026, 11, 15), applied)
-        self.assertEqual(copy.values[4][2], "=4000+1000+60")         # 只加回總支出有算的 60
-        self.assertIn("+60（1 筆", copy.notes[(4, 2)])
-        self.assertNotIn("+260", copy.notes[(4, 2)])
-        self.assertTrue(any("加總的列：零用金-餐費" in l for l in log))
-        fix_cash_offsets(plan, book, date(2026, 11, 15), applied)    # 再跑不變
-        self.assertEqual(copy.values[4][2], "=4000+1000+60")
+        files = [ParsedFile("taishin", Path("t.pdf"), parse("taishin", text))]
+        plan = build_plan(files, detail.get_values(), date(2026, 11, 14), {})
+        apply_plan(plan, book, date(2026, 11, 14), {}, None)
+        copy = book.worksheet("2026細帳(含信用卡)")
+        labels = [r[0] for r in copy.values]
+        self.assertEqual(copy.values[labels.index("信用卡-綜所稅（不計入合計）")][2], "=16518")
+        self.assertEqual(copy.values[labels.index("信用卡-保費支出（不計入合計）")][2], "=1000")
+        self.assertEqual(copy.values[:10], values)                  # 上方不動
+
+    def test_block_labels(self):
+        from bank_sync.ledger_sync import block_label, SKIP_ROW
+        self.assertEqual(block_label("零用金-公司代墊"), "信用卡-公司代墊")
+        self.assertEqual(block_label("保費支出"), "信用卡-保費支出（不計入合計）")
+        self.assertEqual(block_label(SKIP_ROW), "信用卡-綜所稅（不計入合計）")
 
 
 class GoogleAuthTest(unittest.TestCase):
