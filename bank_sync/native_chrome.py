@@ -75,6 +75,45 @@ def _targets(host: str) -> list[dict]:
     return pages + [t for t in targets if t.get("type") == "iframe"]
 
 
+def _cdp(target: dict, calls: list) -> list:
+    """對同一個分頁依序送多個 CDP 指令，回傳各自結果。"""
+    try:
+        import websocket
+    except ImportError as exc:
+        raise RuntimeError("請先安裝：pip3 install websocket-client") from exc
+    ws = websocket.create_connection(target["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
+    results = []
+    try:
+        for n, (method, params) in enumerate(calls, 1):
+            ws.send(json.dumps({"id": n, "method": method, "params": params}))
+            while True:
+                message = json.loads(ws.recv())
+                if message.get("id") == n:
+                    results.append(message.get("result", {}))
+                    break
+    finally:
+        ws.close()
+    return results
+
+
+def type_into(host: str, field: str, text: str) -> bool:
+    """聚焦已標記的欄位，再用鍵盤事件逐字輸入（跟真的打字一樣會觸發 keydown/keypress/input）。"""
+    targets = _targets(host)
+    if not targets:
+        return False
+    page = targets[0]
+    focus = _cdp(page, [("Runtime.evaluate", {"expression": FOCUS_JS.replace("__FIELD__", json.dumps(field)), "returnByValue": True})])
+    if focus[0].get("result", {}).get("value") != "OK":
+        return False
+    calls = [("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}),
+             ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8})]
+    for ch in text:
+        calls.append(("Input.dispatchKeyEvent", {"type": "keyDown", "key": ch, "text": ch, "unmodifiedText": ch}))
+        calls.append(("Input.dispatchKeyEvent", {"type": "keyUp", "key": ch}))
+    _cdp(page, calls)
+    return True
+
+
 def _run(target: dict, javascript: str) -> str:
     try:
         import websocket
@@ -114,7 +153,7 @@ def evaluate(host: str, javascript: str, every: bool = False):
 
 FILL_JS = r"""
 (() => { try {
-  const creds = __CREDS__;
+  const creds = __FIELDS__;
   const hints = __HINTS__;
   const roots = [];
   const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
@@ -171,19 +210,33 @@ FILL_JS = r"""
     if (!input && field === 'password') input = free().find(e => (e.type || '').toLowerCase() === 'password') || (previous ? free().find(e => below(previous, e)) : null) || null;
     if (!input) { result.missing.push(field); continue; }
     used.add(input);
-    input.removeAttribute('readonly');
-    input.focus();
-    const setter = Object.getOwnPropertyDescriptor(input.ownerDocument.defaultView.HTMLInputElement.prototype, 'value').set;
-    setter.call(input, creds[field]);
-    for (const t of ['input', 'change', 'keyup', 'blur']) input.dispatchEvent(new Event(t, {bubbles: true, composed: true}));
+    input.setAttribute('data-bank-sync', field);
     result.filled.push(field);
     previous = input;
   }
   const captcha = inputs.find(e => !used.has(e) && isCaptcha(e));
-  if (captcha) captcha.focus();
+  if (captcha) captcha.setAttribute('data-bank-sync', 'captcha');
   return JSON.stringify(result);
 } catch (err) { return 'JS_ERROR:' + err; } })()
 """
+
+FOCUS_JS = r"""
+(() => { try {
+  const want = __FIELD__;
+  const roots = [];
+  const walk = r => { roots.push(r); r.querySelectorAll('*').forEach(e => { if (e.shadowRoot) walk(e.shadowRoot); if (e.tagName === 'IFRAME' || e.tagName === 'FRAME') { try { if (e.contentDocument) walk(e.contentDocument); } catch (_) {} } }); };
+  walk(document);
+  const input = roots.flatMap(r => [...r.querySelectorAll('[data-bank-sync]')]).find(e => e.getAttribute('data-bank-sync') === want);
+  if (!input) return 'MISSING';
+  input.removeAttribute('readonly');
+  input.scrollIntoView({block: 'center'});
+  input.focus();
+  input.click();
+  if (input.select) input.select();
+  return 'OK';
+} catch (err) { return 'JS_ERROR:' + err; } })()
+"""
+
 
 STATE_JS = r"""
 (() => { try {
@@ -214,7 +267,8 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
         pass
     open_native(bank.login_url)
     print(f"→ {bank.name}：已開在專用 Chrome 視窗")
-    js = (FILL_JS.replace("__CREDS__", json.dumps(creds, ensure_ascii=False))
+    fields = {k: True for k, v in creds.items() if v and k in ("id_number", "user_code", "password")}
+    js = (FILL_JS.replace("__FIELDS__", json.dumps(fields))
           .replace("__HINTS__", json.dumps(bank.field_hints, ensure_ascii=False)))
     deadline = time.time() + 60
     filled = None
@@ -230,6 +284,15 @@ def native_login(login_key: str, bank_code: str, timeout_s: float = 300) -> bool
             filled = json.loads(output)
             break
         time.sleep(1)
+    if filled is not None:
+        typed = []
+        for field in filled["filled"]:
+            if type_into(bank.host, field, creds[field]):
+                typed.append(field)
+            else:
+                filled["missing"].append(field)
+        filled["filled"] = typed
+        type_into(bank.host, "captcha", "")  # 游標停在驗證碼
     if filled is None:
         print(f"! {bank.name}：找不到登入欄位，請在 Chrome 手動填寫")
     else:
@@ -261,7 +324,7 @@ INSPECT_JS = r"""
     if (!label) { let n = e.parentElement; for (let i = 0; n && i < 4 && !label; i++, n = n.parentElement) label = (n.innerText || '').trim().slice(0, 30); }
     const host = e.getRootNode().host;
     rows.push({frame: ri, tag: e.tagName.toLowerCase(), type: e.type, id: e.id, name: e.name,
-               placeholder: e.placeholder, aria: e.getAttribute('aria-label') || '', readonly: e.readOnly,
+               placeholder: e.placeholder || '', aria: e.getAttribute('aria-label') || '', readonly: e.readOnly,
                visible: !!b, x: b ? Math.round(b.x) : null, y: b ? Math.round(b.y) : null,
                label: (label || '').replace(/\s+/g, ' '), host: host ? host.tagName.toLowerCase() + ' label=' + (host.getAttribute('label') || '') : ''});
   }));
@@ -287,8 +350,9 @@ def inspect_page(bank_code: str) -> None:
         data = json.loads(output)
         print(f"   區塊數={data['roots']}  內嵌框={data['iframes']}")
         for i, r in enumerate(data["rows"]):
-            if r["type"] == "hidden":
+            if r.get("type") == "hidden":
                 continue
-            print(f"   {i:>2} {'可見' if r['visible'] else '隱藏'} {r['tag']}/{r['type']:<9} id={r['id']!r} name={r['name']!r} "
-                  f"placeholder={r['placeholder']!r} aria={r['aria']!r} readonly={r['readonly']} "
-                  f"位置=({r['x']},{r['y']}) 標籤={r['label']!r} 元件={r['host']!r}")
+            g = lambda k: r.get(k, "")
+            print(f"   {i:>2} {'可見' if g('visible') else '隱藏'} {g('tag')}/{str(g('type')):<9} id={g('id')!r} name={g('name')!r} "
+                  f"placeholder={g('placeholder')!r} aria={g('aria')!r} readonly={g('readonly')} "
+                  f"位置=({g('x')},{g('y')}) 標籤={g('label')!r} 元件={g('host')!r}")
