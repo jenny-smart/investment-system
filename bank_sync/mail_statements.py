@@ -88,8 +88,8 @@ def _all_mail_folder(client) -> str:
     return "INBOX"
 
 
-def fetch_statements(months: int = 3, path: Path = DEFAULT_CREDENTIALS_FILE) -> list[dict]:
-    """下載最近 N 個月的信用卡帳單 PDF；已下載過的信不重抓。回傳新下載的清單。"""
+def fetch_statements(months: int = 3, path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = (), force: bool = False) -> list[dict]:
+    """下載最近 N 個月的信用卡帳單 PDF；已下載過的信不重抓（force=True 時重抓）。banks 可限定銀行代碼。"""
     mail = load_section("mail", ("user", "app_password"), path)
     since = _imap_date(date.today() - timedelta(days=31 * months))
     state = _load_state()
@@ -99,13 +99,15 @@ def fetch_statements(months: int = 3, path: Path = DEFAULT_CREDENTIALS_FILE) -> 
         client.login(mail["user"], mail["app_password"].replace(" ", ""))
         client.select(_all_mail_folder(client), readonly=True)
         for source in SOURCES:
+            if banks and source.code not in banks:
+                continue
             _, data = client.search(None, "FROM", f'"{source.sender}"', "SINCE", since)
             for num in (data[0] or b"").split():
                 _, msg_data = client.fetch(num, "(RFC822)")
                 msg = email.message_from_bytes(msg_data[0][1])
                 msg_id = msg.get("Message-ID", "") or f"{source.code}-{num.decode()}"
                 subject = _decode(msg.get("Subject"))
-                if msg_id in state or not subject_matches(source, subject):
+                if (msg_id in state and not force) or not subject_matches(source, subject):
                     continue
                 sent = email.utils.parsedate_to_datetime(msg.get("Date")).date()
                 month = statement_month(subject, sent)
@@ -140,10 +142,12 @@ def open_pdf_text(pdf_path: Path, password: str) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def check_statements(path: Path = DEFAULT_CREDENTIALS_FILE) -> list[dict]:
+def check_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[dict]:
     """用帳密檔裡的 pdf_password 試開已下載的帳單，回報能否讀出文字（不印出帳單內容）。"""
     results = []
     for source in SOURCES:
+        if banks and source.code not in banks:
+            continue
         folder = STATEMENT_DIR / source.name
         pdfs = sorted(folder.glob("*.pdf")) + sorted(folder.glob("*.PDF")) if folder.exists() else []
         if not pdfs:

@@ -69,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
     insp.add_argument("login")
     fetch = sub.add_parser("fetch-statements", help="從信箱下載信用卡電子帳單 PDF 並試開")
     fetch.add_argument("--months", type=int, default=3, help="往回抓幾個月（預設 3）")
+    fetch.add_argument("--bank", action="append", default=[], help="只抓這家（可重複）：fubon taishin sc dbs cathay hsbc ubot")
+    fetch.add_argument("--force", action="store_true", help="已下載過的也重新下載")
     sub.add_parser("check-statements", help="用 pdf_password 試開已下載的帳單")
     imp = sub.add_parser("import-csv")
     imp.add_argument("account"); imp.add_argument("input", type=Path)
@@ -90,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
         inspect_page(login_bank_code(args.login))
     elif args.command == "fetch-statements":
         from .mail_statements import check_statements, fetch_statements
-        fetch_statements(args.months)
-        check_statements()
+        fetch_statements(args.months, banks=tuple(args.bank), force=args.force)
+        check_statements(banks=tuple(args.bank))
     elif args.command == "check-statements":
         from .mail_statements import check_statements
         check_statements()
