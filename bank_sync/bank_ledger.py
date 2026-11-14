@@ -36,6 +36,8 @@ ACCOUNT_ROWS = {
     "台新-Richard": (47, 48, "Richard"),
     "台新-子帳戶": (49, 50, "子帳戶"),
     "台新-內湖新轉": (51, None, "內湖"),
+    "元大": (40, 41, "元大"),
+    "連線": (52, 53, "連線"),
 }
 FX_ROWS = {"人民幣": 83, "日圓": 91, "美元": 90, "南非幣": 92}
 FX_DIVIDEND_ROWS = {"人民幣": 120, "日圓": 121, "美元": 125, "南非幣": 126}
@@ -44,9 +46,9 @@ ROW_STOCK_DIVIDEND = 116
 ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
 ROW_PETTY_ADVANCE = "零用金-代墊"
-OTHER_BANK_ROWS = (("元大", 40), ("LINE Bank", 52), ("連線", 52), ("渣打", 56), ("中國信託", 57), ("中信", 57),
-                   ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
-OWN_BANK_WORDS = ("台新", "richard", "Richart", "富邦", "將來", "8168", "營業部")
+OTHER_BANK_ROWS = (("渣打", 56), ("中國信託", 57), ("中信", 57), ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
+# 已自動抓明細的銀行：互轉時兩邊各自記，不另外記另一邊
+OWN_BANK_WORDS = ("台新", "richard", "Richart", "富邦", "將來", "8168", "營業部", "元大", "LINE Bank", "連線銀行")
 FUND_WORDS = ("新興國家", "新興邊境", "基富通", "基金申購", "申購基金")
 DIVIDEND_WORDS = ("股利", "股息", "折讓", "現金股利")
 FX_DIVIDEND_WORDS = ("配息", "股利", "收益分配", "股息")
@@ -119,7 +121,7 @@ def _blocks(bank: str):
 def load_transactions() -> tuple[list[Tx], list[str]]:
     """讀三家已抓到的明細，轉成統一格式。回傳 (交易, 無法解析的警告)。"""
     out, warn, seen = [], [], set()
-    for bank in ("fubon", "next", "taishin"):
+    for bank in ("fubon", "next", "taishin", "yuanta", "linebank"):
         for block in _blocks(bank):
             head = block.get("head") or []
             for row in block.get("rows") or []:
@@ -146,6 +148,20 @@ def _to_tx(bank: str, block: dict, head: list, row: list) -> Tx | None:
         amount = (in_ or 0) - (out_ or 0)
         note = re.sub(r"\s*更多$", "", get(_col(head, "附註")))
         return Tx(bank, account, "富邦", day, amount, "TWD", get(_col(head, "摘要")), note, key)
+    if bank == "yuanta":
+        out_, in_ = _num(get(_col(head, "支出金額"))), _num(get(_col(head, "存入金額")))
+        if out_ is None and in_ is None:
+            return None
+        return Tx(bank, account, "元大", day, (in_ or 0) - (out_ or 0), "TWD", get(_col(head, "交易說明")),
+                  get(_col(head, "備註")), key)
+    if bank == "linebank":
+        raw = get(_col(head, "金額"))
+        amount = _num(re.sub(r"[^\d.,\-]", "", raw))
+        if amount is None:
+            return None
+        if any(w in raw for w in ("支出", "轉出", "提款", "扣款")) or raw.strip().startswith("-"):
+            amount = -abs(amount)
+        return Tx(bank, account, "連線", day, amount, "TWD", get(_col(head, "摘要")), "", key)
     if bank == "next":
         amount = _num(get(_col(head, "金額")))
         if amount is None:
@@ -271,7 +287,7 @@ def _row_index(labels: list, row) -> int | None:
 
 
 def note_line(t: Tx, amount: float) -> str:
-    who = {"fubon": "富邦", "next": "將來", "taishin": "台新"}[t.bank]
+    who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE"}[t.bank]
     money = f"{amount:+,.2f}" if t.currency != "TWD" else f"{amount:+,.0f}"
     return f"{t.day:%m/%d} {who}{t.account.split(' ')[0]} {t.summary} {t.note} {money}".replace("  ", " ").strip()
 

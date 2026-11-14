@@ -107,7 +107,7 @@ PERIODS = [(7, "7天"), (14, "14天"), (31, "1個月"), (62, "2個月"), (92, "3
 
 
 def parse_day(text: str):
-    m = re.search(r"(\d{2,4})[/\-.](\d{1,2})[/\-.](\d{1,2})", text or "")
+    m = re.search(r"(\d{2,4})\s*[/\-.年]\s*(\d{1,2})\s*[/\-.月]\s*(\d{1,2})", text or "")
     if not m:
         return None
     y = int(m.group(1))

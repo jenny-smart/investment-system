@@ -77,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
     fnx = sub.add_parser("fetch-next", help="將來銀行：查詢主帳戶明細（先存結果文字＋格式樣本）")
     fnx.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fnx.add_argument("--keep-open", action="store_true")
+    for code, label in (("linebank", "LINE Bank"), ("yuanta", "元大")):
+        fx = sub.add_parser(f"fetch-{code}", help=f"{label}：自動查詢交易明細，存在本機")
+        fx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
+        fx.add_argument("--keep-open", action="store_true")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
@@ -136,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date as _date
         from .next_tx import fetch as next_fetch
         next_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command in ("fetch-linebank", "fetch-yuanta"):
+        from datetime import date as _date
+        from .table_tx import fetch as table_fetch
+        table_fetch(args.command.split("-", 1)[1], _date.fromisoformat(args.since) if args.since else None, args.keep_open)
     elif args.command == "bank-ledger":
         from .bank_ledger import run as bank_ledger_run
         bank_ledger_run(args.year, args.apply)

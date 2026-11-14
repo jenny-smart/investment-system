@@ -38,7 +38,7 @@ def test_classify_rules():
     assert e["A 新店分行"].skip and e["B 新店分行"].skip  # 富邦內部互轉相抵
     assert [(p.row, p.amount) for p in e["C 營業部"].postings] == [(38, -7000)]
     assert [(p.row, p.amount) for p in e["台北富邦-X"].postings] == [(54, 7000)]
-    assert [(p.row, p.amount) for p in e["元大銀行-X"].postings] == [(54, 3000), (40, -3000)]
+    assert [(p.row, p.amount) for p in e["元大銀行-X"].postings] == [(54, 3000)]  # 元大也自動抓了：各記各的
     assert [(p.row, p.amount) for p in e["uncle 借款"].postings] == [(54, -50), (95, 50)]
     assert [(p.row, p.amount) for p in e["存款息"].postings] == [(92, 12.5)]  # 外幣利息只加幣別列
     assert [(p.row, p.amount) for p in e["基金"].postings] == [(92, 300), (126, 300)]
