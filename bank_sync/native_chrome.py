@@ -38,26 +38,39 @@ FILL_JS = r"""
     const used = new Set();
     const result = {filled: [], missing: []};
     const squash = t => (t || '').replace(/\s+/g, '');
-    const labels = [...d.querySelectorAll('label,span,div,td,th,p,dt,dd,li,strong,b')]
-      .filter(e => visible(e) && squash(e.innerText).length > 0 && squash(e.innerText).length <= 20);
     const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const candidates = [...d.querySelectorAll('label,span,div,td,th,p,dt,dd,li,strong,b,font')]
+      .filter(e => visible(e) && !e.closest('a,button') && squash(e.innerText).length > 0 && squash(e.innerText).length <= 20);
+    const innermost = w => candidates.filter(e => squash(e.innerText).includes(w)
+      && ![...e.children].some(c => squash(c.innerText).includes(w)));
+    const box = e => e.getBoundingClientRect();
+    const sameRow = (l, i) => { const a = box(l), b = box(i); return Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) < Math.max(a.height, b.height) / 2 + 8; };
+    const forLabel = label => {
+      const free = inputs.filter(e => !used.has(e) && !isCaptcha(e));
+      const row = free.filter(e => sameRow(label, e) && box(e).left >= box(label).left - 4)
+        .sort((x, y) => box(x).left - box(y).left);
+      if (row.length) return row[0];
+      const below = free.filter(e => box(e).top >= box(label).top - 4 && follows(label, e))
+        .sort((x, y) => (box(x).top - box(y).top) || (box(x).left - box(y).left));
+      return below[0] || null;
+    };
     const findFor = words => {
       for (const w of words) {
         const ph = inputs.find(e => !used.has(e) && !isCaptcha(e) && (squash(e.placeholder).includes(w) || squash(e.getAttribute('aria-label')).includes(w)));
         if (ph) return ph;
-        for (const label of labels.filter(e => squash(e.innerText).includes(w) && !e.closest('a,button'))) {
-          const after = inputs.find(e => !used.has(e) && !isCaptcha(e) && follows(label, e));
-          if (after) return after;
+        for (const label of innermost(w)) {
+          const input = forLabel(label);
+          if (input) return input;
         }
       }
       return null;
     };
     let previous = null;
-    const pwdField = creds.password ? (findFor(hints.password || []) || inputs.find(e => (e.type || '').toLowerCase() === 'password')) : null;
+    const pwdField = creds.password ? findFor(hints.password || []) : null;
     for (const field of ['id_number', 'user_code', 'password']) {
       if (!creds[field]) continue;
       let input = field === 'password' && pwdField && !used.has(pwdField) ? pwdField : findFor(hints[field] || []);
-      if (field === 'user_code' && input === pwdField) input = null;
+      if (field !== 'password' && input && input === pwdField) input = null;
       if (!input && field === 'user_code' && previous && pwdField)
         input = inputs.find(e => !used.has(e) && e !== pwdField && !isCaptcha(e) && follows(previous, e) && follows(e, pwdField));
       if (!input && field === 'password') input = inputs.find(e => !used.has(e) && (e.type || '').toLowerCase() === 'password');
