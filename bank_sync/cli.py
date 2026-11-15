@@ -90,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     ba.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc"])
     ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
+    dg = sub.add_parser("diag", help="檢查本機最新明細檔的格式（數字→9、中文→○，可貼給 Claude）")
+    dg.add_argument("bank")
     sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
@@ -187,6 +189,23 @@ def main(argv: list[str] | None = None) -> int:
                 except SystemExit as exc:
                     print(f"⚠️ {code} 沒下載成功：{exc}")
         print(audit(args.year, banks))
+    elif args.command == "diag":
+        import json as _json
+        from .credentials import BANK_DIR
+        from .taishin_tx import _mask_shape, parse_day
+        folder = BANK_DIR / "transactions" / args.bank
+        latest = sorted(folder.glob("2*.json"))[-1]
+        print(f"檔案：{latest.name}")
+        for block in _json.loads(latest.read_text("utf-8")).get("accounts", []):
+            rows = block.get("rows") or []
+            bad = [i for i, r in enumerate(rows) if not (r and parse_day(r[0]))]
+            days = sorted(parse_day(r[0]) for r in rows if r and parse_day(r[0]))
+            print(f"\n[{block.get('type')}] {block.get('account')}：存了 {len(rows)} 筆，日期看不懂 {len(bad)} 筆，"
+                  f"日期範圍 {days[0] if days else '-'} ～ {days[-1] if days else '-'}")
+            print("  欄位：" + " | ".join(block.get("head") or []))
+            for i in sorted(set(list(range(0, 2)) + list(range(28, 33)) + bad[:3])):
+                if i < len(rows):
+                    print(f"  第{i + 1:>3}筆：" + " | ".join(_mask_shape(c) for c in rows[i]))
     elif args.command == "app-password":
         from .app_auth import set_password_cli
         set_password_cli()
