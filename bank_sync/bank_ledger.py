@@ -455,6 +455,8 @@ def plan_cells(entries: list[Entry], formulas: list, labels: list, cols: dict, s
             if not p.note_only:
                 base = values.get(cell, formulas[r][c] if r < len(formulas) and c < len(formulas[r]) else "")
                 amount = round(p.amount, 2) if e.tx.currency != "TWD" else int(round(p.amount))
+                if amount == int(amount):
+                    amount = int(amount)  # 300.0 → 300
                 values[cell] = add_term(base, amount)
             notes.setdefault(cell, []).append(note_line(e.tx, p.amount) + ("（只記備註）" if p.note_only else ""))
     return values, notes, errors
