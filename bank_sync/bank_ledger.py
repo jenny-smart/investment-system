@@ -59,6 +59,8 @@ ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
 ROW_PETTY_ADVANCE = "零用金-代墊"
 ROW_COMPANY_ADVANCE = "零用金-公司代墊"
+ROW_INSURANCE_REBATE = 127  # 回饋金-保險：新光（60,000，每 3 年 120,000）、國泰；公式會自動加進入帳的台新帳戶列
+INSURERS = (("新光", (60000, 120000)), ("國泰人壽", ()), ("國壽", ()), ("國泰", ()))
 OTHER_BANK_ROWS = (("渣打", 56), ("中國信託", 57), ("中信", 57), ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
 # 已自動抓明細的銀行：互轉時兩邊各自記，不另外記另一邊
 OWN_BANK_WORDS = ("台新", "richard", "Richart", "富邦", "將來", "8168", "營業部", "元大", "LINE Bank", "連線銀行")
@@ -371,6 +373,12 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
         elif "利息" in text:
             e.postings = [mine] + ([Posting(interest_row, t.amount)] if interest_row else [])
             e.reason = "利息"
+        elif t.amount > 0 and (ins := next(((w, exp) for w, exp in INSURERS if w in text), None)) and (
+                "保險" in text or "人壽" in text or "國壽" in text or "回饋" in text or "生存" in text or ins[0] == "新光"):
+            e.postings = [Posting(ROW_INSURANCE_REBATE, t.amount)]  # Jenny：只記 127，勿重複加進帳戶列
+            e.reason = "保險回饋金 → 只記 127（帳戶列公式自動帶入）"
+            if ins[1] and int(round(t.amount)) not in ins[1]:
+                e.reason += f"— 金額跟往年（{'／'.join(f'{x:,}' for x in ins[1])}）不同，請確認"
         elif t.amount < 0 and any(w in text for w in CARD_WORDS):
             card = next((r for w, r in CARD_ROWS if w.lower() in low), None)
             if card is None:

@@ -277,3 +277,13 @@ def test_fubon_reimbursement_matches_card():
     assert "彭園" in got["某公司"].reason and "請確認" in got["某公司"].reason
     assert "星全安" in got["某公司B"].reason and "彭園" in got["某公司B"].reason  # 兩筆加起來 3000
     assert [(p.row, p.amount) for p in got["某公司"].postings] == [(38, 2300), ("零用金-公司代墊", -2300)]
+
+
+def test_insurance_rebate_only_row_127():
+    a = tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 7, 60000, "跨行轉入", "新光人壽保險")
+    b = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 9, 135660, "跨行轉入", "國泰人壽 生存金")
+    c = tx("taishin", "****273 敦南Richart二類帳戶", "台新-Richard", 7, 61000, "跨行轉入", "新光人壽保險")
+    got = classify([a, b, c], RULES)
+    assert [(p.row, p.amount) for p in got[0].postings] == [(127, 60000)] and "請確認" not in got[0].reason
+    assert [(p.row, p.amount) for p in got[1].postings] == [(127, 135660)]
+    assert "請確認" in got[2].reason
