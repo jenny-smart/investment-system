@@ -23,6 +23,7 @@ LOG_DIR = BANK_DIR / "_app_logs"
 TX_DIR = BANK_DIR / "transactions" / "taishin"
 STATEMENT_DIR = BANK_DIR / "statements"
 CARD_BANKS = {"fubon": "富邦", "taishin": "台新", "sc": "渣打", "dbs": "星展", "cathay": "國泰世華", "hsbc": "滙豐", "ubot": "聯邦"}
+FETCH_BANKS = {"taishin": "台新", "fubon": "富邦", "next": "將來", "linebank": "LINE Bank", "yuanta": "元大", "sc": "渣打"}
 LOGIN_BANKS = {"taishin": "台新", "fubon": "富邦", "sc": "渣打", "linebank": "LINE Bank", "yuanta": "元大", "next": "將來"}
 
 
@@ -112,10 +113,11 @@ def _latest(folder: Path, pattern: str):
     return files[-1] if files else None
 
 
-def render_taishin_results() -> None:
-    latest = _latest(TX_DIR, "2*.json")
+def render_taishin_results(code: str = "taishin") -> None:
+    folder = BANK_DIR / "transactions" / code
+    latest = _latest(folder, "2*.json")
     if not latest:
-        st.caption("還沒有抓過台新明細。")
+        st.caption(f"還沒有抓過{FETCH_BANKS.get(code, code)}明細。")
         return
     data = json.loads(latest.read_text("utf-8"))
     st.caption(f"最近一次：{latest.name}")
@@ -134,7 +136,7 @@ def render_taishin_results() -> None:
         with st.expander(f"{block['account']}（{len(rows)} 筆）"):
             st.dataframe(pd.DataFrame([r + [""] * (width - len(r)) for r in rows], columns=cols),
                          hide_index=True, use_container_width=True)
-    state_file = TX_DIR / "_state.json"
+    state_file = folder / "_state.json"
     if state_file.exists():
         with st.expander("各帳戶已抓到的最後日期"):
             state = json.loads(state_file.read_text("utf-8"))
@@ -158,6 +160,48 @@ def render_statement_results() -> None:
 
 # ---------- 頁面 ----------
 
+def unlock_gate() -> bool:
+    """進這頁要先輸入密碼（只存雜湊在本機帳密檔）；閒置 15 分鐘自動鎖定。"""
+    import time as _t
+    from bank_sync.app_auth import LOCK_MINUTES, check_password, has_password, set_password
+    now = _t.time()
+    last = st.session_state.get("bank_unlocked_at")
+    if last and now - last < LOCK_MINUTES * 60:
+        st.session_state["bank_unlocked_at"] = now
+        with st.sidebar:
+            if st.button("🔒 鎖定銀行頁", key="bank_lock"):
+                st.session_state.pop("bank_unlocked_at", None)
+                st.rerun()
+        return True
+    st.session_state.pop("bank_unlocked_at", None)
+    if not has_password():
+        st.info("第一次使用：請設定這一頁的進入密碼（只存在你的 Mac，不會上傳）。")
+        with st.form("bank_set_pw"):
+            a = st.text_input("設定密碼", type="password")
+            b = st.text_input("再輸入一次", type="password")
+            if st.form_submit_button("設定"):
+                if a != b:
+                    st.error("兩次不一樣")
+                else:
+                    try:
+                        set_password(a)
+                        st.session_state["bank_unlocked_at"] = now
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+        return False
+    with st.form("bank_login"):
+        pw = st.text_input("請輸入銀行頁密碼", type="password")
+        if st.form_submit_button("進入"):
+            if check_password(pw):
+                st.session_state["bank_unlocked_at"] = now
+                st.rerun()
+            else:
+                st.error("密碼不對")
+    st.caption(f"閒置 {LOCK_MINUTES} 分鐘會自動鎖定。忘記密碼：在 Mac 終端機執行 python3 -m bank_sync app-password 重設。")
+    return False
+
+
 def render_bank_page() -> None:
     st.subheader("銀行帳戶與信用卡")
     if not is_local():
@@ -165,6 +209,8 @@ def render_bank_page() -> None:
         st.caption("銀行帳密和登入用的 Chrome 都只在你的 Mac 上，所以操作在本機頁面進行；這個按鈕只有在你的 Mac 上點才打得開。\n\n"
                    "還沒安裝本機服務的話，在 Mac 終端機執行一次："
                    "`cd ~/Documents/codex-workspace/investment-system-bank && git pull && python3 -m bank_sync app-install`")
+        return
+    if not unlock_gate():
         return
     if os.environ.get("BANK_APP_SERVICE") == "1":
         with st.sidebar:
@@ -174,16 +220,46 @@ def render_bank_page() -> None:
                 from bank_sync.app_service import restart_self
                 restart_self()
 
-    tab_bank, tab_card, tab_login, tab_explore = st.tabs(["台新明細", "信用卡帳單", "登入銀行", "探索新銀行"])
+    tab_bank, tab_ledger, tab_card, tab_login, tab_explore = st.tabs(
+        ["銀行明細", "細帳確認與核對", "信用卡帳單", "登入銀行", "探索新銀行"])
 
     with tab_bank:
-        st.markdown("每個帳戶從**上次抓到的最後一筆日期**查到今天。按下後會開 Chrome，請輸入驗證碼登入，之後會自動查詢並登出。")
+        st.markdown("每個帳戶從**上次抓到的最後一筆日期**查到今天。按下後會開 Chrome，請輸入驗證碼登入，之後自動查詢並登出。")
         c1, c2 = st.columns([1, 2])
         refetch = c1.checkbox("指定起始日重抓", key="tx_refetch")
         since = c2.date_input("起始日", value=date.today().replace(day=1), key="tx_since", disabled=not refetch)
-        if st.button("🔄 抓台新明細", type="primary", key="tx_go"):
-            start_job("抓台新明細", ["fetch-taishin"] + (["--since", since.isoformat()] if refetch else []))
-        render_taishin_results()
+        extra = ["--since", since.isoformat()] if refetch else []
+        cols = st.columns(len(FETCH_BANKS))
+        for col, (code, name) in zip(cols, FETCH_BANKS.items()):
+            if col.button(f"🔄 {name}", key=f"tx_go_{code}", type="primary" if code == "taishin" else "secondary"):
+                start_job(f"抓{name}明細", [f"fetch-{code}"] + extra)
+        show = st.selectbox("顯示哪一家的最近結果", list(FETCH_BANKS), format_func=FETCH_BANKS.get, key="tx_show")
+        render_taishin_results(show)
+
+    with tab_ledger:
+        st.markdown("**確認表**：把抓到、還沒寫進細帳的明細列在總帳「銀行明細確認」分頁（要確認的標黃），並模擬記入後核對銀行餘額。")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("📝 產生確認表＋餘額模擬", key="bl_review", type="primary"):
+            start_job("銀行明細確認表", ["bank-review"])
+        if c2.button("🧪 模擬寫入（不寫）", key="bl_dry"):
+            start_job("模擬寫入細帳", ["bank-ledger"])
+        if c3.button("✍️ 寫入細帳", key="bl_apply"):
+            st.session_state["bl_confirm"] = True
+        if st.session_state.get("bl_confirm"):
+            st.warning("會依確認表寫入 2026細帳與 2026細帳(含信用卡)，模擬餘額對不上會自動停止。")
+            a, b = st.columns(2)
+            if a.button("確定寫入", key="bl_apply_yes", type="primary"):
+                st.session_state["bl_confirm"] = False
+                start_job("寫入細帳", ["bank-ledger", "--apply"])
+            if b.button("取消", key="bl_apply_no"):
+                st.session_state["bl_confirm"] = False
+        st.divider()
+        st.markdown("**全年核對**：複製一份細帳，把沒記到的明細用底色標出（原本細帳不動），另列一張清單。")
+        c1, c2 = st.columns(2)
+        if c1.button("📥 先下載今年富邦／台新／將來，再核對", key="ba_fetch"):
+            start_job("下載全年明細並核對", ["bank-audit", "--fetch"])
+        if c2.button("🔍 用已下載的明細核對", key="ba_go"):
+            start_job("全年核對", ["bank-audit"])
 
     with tab_card:
         st.markdown("從 jenny@hers.com.tw 信箱下載信用卡電子帳單，比對後寫入 2026細帳 備註與「2026細帳(含信用卡)」。")

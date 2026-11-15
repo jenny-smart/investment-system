@@ -256,12 +256,24 @@ def fill_login(page, ctx, bank: WebBank, creds: dict[str, str]) -> tuple[list[st
 # ---------- 判斷是否已登入 ----------
 
 def _fubon_logged_in(page) -> bool:
-    # 參照 tool-system open_login.is_fubon_logged_in：富邦未登入頁首也有「登出」，不能單看文字
+    # 參照 tool-system open_login.is_fubon_logged_in：先看「已登入」的正向訊號，再看未登入訊號。
+    # 富邦未登入頁首也有「登出」，不能單看文字；登入後可能換到新分頁、網址仍是 /common/Index.faces。
     urls = [f.url for f in page.frames]
     if _text_visible(page, "您已成功登出"):
         return False
     if any("/Logout.faces" in u for u in urls) or _text_visible(page, "您上次登入系統時間為"):
         return True
+    for ctx in _contexts(page):
+        try:
+            if ctx.evaluate("() => !!document.getElementById('form1:startDate')"):
+                return True  # 已在交易明細查詢頁
+        except Exception:
+            continue
+    try:  # 頁首「登入」按鈕看得到 = 還沒登入（登出後回到首頁時，頁面裡仍可能留著 /B2C/ 的 iframe）
+        if _first_visible(page.locator('[id="header_form:header_login"]')) is not None:
+            return False
+    except Exception:
+        pass
     if any("/PreLogin.faces" in u for u in urls):
         return False
     return any("/B2C/" in u and "/B2C/common/" not in u for u in urls if u.startswith("http"))
@@ -316,6 +328,17 @@ def open_bank(context, login_key: str, bank_code: str) -> LoginState:
             return state
         filled, missing = fill_login(login_page, ctx, bank, creds)
         state.page, state.filled, state.missing = login_page, tuple(filled), tuple(missing)
+        if bank.submit and not missing:
+            for name in bank.submit:
+                try:
+                    btn = ctx.get_by_role("button", name=name, exact=True)
+                    if btn.count() and btn.first.is_visible():
+                        login_page.wait_for_timeout(500)
+                        btn.first.click(timeout=4000)
+                        print(f"→ {bank.name}：已自動按「{name}」")
+                        break
+                except Exception:
+                    continue
         tip = "請輸入驗證碼並按登入" if bank.captcha else "請確認後按登入"
         extra = f"（找不到欄位：{'、'.join(missing)}，請手動填）" if missing else ""
         print(f"→ {bank.name}：已預填 {len(filled)} 欄，{tip}{extra}")
@@ -327,18 +350,37 @@ def open_bank(context, login_key: str, bank_code: str) -> LoginState:
     return state
 
 
+def _enter_pressed() -> bool:
+    """終端機（或 App 的「繼續」）按了 Enter 沒有；不會卡住等待。"""
+    try:
+        import select
+        import sys
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if ready:
+            sys.stdin.readline()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def wait_for_logins(context, states: list[LoginState], timeout_s: float = 900) -> None:
     deadline = time.time() + timeout_s
+    print("（已經登入、看到帳戶畫面但程式沒反應的話，回到這裡按 Enter）")
     while time.time() < deadline:
         pending = [s for s in states if not s.logged_in]
         if not pending:
             return
+        manual = _enter_pressed()
         for state in pending:
             page = _logged_in_page(context, state.bank)
+            if page is None and manual:
+                pages = _bank_pages(context, state.bank)
+                page = pages[-1] if pages else None
             if page is not None:
                 state.page, state.logged_in = page, True
-                print(f"✓ {state.bank.name}：登入完成")
-        time.sleep(2)
+                print(f"✓ {state.bank.name}：登入完成{'（手動確認）' if manual else ''}")
+        time.sleep(1)
 
 
 def launch_context(playwright):
@@ -372,7 +414,80 @@ LOGOUT_JS = r"""
 }
 """
 LOGOUT_NAMES = ["登出", "安全登出", "登出系統", "立即登出", "Logout", "登出網銀"]
-CONFIRM_NAMES = ["確定登出", "確認登出", "確定", "確認", "是"]
+CONFIRM_NAMES = ["直接登出", "確定登出", "確認登出", "確定", "確認", "是"]
+# 富邦：右上角登出鈕是 header_form:header_logout，按下後彈窗要再按「直接登出」（參照 tool-system fubon_agent.logout_and_close）
+FUBON_LOGOUT = ('[id="header_form:header_logout"]', 'a[onclick*="logout" i]', 'input[value="登出"]')
+
+
+MENU_JS = r"""
+() => {
+  // 右上角三橫線選單鈕：aria-label/title/圖片 alt 寫選單、menu；找不到就點畫面最上方最右邊的按鈕
+  const vis = e => e.getClientRects().length > 0;
+  const label = e => (e.getAttribute('aria-label') || '') + (e.getAttribute('title') || '') +
+    [...e.querySelectorAll('img,svg title')].map(i => i.getAttribute('alt') || i.textContent || '').join('');
+  const clickables = [...document.querySelectorAll('button,a,[role=button],[onclick]')].filter(vis);
+  let hit = clickables.find(e => /選單|menu|Menu|MENU|導覽|功能/.test(label(e)))
+         || clickables.find(e => /^(≡|☰|選單|MENU|Menu)$/.test((e.innerText || '').trim()))
+         || clickables.find(e => /hamburger|menu-btn|menu_btn|btn-menu|nav-toggle|navbar-toggler|menu/i.test(e.className || ''));
+  if (!hit) {
+    const top = clickables.map(e => [e, e.getBoundingClientRect()]).filter(([e, r]) => r.top < 160 && r.width < 120 && r.height < 120);
+    top.sort((a, b) => b[1].right - a[1].right);
+    if (top.length) hit = top[0][0];
+  }
+  if (hit) { hit.click(); return true; }
+  return false;
+}
+"""
+
+
+def drain_stdin() -> None:
+    """丟掉之前多按的 Enter，免得下一個「請按 Enter」被直接跳過。"""
+    while _enter_pressed():
+        pass
+
+
+def open_menu(page) -> bool:
+    """點開右上角三橫線選單（將來銀行的登出、帳戶總覽都在裡面）。"""
+    for ctx in _contexts(page):
+        try:
+            if ctx.evaluate(MENU_JS):
+                page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _logout_fubon(page) -> bool:
+    hit = False
+    for ctx in _contexts(page):
+        for sel in FUBON_LOGOUT:
+            item = _first_visible(ctx.locator(sel))
+            if item is not None:
+                try:
+                    item.click(timeout=5000)
+                except Exception:
+                    item.evaluate("e => e.click()")
+                hit = True
+                break
+        if hit:
+            break
+    if not hit:
+        return False
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        for ctx in _contexts(page):
+            item = _first_visible(ctx.get_by_text("直接登出", exact=True))
+            if item is not None:
+                try:
+                    item.click(timeout=5000)
+                except Exception:
+                    item.evaluate("e => e.click()")
+                page.wait_for_timeout(2500)
+                return not _fubon_logged_in(page)
+        page.wait_for_timeout(300)
+    page.wait_for_timeout(1500)
+    return not _fubon_logged_in(page)
 
 
 def logout(page) -> bool:
@@ -381,6 +496,8 @@ def logout(page) -> bool:
         return False
     try:
         page.on("dialog", lambda d: d.accept())
+        if "taipeifubon" in page.url:
+            return _logout_fubon(page)
         hit = None
         for ctx in _contexts(page):
             try:
@@ -389,6 +506,14 @@ def logout(page) -> bool:
                 hit = None
             if hit:
                 break
+        if not hit and open_menu(page):  # 登出藏在三橫線選單裡（將來銀行）
+            for ctx in _contexts(page):
+                try:
+                    hit = ctx.evaluate(LOGOUT_JS, LOGOUT_NAMES)
+                except Exception:
+                    hit = None
+                if hit:
+                    break
         if not hit:
             return False
         page.wait_for_timeout(1500)

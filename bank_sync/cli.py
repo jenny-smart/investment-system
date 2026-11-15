@@ -71,6 +71,30 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("app-install", help="把銀行帳戶頁裝成 Mac 背景服務（http://localhost:8502，只要做一次）")
     sub.add_parser("app-status", help="看銀行帳戶頁背景服務狀態")
     sub.add_parser("app-uninstall", help="移除銀行帳戶頁背景服務")
+    ffb = sub.add_parser("fetch-fubon", help="富邦：自動查詢臺外幣交易明細，存在本機")
+    ffb.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
+    ffb.add_argument("--keep-open", action="store_true")
+    fnx = sub.add_parser("fetch-next", help="將來銀行：查詢主帳戶明細（先存結果文字＋格式樣本）")
+    fnx.add_argument("--since", help="從哪天開始（預設本月 1 日）")
+    fnx.add_argument("--keep-open", action="store_true")
+    fsc = sub.add_parser("fetch-sc", help="渣打：查詢台幣／外幣明細（目前半自動：請你點到明細頁）")
+    fsc.add_argument("--since", help="從哪天開始（預設本月 1 日）")
+    fsc.add_argument("--keep-open", action="store_true")
+    for code, label in (("linebank", "LINE Bank"), ("yuanta", "元大")):
+        fx = sub.add_parser(f"fetch-{code}", help=f"{label}：自動查詢交易明細，存在本機")
+        fx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
+        fx.add_argument("--keep-open", action="store_true")
+    br = sub.add_parser("bank-review", help="把抓到的銀行明細列在總帳「銀行明細確認」分頁，要確認的標黃")
+    br.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    ba = sub.add_parser("bank-audit", help="全年核對：複製細帳、把沒記到的明細用底色標出（原細帳不動）")
+    ba.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc"])
+    ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
+    sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
+    bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
+    bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
+    bl.add_argument("--force", action="store_true", help="模擬餘額對不上也照寫（不建議）")
     exp = sub.add_parser("explore", help="探索模式：登入後手動點到明細頁，記錄頁面結構（不含金額）")
     exp.add_argument("login")
     insp = sub.add_parser("inspect", help="列出已開啟的銀行登入頁欄位結構（不讀取內容）")
@@ -119,6 +143,56 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command in ("app-install", "app-status", "app-uninstall"):
         from . import app_service
         {"app-install": app_service.install, "app-status": app_service.status, "app-uninstall": app_service.uninstall}[args.command]()
+    elif args.command == "fetch-fubon":
+        from datetime import date as _date
+        from .fubon_tx import fetch as fubon_fetch
+        fubon_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "fetch-next":
+        from datetime import date as _date
+        from .next_tx import fetch as next_fetch
+        next_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "fetch-sc":
+        from datetime import date as _date
+        from .sc_tx import fetch as sc_fetch
+        sc_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command in ("fetch-linebank", "fetch-yuanta"):
+        from datetime import date as _date
+        from .table_tx import fetch as table_fetch
+        table_fetch(args.command.split("-", 1)[1], _date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "bank-review":
+        from .bank_ledger import review
+        review(args.year)
+    elif args.command == "bank-audit":
+        from datetime import date as _date
+        from .bank_ledger import audit
+        banks = tuple(args.bank or ("fubon", "taishin", "next"))
+        if args.fetch:
+            start = _date(args.year, 1, 1)
+            for code in banks:
+                print(f"\n=== 下載 {code} {args.year} 全年明細 ===")
+                try:
+                    if code == "taishin":
+                        from .taishin_tx import fetch as f
+                    elif code == "fubon":
+                        from .fubon_tx import fetch as f
+                    elif code == "next":
+                        from .next_tx import fetch as f
+                    elif code == "sc":
+                        from .sc_tx import fetch as f
+                    else:
+                        from functools import partial
+                        from .table_tx import fetch as tf
+                        f = partial(tf, code)
+                    f(start)
+                except SystemExit as exc:
+                    print(f"⚠️ {code} 沒下載成功：{exc}")
+        print(audit(args.year, banks))
+    elif args.command == "app-password":
+        from .app_auth import set_password_cli
+        set_password_cli()
+    elif args.command == "bank-ledger":
+        from .bank_ledger import run as bank_ledger_run
+        bank_ledger_run(args.year, args.apply, args.force)
     elif args.command == "explore":
         from .explore import explore
         explore(args.login, login_bank_code(args.login))

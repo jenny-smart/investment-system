@@ -22,6 +22,32 @@ BASE = "https://my.taishinbank.com.tw/TIBNetBank/svc/rwd/"
 TWD_URL = BASE + "#/RB0102/0100"
 FX_URL = BASE + "#/RB0802/0100"
 TX_DIR = BANK_DIR / "transactions" / "taishin"
+FX_OVERVIEW_URL = BASE + "#/RB0800/0100"
+FX_BALANCE_FILE = TX_DIR / "_fx_balance.json"
+
+# 外幣總覽：每個外幣帳戶一張表「帳戶別名／幣別／活期存款／定期存款／總計」，表上方有「帳戶名 / 帳號」
+OVERVIEW_JS = r"""
+() => {
+  const vis = e => e.getClientRects().length > 0;
+  const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+  const all = [...document.querySelectorAll('*')];
+  const titles = all.filter(e => vis(e) && e.children.length <= 2 && /^.{2,30}\s*\/\s*[\d*\-]{6,}$/.test(clean(e.innerText)));
+  const out = [];
+  for (const t of document.querySelectorAll('table')) {
+    if (!vis(t)) continue;
+    const head = [...t.querySelectorAll('th')].map(c => clean(c.innerText));
+    if (!(head.includes('幣別') && head.includes('總計') && head.includes('活期存款'))) continue;
+    const before = titles.filter(x => x.compareDocumentPosition(t) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const account = before.length ? clean(before[before.length - 1].innerText) : '';
+    t.querySelectorAll('tbody tr').forEach(r => {
+      if (!vis(r)) return;
+      out.push({account: account, cells: [...r.children].filter(vis).map(c => clean(c.innerText))});
+    });
+  }
+  return out;
+}
+"""
+CURRENCIES = ("人民幣", "日圓", "美元", "南非幣", "歐元", "新加坡幣", "加拿大幣", "港幣", "澳幣", "英鎊", "紐幣", "瑞士法郎")
 
 # 帳戶名稱關鍵字 → 細帳列名稱（沒列到的帳戶照抓，但標「未對應」）
 TWD_ACCOUNTS = {
@@ -107,7 +133,7 @@ PERIODS = [(7, "7天"), (14, "14天"), (31, "1個月"), (62, "2個月"), (92, "3
 
 
 def parse_day(text: str):
-    m = re.search(r"(\d{2,4})[/\-.](\d{1,2})[/\-.](\d{1,2})", text or "")
+    m = re.search(r"(\d{2,4})\s*[/\-.年]\s*(\d{1,2})\s*[/\-.月]\s*(\d{1,2})", text or "")
     if not m:
         return None
     y = int(m.group(1))
@@ -354,6 +380,45 @@ def fetch_fx(page, state: dict, since: date) -> list[dict]:
     return out
 
 
+def fetch_fx_overview(page) -> list[dict]:
+    """外幣總覽：各帳戶各幣別的活期、定期、總計（細帳外幣列＝帳戶加總＋定存）。"""
+    frame = _app_frame(page)
+    if frame is None:
+        return []
+    try:
+        frame.evaluate("h => { window.location.hash = h; }", "#" + FX_OVERVIEW_URL.split("#", 1)[1])
+    except Exception:
+        return []
+    rows = []
+    for _ in range(20):
+        frame.wait_for_timeout(800)
+        try:
+            rows = frame.evaluate(OVERVIEW_JS)
+        except Exception:
+            rows = []
+        if rows:
+            break
+    out = []
+    for r in rows:
+        cells = r["cells"]
+        cur = next((c for c in cells if c in CURRENCIES), None)
+        if cur is None:
+            continue
+        nums = []
+        for c in cells[cells.index(cur) + 1:]:
+            t = c.replace(",", "").strip()
+            try:
+                nums.append(float(t))
+            except ValueError:
+                continue
+        if len(nums) >= 3:
+            name, _, number = r["account"].partition("/")
+            label = f"****{re.sub(chr(92) + 'D', '', number)[-3:]} {name.strip()}"
+            out.append({"account": label, "currency": cur,
+                        "demand": nums[0], "time": nums[1], "total": nums[2]})
+    return out
+
+
 def shape_report(results: list[dict], per_account: int = 4) -> str:
     """給開發對照的格式樣本：摘要保留，其他欄位數字→9、英文→x、中文→○。"""
     lines = []
@@ -378,6 +443,7 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
 
     TX_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
+    problem = ""
     lock = acquire_lock()
     try:
         with sync_playwright() as p:
@@ -397,7 +463,20 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 results += fetch_twd(page, progress, since)
                 print("查詢外幣交易明細…")
                 results += fetch_fx(page, progress, since)
+                print("讀取外幣總覽（各幣別活期＋定存）…")
+                overview = fetch_fx_overview(page)
+                if overview:
+                    FX_BALANCE_FILE.write_text(json.dumps({"at": datetime.now().strftime("%Y-%m-%d %H:%M"), "rows": overview},
+                                                          ensure_ascii=False, indent=1), "utf-8")
+                    os.chmod(FX_BALANCE_FILE, 0o600)
+                    print(f"  外幣總覽：{len(overview)} 列（帳戶×幣別）")
+                else:
+                    print("  ⚠️ 外幣總覽沒讀到")
+            except KeyboardInterrupt:
+                problem = "已中斷（Ctrl+C）"
+                print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
             except Exception as exc:
+                problem = f"中斷：{exc}"
                 print(f"⚠️ 中斷：{exc}")
             if keep_open:
                 input("Chrome 保持開著，按 Enter 關閉…")
@@ -414,4 +493,6 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
     shape_path.write_text(shape_report(results), "utf-8")
     print(f"\n明細（只存在本機）：{raw_path}")
     print(f"格式樣本（可上傳給 Claude）：{shape_path}")
+    from .progress_log import log_run
+    log_run('台新明細', since, TX_DIR, results, problem)
     return raw_path

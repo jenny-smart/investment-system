@@ -31,3 +31,13 @@ def test_keep_new_from_last_date_without_duplicates():
     assert state2["last_date"] == "2026-11-12"
     third, state3 = keep_new(again, state2, date(2026, 11, 2))
     assert third == [] and state3["last_date"] == "2026-11-12"
+
+
+def test_next_parse_lines_synthetic():
+    from bank_sync.next_tx import parse_lines
+    lines = [":::", "主帳戶明細查詢", "剩餘時間: 09分 58秒",
+             "金額新臺幣 $-1,000", "交易類型轉出", "明細描述轉出至測試帳戶", "摘要轉出", "交易時間2026/11/13 11:05", "備註說明無", "帳戶餘額新臺幣 $9,000",
+             "金額新臺幣 $500", "交易類型轉入", "明細描述測試銀行-123", "摘要轉入", "交易時間2026/11/10 15:36", "備註說明uncle", "帳戶餘額新臺幣 $10,000"]
+    rows = parse_lines(lines)
+    assert rows == [["2026/11/13", "11:05", "轉出", "-1,000", "9,000", "轉出至測試帳戶", "", "轉出"],
+                    ["2026/11/10", "15:36", "轉入", "500", "10,000", "測試銀行-123", "uncle", "轉入"]]
