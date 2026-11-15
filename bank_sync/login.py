@@ -385,6 +385,22 @@ def wait_for_logins(context, states: list[LoginState], timeout_s: float = 900) -
         time.sleep(1)
 
 
+def _show_dialogs(context) -> None:
+    """銀行跳出的 alert／confirm（例：「已在其他地方登入，是否繼續？」）：印出訊息並按「確定」。
+    Playwright 預設會按「取消」，富邦這種確認視窗被取消就會登入失敗、閃回未登入畫面。"""
+    def attach(page):
+        def handle(dialog):
+            print(f"  💬 銀行訊息：{dialog.message}（已按確定）")
+            try:
+                dialog.accept()
+            except Exception:
+                pass
+        page.on("dialog", handle)
+    for page in context.pages:
+        attach(page)
+    context.on("page", attach)
+
+
 def launch_context(playwright):
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     # 拿掉「自動化控制中」標記：渣打等銀行偵測到會回 403
@@ -394,6 +410,7 @@ def launch_context(playwright):
     try:
         context = playwright.chromium.launch_persistent_context(channel="chrome", **options)
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        _show_dialogs(context)
         return context
     except Exception as exc:
         if "ProcessSingleton" in str(exc) or "already in use" in str(exc):
@@ -401,6 +418,7 @@ def launch_context(playwright):
         print("找不到 Google Chrome，改用 Playwright Chromium。")
         context = playwright.chromium.launch_persistent_context(**options)
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        _show_dialogs(context)
         return context
 
 
