@@ -92,6 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
     dg = sub.add_parser("diag", help="檢查本機最新明細檔的格式（數字→9、中文→○，可貼給 Claude）")
     dg.add_argument("bank")
+    pb = sub.add_parser("publish", help="把本機銀行明細、信用卡明細寫進總帳「銀行明細」「信用卡明細」分頁（App 網頁看得到）")
+    pb.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
@@ -206,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
             for i in sorted(set(list(range(0, 2)) + list(range(28, 33)) + bad[:3])):
                 if i < len(rows):
                     print(f"  第{i + 1:>3}筆：" + " | ".join(_mask_shape(c) for c in rows[i]))
+    elif args.command == "publish":
+        from .publish import publish
+        publish(args.year)
     elif args.command == "app-password":
         from .app_auth import set_password_cli
         set_password_cli()

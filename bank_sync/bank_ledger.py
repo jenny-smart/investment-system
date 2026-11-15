@@ -742,6 +742,7 @@ def review(year: int) -> str:
     print(f"確認表：{url}")
     print("在「你的確認」選 確認／略過；另一邊要改的，在「改記到」填列號（例 105）或列名（例 零用金-餐費）。")
     print("填好後執行：python3 -m bank_sync bank-ledger --apply")
+    _publish_quietly(year)
     from .progress_log import log_run
     log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆")
     return url
@@ -947,6 +948,15 @@ def print_balance(rows: list[list]) -> int:
     return bad
 
 
+def _publish_quietly(year: int) -> None:
+    """順便更新總帳「銀行明細」「信用卡明細」分頁（App 網頁讀這兩頁）；失敗不影響主流程。"""
+    try:
+        from .publish import publish
+        publish(year)
+    except (Exception, SystemExit) as exc:
+        print(f"（App 用的明細分頁沒更新：{exc}）")
+
+
 def run(year: int, apply: bool = False, force: bool = False) -> Path:
     txs, warn = load_transactions()
     for w in warn[:10]:
@@ -1032,6 +1042,7 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
     write_balance_sheet(book, after)
     if after_bad:
         print(f"⚠️ 寫入後還有 {after_bad} 列跟銀行餘額不同，請看「銀行餘額核對」分頁")
+    _publish_quietly(year)
     from .progress_log import log_run
     banks_done = {}
     for e in entries:

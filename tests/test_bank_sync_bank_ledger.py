@@ -382,3 +382,18 @@ def test_stock_money_rows():
     assert [(p.row, p.amount) for p in got[0].postings] == [(43, -20), ("台股-新資金", 20)]
     assert [(p.row, p.amount) for p in got[1].postings] == [(43, -150000), ("台股-新資金", 150000)]
     assert [(p.row, p.amount) for p in got[2].postings] == [(43, 300000), ("台股-舊資金", -300000)]
+
+
+def test_publish_bank_rows(monkeypatch):
+    import bank_sync.bank_ledger as bl
+    from bank_sync.publish import bank_rows
+    shown = [[""] * 13 for _ in range(60)]
+    shown[0] = ["2026"] + [f"2026-{m:02d}" for m in range(1, 13)]
+    shown[37][0], shown[1][0] = "富邦", "零用金-餐費"
+    a = tx("fubon", "****990 (新店分行)", "富邦", 2, -100, "行動自轉", "早餐")
+    book = AuditBook(AuditWS("2026細帳", shown, [r[:] for r in shown], [[""] * 13 for _ in range(60)]))
+    monkeypatch.setattr(bl, "load_transactions", lambda: ([a], []))
+    monkeypatch.setattr(bl, "card_charges", lambda y: [])
+    monkeypatch.setattr(bl, "load_applied", lambda: set())
+    rows = bank_rows(2026, book)
+    assert rows[1][6] == -100 and rows[1][8] == "38 富邦：-100；零用金-餐費：+100" and rows[1][10] == "待寫入"

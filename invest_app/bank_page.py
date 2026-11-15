@@ -210,8 +210,11 @@ def render_bank_page() -> None:
                    "還沒安裝本機服務的話，在 Mac 終端機執行一次："
                    "`cd ~/Documents/codex-workspace/investment-system-bank && git pull && python3 -m bank_sync app-install`")
         return
-    if not unlock_gate():
-        return
+    render_bank_tools()
+
+
+def render_bank_tools() -> None:
+    """本機操作（不用密碼）：各銀行抓明細、確認表、寫入細帳、全年核對、信用卡、登入、探索。"""
     if os.environ.get("BANK_APP_SERVICE") == "1":
         with st.sidebar:
             st.caption("本機背景服務 http://localhost:8502")
@@ -239,6 +242,8 @@ def render_bank_page() -> None:
     with tab_ledger:
         st.markdown("**確認表**：把抓到、還沒寫進細帳的明細列在總帳「銀行明細確認」分頁（要確認的標黃），並模擬記入後核對銀行餘額。")
         c1, c2, c3 = st.columns(3)
+        if st.button("📤 更新網頁明細（銀行明細／信用卡分頁）", key="bl_publish"):
+            start_job("更新網頁明細", ["publish"])
         if c1.button("📝 產生確認表＋餘額模擬", key="bl_review", type="primary"):
             start_job("銀行明細確認表", ["bank-review"])
         if c2.button("🧪 模擬寫入（不寫）", key="bl_dry"):
