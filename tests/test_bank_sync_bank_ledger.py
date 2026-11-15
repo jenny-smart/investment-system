@@ -396,9 +396,9 @@ def test_publish_bank_rows(monkeypatch):
     monkeypatch.setattr(bl, "card_charges", lambda y: [])
     monkeypatch.setattr(bl, "load_applied", lambda: set())
     rows = bank_rows(2026, book)
-    assert rows[0] == ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
-    assert rows[1][:5] == ["11/02", "富邦", "行動自轉", "", 100]
-    assert rows[1][7] == "富邦:-100" and rows[1][8] == "零用金-餐費 +100" and rows[1][10] == "待寫入"
+    assert rows[0] == ["日期", "銀行", "帳戶", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
+    assert rows[1][:6] == ["11/02", "富邦", "台幣 新店分行", "行動自轉", "", 100]
+    assert rows[1][8] == "富邦:-100" and rows[1][9] == "零用金-餐費 +100" and rows[1][11] == "待寫入"
 
 
 def test_load_dedupes_layout_variants(tmp_path, monkeypatch):
@@ -415,3 +415,9 @@ def test_load_dedupes_layout_variants(tmp_path, monkeypatch):
     (tmp_path / "taishin" / "20261115_1523.json").write_text(json.dumps({"accounts": [a]}), "utf-8")
     txs, _ = bl.load_transactions()
     assert len(txs) == 1 and "Ｕｎｃｌｅ" in txs[0].note
+
+
+def test_fx_bond_fund_buy():
+    t = tx("taishin", "****867 古亭外幣綜存", "台新外幣", 6, -91066, "支出", "IYA5 高盛新興債 FY040000581", "南非幣")
+    e = classify([t], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(92, -91066), (110, 91066)]

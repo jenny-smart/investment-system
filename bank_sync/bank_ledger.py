@@ -386,7 +386,8 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
             own = FX_ROWS.get(t.currency)
             note_up = text.upper()
             is_interest = "利息" in text or re.search(r"\bINT", note_up) is not None  # Jenny：有 INT 就是利息
-            is_fund_buy = re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", note_up) is not None  # 例：0407…ZAR＝投資基金
+            is_fund_buy = (re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", note_up) is not None  # 例：0407…ZAR＝投資基金
+                           or (t.amount < 0 and re.search(r"FY\d{6,}|基金|債", text) is not None))  # 例：IYA5 高盛新興債 FY0400…
             if own is None:
                 e.skip, e.reason = True, f"幣別 {t.currency} 細帳沒有對應列"
             elif is_interest:

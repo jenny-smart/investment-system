@@ -9,7 +9,16 @@ from datetime import datetime
 
 BANK_TITLE = "銀行明細"
 CARD_TITLE = "信用卡明細"
-BANK_HEAD = ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
+BANK_HEAD = ["日期", "銀行", "帳戶", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
+
+
+def account_label(t) -> str:
+    """「****159 建北綜活儲存款」→「台幣 建北綜活儲存款」；「****990 (新店分行)」→「台幣 新店分行」。"""
+    import re
+    name = re.sub(r"\*{2,}\d*", "", t.account or "").replace("(", " ").replace(")", " ")
+    name = re.sub(r"\s+", " ", name).strip() or t.account
+    kind = "台幣" if t.currency == "TWD" else f"外幣{t.currency}"
+    return f"{kind} {name}"
 CARD_HEAD = ["帳單月份", "卡別", "消費日", "店名", "金額（＋消費／−退款）", "零用金分類",
              "記到細帳（列：正負金額）", "狀態"]
 WHO = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE Bank", "sc": "渣打"}
@@ -84,7 +93,7 @@ def bank_rows(year: int, book) -> list[list]:
             state = "待寫入"
         bank_part, other_part = _split_postings(e, labels)
         money = (lambda x: round(x, 2) if t.currency != "TWD" else int(round(x)))
-        rows.append([f"{t.day:%m/%d}", WHO.get(t.bank, t.bank), t.summary + ("" if t.currency == "TWD" else f"（{t.currency}）"),
+        rows.append([f"{t.day:%m/%d}", WHO.get(t.bank, t.bank), account_label(t), t.summary + ("" if t.currency == "TWD" else f"（{t.currency}）"),
                      money(t.amount) if t.amount > 0 else "", money(-t.amount) if t.amount < 0 else "",
                      "" if t.balance is None else t.balance, t.note, bank_part, other_part, e.reason, state])
     return rows
