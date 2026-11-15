@@ -39,8 +39,15 @@ ACCOUNT_ROWS = {
     "台新-內湖新轉": (51, None, "內湖"),
     "元大": (40, 41, "元大"),
     "連線": (52, 53, "連線"),
+    "渣打": (56, None, "渣打"),   # 渣打台幣沒有利息
 }
 FX_ROWS = {"人民幣": 83, "日圓": 91, "美元": 90, "南非幣": 92}
+# 渣打外幣（Jenny 2026-11-15）：外幣利息加在該幣別列；基金投資 107/108；基金配息 123/124；
+# 大華、PYPL 配息有自己的列（列名對照）。配息列的公式會自動加進渣打美金／南非那列，所以只記配息列。
+SC_FX_ROWS = {"美元": 88, "南非幣": 89}
+SC_FUND_ROWS = {"美元": 107, "南非幣": 108}
+SC_DIVIDEND_ROWS = {"美元": 123, "南非幣": 124}
+SC_SPECIAL_DIVIDENDS = (("大華", "配息-渣打-大華"), ("PYPL", "配息-PYPL"), ("PAYPAL", "配息-PYPL"))
 FX_DIVIDEND_ROWS = {"人民幣": 120, "日圓": 121, "美元": 125, "南非幣": 126}
 FUND_ROWS = {"TWD": 105, "人民幣": 104, "日圓": 106}
 FX_FUND_ROWS = {"美元": 109, "南非幣": 110}  # 台新-美金、台新-南非（基金投資）
@@ -132,7 +139,7 @@ def _blocks(bank: str):
 def load_transactions() -> tuple[list[Tx], list[str]]:
     """讀三家已抓到的明細，轉成統一格式。回傳 (交易, 無法解析的警告)。"""
     out, warn, seen = [], [], set()
-    for bank in ("fubon", "next", "taishin", "yuanta", "linebank"):
+    for bank in ("fubon", "next", "taishin", "yuanta", "linebank", "sc"):
         for block in _blocks(bank):
             head = block.get("head") or []
             for row in block.get("rows") or []:
@@ -198,6 +205,14 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
             summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
         return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)
+    if bank == "sc":
+        amount = _num(get(_col(head, "金額")).replace("$", ""))
+        if amount is None:
+            return None
+        if block.get("type") == "FX":
+            cur = block.get("currency", "")
+            return Tx(bank, account, "渣打外幣", day, amount, cur, "", get(_col(head, "摘要說明")), key)
+        return Tx(bank, account, "渣打", day, amount, "TWD", get(_col(head, "摘要")), get(_col(head, "摘要說明")), key)
     if bank == "next":
         amount = _num(get(_col(head, "金額")))
         if amount is None:
@@ -263,6 +278,28 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
         e = Entry(t)
         text = unicodedata.normalize("NFKC", t.text)  # 全形 Ｕｎｃｌｅ → Uncle
         low = text.lower()
+        if t.ledger == "渣打外幣":
+            own = SC_FX_ROWS.get(t.currency)
+            up = text.upper()
+            special = next((label for w, label in SC_SPECIAL_DIVIDENDS if w in up), None)
+            if own is None:
+                e.skip, e.reason = True, f"渣打幣別 {t.currency} 細帳沒有對應列"
+            elif "利息" in text or re.search(r"\bINT", up):
+                e.postings, e.reason = [Posting(own, t.amount)], "渣打外幣利息（加在幣別列）"
+            elif t.amount > 0 and special:
+                e.postings, e.reason = [Posting(own, t.amount), Posting(special, t.amount)], f"{special}"
+            elif t.amount > 0 and any(w in text for w in ("配息", "收益分配", "股利", "基金")):
+                e.postings = [Posting(own, t.amount), Posting(SC_DIVIDEND_ROWS[t.currency], t.amount)]
+                e.reason = "渣打外幣基金配息"
+            elif t.amount < 0 and any(w in text for w in ("基金", "申購", "扣款", "投資")):
+                e.postings = [Posting(own, t.amount), Posting(SC_FUND_ROWS[t.currency], -t.amount)]
+                e.reason = "渣打外幣基金投資"
+            elif pairs.get(t.key):
+                e.postings, e.reason = [Posting(own, t.amount)], "自己帳戶互轉"
+            else:
+                e.postings, e.reason = [Posting(own, t.amount)], "渣打外幣進出 — 另一邊請確認"
+            out.append(e)
+            continue
         if t.ledger == "台新外幣":
             own = FX_ROWS.get(t.currency)
             note_up = text.upper()
@@ -326,6 +363,9 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
             e.postings, e.reason = [mine], "自己帳戶互轉（另一邊明細尚未配對，請確認）"
         else:
             cat, why = categorize(t.note or t.summary, rules)
+            if t.ledger == "富邦" and cat == "零用金-其他":
+                # Jenny：富邦 38 除了基富通配息，多半是代墊款進出，偶爾是個人帳 → 預設代墊，請確認
+                cat, why = ROW_PETTY_ADVANCE, "富邦多為代墊款，請確認"
             e.postings = [mine, Posting(cat, -t.amount)]
             e.reason = ("零用金" if t.amount < 0 else "轉入 → 零用金減項") + f"（{why}）"
         out.append(e)
@@ -344,7 +384,7 @@ def _row_index(labels: list, row) -> int | None:
 
 
 def note_line(t: Tx, amount: float) -> str:
-    who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE"}[t.bank]
+    who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}[t.bank]
     money = f"{amount:+,.2f}" if t.currency != "TWD" else f"{amount:+,.0f}"
     return f"{t.day:%m/%d} {who}{t.account.split(' ')[0]} {t.summary} {t.note} {money}".replace("  ", " ").strip()
 
@@ -539,7 +579,7 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
         t = e.tx
         choice, target = answers.get(_code(t), ("", ""))
         state = ("已記過" if "已記過（細帳" in e.reason else "⚠️ 請確認" if needs_check(e) else ("略過" if e.skip else "自動"))
-        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE"}.get(t.bank, t.bank)
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}.get(t.bank, t.bank)
         money = t.amount if t.currency != "TWD" else int(round(t.amount))
         rows.append([state, t.day.isoformat(), f"{who} {t.account}", t.ledger + ("" if t.currency == "TWD" else f"（{t.currency}）"),
                      money, t.summary, t.note, _describe(e, labels), e.reason, choice, target, _code(t)])
@@ -623,6 +663,8 @@ BALANCE_TITLE = "銀行餘額核對"
 def ledger_row_of(t: Tx) -> int | None:
     if t.ledger == "台新外幣":
         return FX_ROWS.get(t.currency)
+    if t.ledger == "渣打外幣":
+        return SC_FX_ROWS.get(t.currency)
     return ACCOUNT_ROWS.get(t.ledger, (None,))[0]
 
 

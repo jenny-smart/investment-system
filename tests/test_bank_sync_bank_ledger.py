@@ -241,3 +241,27 @@ def test_mark_recorded_fx_time_deposit():
     entries = classify([g, d_in, d_td], RULES)
     mark_recorded(entries, [g, d_in, d_td], numbers, labels, {"2026-11": 11})
     assert all("已記過" in e.reason for e in entries)
+
+
+def test_sc_rules_and_fubon_default():
+    from bank_sync.bank_ledger import _to_tx
+    blk = {"type": "FX", "account": "渣打外幣 美元", "currency": "美元", "ledger_row": "渣打"}
+    head = ["交易時間", "金額", "餘額", "摘要說明"]
+    t1 = _to_tx("sc", blk, head, ["2026/11/12", "$1,200.00", "$5,000.00", "大華基金配息"])
+    t2 = _to_tx("sc", blk, head, ["2026/11/06", "$300.00", "$3,800.00", "基金配息"])
+    t3 = _to_tx("sc", blk, head, ["2026/11/07", "$2.10", "$3,802.10", "存款利息"])
+    t4 = _to_tx("sc", blk, head, ["2026/11/08", "-$1,000.00", "$2,802.10", "基金申購扣款"])
+    f = tx("fubon", "****990 (新店分行)", "富邦", 3, -900, "行動自轉", "某某代付")
+    got = {e.tx.note: e for e in classify([t1, t2, t3, t4, f], RULES)}
+    assert [(p.row, p.amount) for p in got["大華基金配息"].postings] == [(88, 1200), ("配息-渣打-大華", 1200)]
+    assert [(p.row, p.amount) for p in got["基金配息"].postings] == [(88, 300), (123, 300)]
+    assert [(p.row, p.amount) for p in got["存款利息"].postings] == [(88, 2.1)]
+    assert [(p.row, p.amount) for p in got["基金申購扣款"].postings] == [(88, -1000), (107, 1000)]
+    assert [(p.row, p.amount) for p in got["某某代付"].postings] == [(38, -900), ("零用金-代墊", 900)]
+    # 配息列公式會加進渣打美金那列 → 寫入時只記配息列
+    labels = [""] * 140
+    labels[122] = "配息-渣打-美金"
+    formulas = [[""] * 13 for _ in range(140)]
+    formulas[87][11] = "=K88+L123"
+    values, notes, errors = plan_cells([got["基金配息"]], formulas, labels, {"2026-11": 11}, date(2026, 11, 15))
+    assert values == {"L123": "=300"} and errors == []
