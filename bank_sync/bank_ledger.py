@@ -58,6 +58,7 @@ ROW_STOCK_DIVIDEND = 116
 ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
 ROW_PETTY_ADVANCE = "零用金-代墊"
+ROW_COMPANY_ADVANCE = "零用金-公司代墊"
 OTHER_BANK_ROWS = (("渣打", 56), ("中國信託", 57), ("中信", 57), ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
 # 已自動抓明細的銀行：互轉時兩邊各自記，不另外記另一邊
 OWN_BANK_WORDS = ("台新", "richard", "Richart", "富邦", "將來", "8168", "營業部", "元大", "LINE Bank", "連線銀行")
@@ -398,8 +399,8 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
             matched = match_card(t, charges) if (charges and t.amount > 0 and t.ledger == "富邦") else None
             if matched:
                 cards = "、".join(f"{c[0]}卡 {c[1]:%m/%d} {c[2][:10]} {c[3]:,}" for c in matched)
-                e.postings = [mine, Posting(ROW_PETTY_ADVANCE, -t.amount)]
-                e.reason = f"可能是公司匯回刷卡代墊（對到 {cards}）— 請確認另一邊要記哪裡"
+                e.postings = [mine, Posting(ROW_COMPANY_ADVANCE, -t.amount)]  # Jenny：零用金-公司代墊 減項
+                e.reason = f"可能是公司匯回刷卡代墊（對到 {cards}）→ 零用金-公司代墊 減項，請確認"
                 out.append(e)
                 continue
             if t.ledger == "富邦" and cat == "零用金-其他":

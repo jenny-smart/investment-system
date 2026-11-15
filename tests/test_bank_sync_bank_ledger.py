@@ -276,3 +276,4 @@ def test_fubon_reimbursement_matches_card():
     got = {e.tx.note: e for e in classify([one, two], RULES, charges=charges)}
     assert "彭園" in got["某公司"].reason and "請確認" in got["某公司"].reason
     assert "星全安" in got["某公司B"].reason and "彭園" in got["某公司B"].reason  # 兩筆加起來 3000
+    assert [(p.row, p.amount) for p in got["某公司"].postings] == [(38, 2300), ("零用金-公司代墊", -2300)]
