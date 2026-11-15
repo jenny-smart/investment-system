@@ -1112,6 +1112,9 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
             listing.append([month, t.day.isoformat(), line, "", "找不到列", e.reason])
             continue
         own_r = rows[0][0] if rows else None
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}.get(t.bank, t.bank)
+        memo = re.sub(r"\s*\S*分行$|\d{6,}", "", t.note or t.summary).strip()[:12]
+        short = f"{t.day:%m/%d} {who} {memo}"
         col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
         status = []
         for k, (r, p) in enumerate(rows):
@@ -1125,11 +1128,11 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
             elsewhere = _find_in_column(formulas, c, p.amount, {rr for rr, _ in rows})
             if elsewhere:
                 where = "、".join(f"{x + 1} {labels[x]}" for x in elsewhere[:3])
-                mark(r, c, "elsewhere", f"⚠️ {line}：應記在這列，但金額出現在 {where}")
+                mark(r, c, "elsewhere", f"{short} → 在 {where}")
                 status.append(f"{r + 1} 記在別列（{where}）")
             else:
                 kind = "missing_own" if k == 0 else "missing_other"
-                mark(r, c, kind, f"❌ {line}：這列沒找到 {p.amount:+,.2f}".replace(".00", "") + f"（{e.reason}）")
+                mark(r, c, kind, f"{short} 未記 {p.amount:+,.2f}".replace(".00", ""))
                 status.append(f"{r + 1} 沒記")
         bad = any("沒記" in x or "別列" in x for x in status)
         listing.append([month, t.day.isoformat(), line, "；".join(status), "⚠️" if bad else "✓", e.reason])
@@ -1153,7 +1156,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
         if row_no in FX_ROWS.values() or row_no in SC_FX_ROWS.values():
             continue  # 外幣列含定存，用 bank-review 的外幣總覽核對
         if cur is not None and abs(cur - bank) >= 0.5:
-            mark(row_no - 1, c, "balance", f"🔴 {month} 細帳 {cur:,.0f}，銀行最後餘額 {bank:,.0f}，差 {cur - bank:+,.0f}")
+            mark(row_no - 1, c, "balance", f"月底 細帳 {cur:,.0f}／銀行 {bank:,.0f}")
             listing.append([month, "", f"{row_no} {labels[row_no - 1]} 月底餘額", f"細帳 {cur:,.0f}／銀行 {bank:,.0f}", "⚠️", "月底餘額不同"])
 
     # 寫到副本：底色＋備註（保留原本的備註）
@@ -1171,7 +1174,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
     for cell, lines in notes.items():
         r, c = _rc(cell)
         existing = old[r][c] if r < len(old) and c < len(old[r]) else ""
-        merged[cell] = "\n".join(x for x in ("【銀行核對】\n" + "\n".join(lines), existing.strip()) if x)
+        merged[cell] = "\n".join(x for x in ("【核對】" + "；".join(lines), existing.strip()) if x)
     if merged:
         _set_notes(copy, merged)
 
