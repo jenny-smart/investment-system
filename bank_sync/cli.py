@@ -86,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
         fx.add_argument("--keep-open", action="store_true")
     br = sub.add_parser("bank-review", help="把抓到的銀行明細列在總帳「銀行明細確認」分頁，要確認的標黃")
     br.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    ba = sub.add_parser("bank-audit", help="全年核對：複製細帳、把沒記到的明細用底色標出（原細帳不動）")
+    ba.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc"])
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
@@ -157,6 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "bank-review":
         from .bank_ledger import review
         review(args.year)
+    elif args.command == "bank-audit":
+        from .bank_ledger import audit
+        print(audit(args.year, tuple(args.bank or ("fubon", "taishin", "next"))))
     elif args.command == "bank-ledger":
         from .bank_ledger import run as bank_ledger_run
         bank_ledger_run(args.year, args.apply, args.force)

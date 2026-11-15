@@ -202,6 +202,32 @@ def _accounts(page):
     return None, []
 
 
+def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool) -> dict:
+    """選第 i 個帳號、填起訖日、按開始查詢、讀結果。"""
+    frame = _goto_query(page)
+    frame, _ = _accounts(page)
+    frame.evaluate(ACCOUNT_JS, [i])
+    frame.wait_for_timeout(800)  # 選帳號後頁面可能重整
+    frame = _eval_any(page, READY_JS) or frame
+    frame2, _ = _accounts(page)
+    if frame2 is not None:
+        frame = frame2
+        if frame.evaluate("() => { const s=[...document.querySelectorAll('select')].find(s=>[...s.options].some(o=>/請選擇/.test(o.text))); return s ? s.selectedIndex : -1; }") != i:
+            frame.evaluate(ACCOUNT_JS, [i])
+    msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")])
+    if msg != "ok":
+        raise RuntimeError(f"填日期失敗：{msg}")
+    try:
+        before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False) if compare else "null"
+    except Exception:
+        before = "null"
+    if not frame.evaluate(LINK_JS, "開始查詢") and not frame.evaluate(CLICK_JS, ["開始查詢", "查詢"]):
+        raise RuntimeError("找不到「開始查詢」")
+    page.wait_for_timeout(3000)
+    frame = _eval_any(page, READY_JS) or frame
+    return _read_table(frame, before=before)
+
+
 def fetch_all(page, state: dict, since: date) -> list[dict]:
     frame = _goto_query(page)
     frame, options = _accounts(page)
@@ -222,29 +248,18 @@ def fetch_all(page, state: dict, since: date) -> list[dict]:
         kind = "FX" if any(k in label for k in ("外幣", "外匯", "美元", "USD")) else "TWD"
         key = f"{kind}:{name}"
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
-        start = max(start, today - timedelta(days=180))  # 一次最多六個月
-        frame = _goto_query(page)
-        frame, _ = _accounts(page)
-        frame.evaluate(ACCOUNT_JS, [i])
-        frame.wait_for_timeout(800)  # 選帳號後頁面可能重整
-        frame = _eval_any(page, READY_JS) or frame
-        frame2, _ = _accounts(page)
-        if frame2 is not None:
-            frame = frame2
-            frame.evaluate(ACCOUNT_JS, [i]) if frame.evaluate(
-                "() => { const s=[...document.querySelectorAll('select')].find(s=>[...s.options].some(o=>/請選擇/.test(o.text))); return s ? s.selectedIndex : -1; }") != i else None
-        msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")])
-        if msg != "ok":
-            raise RuntimeError(f"填日期失敗：{msg}")
-        try:
-            before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False) if out else "null"
-        except Exception:
-            before = "null"
-        if not frame.evaluate(LINK_JS, "開始查詢") and not frame.evaluate(CLICK_JS, ["開始查詢", "查詢"]):
-            raise RuntimeError("找不到「開始查詢」")
-        page.wait_for_timeout(3000)
-        frame = _eval_any(page, READY_JS) or frame
-        data = _read_table(frame, before=before)
+        start = max(start, today - timedelta(days=364))  # 富邦提供近一年
+        windows, w = [], start
+        while w <= today:  # 每次查詢最多六個月 → 分段查
+            windows.append((w, min(w + timedelta(days=179), today)))
+            w = w + timedelta(days=180)
+        data = {"head": [], "rows": []}
+        for w_start, w_end in windows:
+            part = _query_window(page, i, kind, w_start, w_end, bool(out) or len(windows) > 1)
+            data["head"] = part.get("head") or data["head"]
+            data["rows"] += [r for r in part["rows"] if r not in data["rows"]]
+            if part.get("note"):
+                data["note"] = part["note"]
         if not data["rows"]:
             _debug_snapshot(page, kind)
         total = len(data["rows"])

@@ -1007,3 +1007,146 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
         print("   行事曆：", title, "→",
               calendar_add_once(creds, f"bank_sync:bank:{month}:{stamp}", stamp, title, body))
     return report
+
+
+# ---------------------------------------------------------------- 全年核對（不改細帳，複製一份標顏色）
+
+AUDIT_COLORS = {
+    "missing_other": {"red": 1, "green": 0.92, "blue": 0.45},   # 黃：另一邊沒記
+    "missing_own": {"red": 1, "green": 0.75, "blue": 0.45},     # 橘：帳戶列沒記
+    "elsewhere": {"red": 0.75, "green": 0.88, "blue": 1},       # 藍：記在別列（請看是不是對的）
+    "balance": {"red": 1, "green": 0.6, "blue": 0.6},           # 紅：月底跟銀行餘額不同
+}
+
+
+def _find_in_column(formulas: list, c: int, amount: float, skip_rows: set) -> list[int]:
+    return [r for r in range(len(formulas)) if r not in skip_rows and c < len(formulas[r]) and _has_term(formulas[r][c], amount)]
+
+
+def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
+    """把今年（指定銀行）抓到的每筆明細，對照 {year}細帳：
+    帳戶列有沒有這筆、另一邊（零用金、配息、投資…）有沒有記；月底帳戶列＝銀行餘額嗎。
+    先把 {year}細帳 複製成新工作表，在副本上用底色＋備註標出問題，原本的細帳不動；另外列一張清單。"""
+    txs, warn = load_transactions()
+    txs = [t for t in txs if t.day.year == year and t.bank in banks]
+    if not txs:
+        raise SystemExit(f"本機沒有 {year} 年 {'/'.join(banks)} 的明細，請先用 --since {year}-01-01 抓全年。")
+    entries = classify(txs, charges=card_charges(year))
+    from .google_auth import credentials
+    book = open_book(credentials())
+    src = book.worksheet(f"{year}細帳")
+    shown = src.get_values()
+    labels = [r[0] if r else "" for r in shown]
+    cols = month_columns(shown[0] if shown else [])
+    formulas = src.get_values(value_render_option="FORMULA")
+    numbers = src.get_values(value_render_option="UNFORMATTED_VALUE")
+    stamp = datetime.now()
+    title = f"{year}細帳-銀行核對{stamp:%m%d}"
+    for ws in book.worksheets():
+        if ws.title == title:
+            book.del_worksheet(ws)
+    copy = book.duplicate_sheet(src.id, insert_sheet_index=src.index + 1, new_sheet_name=title)
+
+    marks, notes, listing = {}, {}, []
+
+    priority = {"balance": 4, "missing_own": 3, "missing_other": 2, "elsewhere": 1}
+
+    def mark(r: int, c: int, kind: str, text: str):
+        cell = a1(r, c)
+        if priority[kind] > priority.get(marks.get(cell), 0):
+            marks[cell] = kind
+        notes.setdefault(cell, []).append(text)
+
+    for e in entries:
+        t = e.tx
+        month = f"{t.day:%Y-%m}"
+        c = cols.get(month)
+        line = note_line(t, t.amount)
+        if c is None or e.skip or not e.postings:
+            listing.append([month, t.day.isoformat(), line, "", "略過" if e.skip else "", e.reason])
+            continue
+        rows = [(_row_index(labels, p.row), p) for p in e.postings if not p.note_only]
+        if any(r is None for r, _ in rows):
+            listing.append([month, t.day.isoformat(), line, "", "找不到列", e.reason])
+            continue
+        own_r = rows[0][0] if rows else None
+        col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
+        status = []
+        for k, (r, p) in enumerate(rows):
+            f = formulas[r][c] if r < len(formulas) and c < len(formulas[r]) else ""
+            if _has_term(f, p.amount):
+                status.append(f"{r + 1} 已記")
+                continue
+            if k == 0 and len(rows) > 1 and any(_linked_sign(f, col_letter, rr + 1) for rr, _ in rows[1:]):
+                status.append(f"{r + 1} 公式帶入")
+                continue
+            elsewhere = _find_in_column(formulas, c, p.amount, {rr for rr, _ in rows})
+            if elsewhere:
+                where = "、".join(f"{x + 1} {labels[x]}" for x in elsewhere[:3])
+                mark(r, c, "elsewhere", f"⚠️ {line}：應記在這列，但金額出現在 {where}")
+                status.append(f"{r + 1} 記在別列（{where}）")
+            else:
+                kind = "missing_own" if k == 0 else "missing_other"
+                mark(r, c, kind, f"❌ {line}：這列沒找到 {p.amount:+,.2f}".replace(".00", "") + f"（{e.reason}）")
+                status.append(f"{r + 1} 沒記")
+        bad = any("沒記" in x or "別列" in x for x in status)
+        listing.append([month, t.day.isoformat(), line, "；".join(status), "⚠️" if bad else "✓", e.reason])
+
+    # 月底餘額：每個帳戶列，該月最後一筆交易後的銀行餘額 vs 細帳
+    by_row = {}
+    for t in sorted(txs, key=lambda x: x.when):
+        r = ledger_row_of(t)
+        if r is None or t.balance is None:
+            continue
+        by_row.setdefault((r, f"{t.day:%Y-%m}"), {})[t.account + t.currency] = t.balance
+    carry = {}
+    for (row_no, month) in sorted(by_row, key=lambda k: (k[0], k[1])):
+        acct = carry.setdefault(row_no, {})
+        acct.update(by_row[(row_no, month)])
+        c = cols.get(month)
+        if c is None or row_no - 1 >= len(numbers) or c >= len(numbers[row_no - 1]):
+            continue
+        cur = _num(str(numbers[row_no - 1][c]))
+        bank = sum(acct.values())
+        if row_no in FX_ROWS.values() or row_no in SC_FX_ROWS.values():
+            continue  # 外幣列含定存，用 bank-review 的外幣總覽核對
+        if cur is not None and abs(cur - bank) >= 0.5:
+            mark(row_no - 1, c, "balance", f"🔴 {month} 細帳 {cur:,.0f}，銀行最後餘額 {bank:,.0f}，差 {cur - bank:+,.0f}")
+            listing.append([month, "", f"{row_no} {labels[row_no - 1]} 月底餘額", f"細帳 {cur:,.0f}／銀行 {bank:,.0f}", "⚠️", "月底餘額不同"])
+
+    # 寫到副本：底色＋備註（保留原本的備註）
+    reqs = []
+    for cell, kind in marks.items():
+        r, c = _rc(cell)
+        reqs.append({"repeatCell": {"range": {"sheetId": copy.id, "startRowIndex": r, "endRowIndex": r + 1,
+                                              "startColumnIndex": c, "endColumnIndex": c + 1},
+                                    "cell": {"userEnteredFormat": {"backgroundColor": AUDIT_COLORS[kind]}},
+                                    "fields": "userEnteredFormat.backgroundColor"}})
+    if reqs:
+        book.batch_update({"requests": reqs})
+    old = copy.get_notes()
+    merged = {}
+    for cell, lines in notes.items():
+        r, c = _rc(cell)
+        existing = old[r][c] if r < len(old) and c < len(old[r]) else ""
+        merged[cell] = "\n".join(x for x in ("【銀行核對】\n" + "\n".join(lines), existing.strip()) if x)
+    if merged:
+        _set_notes(copy, merged)
+
+    # 清單分頁
+    list_title = f"銀行核對清單{stamp:%m%d}"
+    for ws in book.worksheets():
+        if ws.title == list_title:
+            book.del_worksheet(ws)
+    lst = book.add_worksheet(list_title, rows=len(listing) + 10, cols=6)
+    head = ["月份", "日期", "交易", "細帳情況", "結果", "依據"]
+    body = sorted(listing, key=lambda x: (x[4] != "⚠️", x[0], x[1]))
+    lst.update([head] + body, "A1", value_input_option="RAW")
+    n_bad = sum(1 for x in listing if x[4] == "⚠️")
+    print(f"核對 {len(entries)} 筆：有問題 {n_bad} 筆，標色 {len(marks)} 格")
+    print(f"細帳副本（標色）：{title}")
+    print(f"清單：{list_title}（有問題的排最上面）")
+    print("顏色：黃＝另一邊沒記、橘＝帳戶列沒記、藍＝金額記在別列、紅＝月底跟銀行餘額不同")
+    from .progress_log import log_run
+    log_run("銀行明細全年核對", None, f"總帳「{title}」", [], message=f"{year} {'/'.join(banks)}｜核對 {len(entries)} 筆｜有問題 {n_bad} 筆")
+    return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={copy.id}"

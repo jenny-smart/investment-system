@@ -287,3 +287,76 @@ def test_insurance_rebate_only_row_127():
     assert [(p.row, p.amount) for p in got[0].postings] == [(127, 60000)] and "請確認" not in got[0].reason
     assert [(p.row, p.amount) for p in got[1].postings] == [(127, 135660)]
     assert "請確認" in got[2].reason
+
+
+class AuditWS:
+    def __init__(self, title, shown, formulas, numbers, wid=1, index=0):
+        self.title, self.shown, self.formulas, self.numbers = title, shown, formulas, numbers
+        self.id, self.index, self.notes, self.rows = wid, index, {}, None
+
+    def get_values(self, value_render_option=None):
+        return {"FORMULA": self.formulas, "UNFORMATTED_VALUE": self.numbers}.get(value_render_option, self.shown)
+
+    def get_notes(self):
+        return [[""] * 13 for _ in range(len(self.shown))]
+
+    def update_notes(self, notes):
+        self.notes.update(notes)
+
+    def update(self, rows, a1, value_input_option=None):
+        self.rows = rows
+
+
+class AuditBook:
+    id = "BOOK"
+
+    def __init__(self, ws):
+        self.sheets, self.reqs = [ws], []
+
+    def worksheet(self, title):
+        return next(w for w in self.sheets if w.title == title)
+
+    def worksheets(self):
+        return list(self.sheets)
+
+    def del_worksheet(self, ws):
+        self.sheets.remove(ws)
+
+    def duplicate_sheet(self, sid, insert_sheet_index, new_sheet_name):
+        src = self.sheets[0]
+        w = AuditWS(new_sheet_name, src.shown, src.formulas, src.numbers, wid=99)
+        self.sheets.append(w)
+        return w
+
+    def add_worksheet(self, title, rows, cols):
+        w = AuditWS(title, [], [], [], wid=100)
+        self.sheets.append(w)
+        return w
+
+    def batch_update(self, body):
+        self.reqs += body["requests"]
+
+
+def test_audit_marks_missing(monkeypatch):
+    import bank_sync.bank_ledger as bl
+    shown = [[""] * 13 for _ in range(60)]
+    shown[0] = ["2026"] + [f"2026-{m:02d}" for m in range(1, 13)]
+    shown[37][0], shown[1][0], shown[21][0] = "富邦", "零用金-餐費", "零用金-代墊"
+    formulas = [r[:] for r in shown]
+    numbers = [[""] * 13 for _ in range(60)]
+    formulas[37][11], numbers[37][11] = "=1000-100-200", 700     # 兩筆支出都記了
+    formulas[1][11] = "=100"                                       # 早餐有記到餐費
+    a = tx("fubon", "****990 (新店分行)", "富邦", 2, -100, "行動自轉", "早餐")
+    b = tx("fubon", "****990 (新店分行)", "富邦", 3, -200, "行動自轉", "不明款")
+    a.balance, a.when, b.balance, b.when = 900, "2026-11-02 08:00", 700, "2026-11-03 08:00"
+    book = AuditBook(AuditWS("2026細帳", shown, formulas, numbers))
+    monkeypatch.setattr(bl, "load_transactions", lambda: ([a, b], []))
+    monkeypatch.setattr(bl, "card_charges", lambda y: [])
+    monkeypatch.setattr(bl, "open_book", lambda c: book)
+    monkeypatch.setattr("bank_sync.google_auth.credentials", lambda: None)
+    monkeypatch.setattr("bank_sync.progress_log.log_run", lambda *a, **k: None)
+    bl.audit(2026, ("fubon",))
+    copy = book.sheets[1]
+    assert "L22" in copy.notes and "不明款" in copy.notes["L22"]   # 代墊那列沒記 → 標黃
+    assert "L2" not in copy.notes and "L38" not in copy.notes      # 已記、餘額相符 → 不標
+    assert len(book.reqs) == 1
