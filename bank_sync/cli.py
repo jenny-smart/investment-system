@@ -89,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     ba = sub.add_parser("bank-audit", help="全年核對：複製細帳、把沒記到的明細用底色標出（原細帳不動）")
     ba.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc"])
+    ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
+    sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     bl.add_argument("--apply", action="store_true", help="確認比對結果後才加：寫入總帳並發行事曆")
@@ -161,8 +163,33 @@ def main(argv: list[str] | None = None) -> int:
         from .bank_ledger import review
         review(args.year)
     elif args.command == "bank-audit":
+        from datetime import date as _date
         from .bank_ledger import audit
-        print(audit(args.year, tuple(args.bank or ("fubon", "taishin", "next"))))
+        banks = tuple(args.bank or ("fubon", "taishin", "next"))
+        if args.fetch:
+            start = _date(args.year, 1, 1)
+            for code in banks:
+                print(f"\n=== 下載 {code} {args.year} 全年明細 ===")
+                try:
+                    if code == "taishin":
+                        from .taishin_tx import fetch as f
+                    elif code == "fubon":
+                        from .fubon_tx import fetch as f
+                    elif code == "next":
+                        from .next_tx import fetch as f
+                    elif code == "sc":
+                        from .sc_tx import fetch as f
+                    else:
+                        from functools import partial
+                        from .table_tx import fetch as tf
+                        f = partial(tf, code)
+                    f(start)
+                except SystemExit as exc:
+                    print(f"⚠️ {code} 沒下載成功：{exc}")
+        print(audit(args.year, banks))
+    elif args.command == "app-password":
+        from .app_auth import set_password_cli
+        set_password_cli()
     elif args.command == "bank-ledger":
         from .bank_ledger import run as bank_ledger_run
         bank_ledger_run(args.year, args.apply, args.force)
