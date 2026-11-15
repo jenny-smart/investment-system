@@ -107,14 +107,18 @@ def _click(*names) -> bool:
     return bool(_eval(_js(CLICK_BODY, NAMES=list(names))))
 
 
-def _wait_page(path_part: str, label: str) -> None:
+def _wait_page(path_part: str, label: str, need) -> None:
+    """等到真的在明細頁（網址對、而且看得到明細表格或日期欄）才往下做。"""
     from .login import drain_stdin
-    for _ in range(3):
-        if path_part in _eval(_js(URL_BODY)):
+    for attempt in range(5):
+        url = _eval(_js(URL_BODY))
+        if path_part in url:
             return
+        drain_stdin()
+        hint = "台幣活存 → 點帳戶 → 交易明細" if "TWD" in path_part else "外幣活存 → 點帳戶／幣別 → 交易明細"
+        input(f"  請在渣打專用 Chrome 點到「{label}」（{hint}），看到「查詢」按鈕後回到這裡按 Enter：")
         time.sleep(1)
-    drain_stdin()
-    input(f"  請在渣打專用 Chrome 點到「{label}」頁（帳戶綜覽 → 該帳戶），回到這裡按 Enter：")
+    raise RuntimeError(f"一直沒到「{label}」頁（目前網址 {_eval(_js(URL_BODY)).split('?')[0]}）")
 
 
 def _query(kind, names, need, start: date) -> dict:
@@ -123,8 +127,8 @@ def _query(kind, names, need, start: date) -> dict:
     before = json.dumps(_read(need), ensure_ascii=False)
     _click("查詢")
     data = {"head": [], "rows": []}
-    for _ in range(25):
-        time.sleep(0.8)
+    for _ in range(12):  # 每 1.5 秒看一次就好（看太勤渣打網頁會變頓）
+        time.sleep(1.5)
         data = _read(need)
         if (data["rows"] and json.dumps(data, ensure_ascii=False) != before) or data.get("nodata"):
             break
@@ -174,7 +178,7 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
         for kind, path_part, names, need, label in PAGES:
             more = True
             while more:
-                _wait_page(path_part, label)
+                _wait_page(path_part, label, need)
                 data = _query(kind, names, need, max(since, date.today() - timedelta(days=180)))
                 cur = CURRENCY_CODES.get(data["currency"], data["currency"]) if kind == "FX" else "TWD"
                 key = f"{kind}:{cur}"
