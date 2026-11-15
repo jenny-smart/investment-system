@@ -399,3 +399,19 @@ def test_publish_bank_rows(monkeypatch):
     assert rows[0] == ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
     assert rows[1][:5] == ["11/02", "富邦", "行動自轉", "", 100]
     assert rows[1][7] == "富邦:-100" and rows[1][8] == "零用金-餐費 +100" and rows[1][10] == "待寫入"
+
+
+def test_load_dedupes_layout_variants(tmp_path, monkeypatch):
+    import json
+    import bank_sync.bank_ledger as bl
+    monkeypatch.setattr(bl, "TX_ROOT", tmp_path)
+    (tmp_path / "taishin").mkdir()
+    blk = {"type": "TWD", "account": "****273 敦南Richart二類帳戶", "ledger_row": "台新-Richard"}
+    a = dict(blk, head=["交易日", "帳務日", "摘要", "金額", "餘額", "備註", ""],
+             rows=[["2026/11/13 11:05:00", "2026/11/13", "CD轉出", "-60,000", "91,418", "", "交易明細"]])
+    b = dict(blk, head=["交易日", "帳務日", "摘要", "詳細", "", "金額", "餘額", "備註"],
+             rows=[["2026/11/13 11:05:00", "2026/11/13", "CD轉出", "金額 -60,000 餘額 91,418 備註 網路跨行 Ｕｎｃｌｅ", "交易明細"]])
+    (tmp_path / "taishin" / "20261115_1540.json").write_text(json.dumps({"accounts": [b]}), "utf-8")
+    (tmp_path / "taishin" / "20261115_1523.json").write_text(json.dumps({"accounts": [a]}), "utf-8")
+    txs, _ = bl.load_transactions()
+    assert len(txs) == 1 and "Ｕｎｃｌｅ" in txs[0].note

@@ -33,11 +33,16 @@ STATE_ORDER = ["待確認", "待寫入", "已寫入細帳", "細帳已有", "略
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _load(sheet: str) -> pd.DataFrame:
-    rows = gviz_values(MAIN_GOOGLE_SHEET_ID, sheet, "A1:L8000")
-    if not rows or len(rows) < 2:
-        return pd.DataFrame()
-    head = [str(h) for h in rows[0]]
-    return pd.DataFrame(rows[1:], columns=head)
+    """用 CSV 匯出讀（gviz 會猜欄位型態，混合欄位的少數值會變空白）。"""
+    import io
+    import requests
+    response = requests.get(f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/gviz/tq",
+                            params={"tqx": "out:csv", "sheet": sheet, "headers": "1"}, timeout=30)
+    response.raise_for_status()
+    if "<html" in response.text[:200].lower():
+        raise RuntimeError("Google Sheet 讀取失敗（權限？）")
+    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+    return df
 
 
 def _amount_col(df: pd.DataFrame) -> str:
@@ -53,12 +58,19 @@ def _signed_money(v) -> str:
     return text
 
 
+def _reload_button(key: str) -> None:
+    if st.button("🔄 重新讀取", key=key):
+        _load.clear()
+        st.rerun()
+
+
 def render_bank_detail_page() -> None:
     st.subheader("銀行明細")
+    _reload_button("bd_reload")
     try:
         df = _load("銀行明細")
     except Exception as exc:
-        st.warning(f"讀不到總帳「銀行明細」分頁：{exc}")
+        st.warning(f"讀不到總帳「銀行明細」分頁：{type(exc).__name__}: {exc}")
         df = pd.DataFrame()
     if df.empty:
         st.info("還沒有資料。請在 Mac 執行一次：`python3 -m bank_sync publish`（會把已下載的銀行明細整理進總帳）。")
@@ -106,10 +118,11 @@ def render_bank_detail_page() -> None:
 
 def render_card_detail_page() -> None:
     st.subheader("信用卡明細")
+    _reload_button("cd_reload")
     try:
         df = _load("信用卡明細")
     except Exception as exc:
-        st.warning(f"讀不到總帳「信用卡明細」分頁：{exc}")
+        st.warning(f"讀不到總帳「信用卡明細」分頁：{type(exc).__name__}: {exc}")
         return
     if df.empty:
         st.info("還沒有資料。請在 Mac 執行一次：`python3 -m bank_sync publish`。")

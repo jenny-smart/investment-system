@@ -145,7 +145,7 @@ def _blocks(bank: str):
 
 def load_transactions() -> tuple[list[Tx], list[str]]:
     """讀三家已抓到的明細，轉成統一格式。回傳 (交易, 無法解析的警告)。"""
-    out, warn, seen = [], [], set()
+    out, warn, seen, keys = [], [], {}, set()
     for bank in ("fubon", "next", "taishin", "yuanta", "linebank", "sc"):
         for block in _blocks(bank):
             head = block.get("head") or []
@@ -156,9 +156,22 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 if tx is None:
                     warn.append(f"{bank} {block.get('account')}：看不懂這筆格式 {len(row)} 欄")
                     continue
-                if tx.key not in seen:
-                    seen.add(tx.key)
-                    out.append(tx)
+                # 同一筆交易可能在不同次下載、不同表格版面各存了一次（欄位排法不同）：
+                # 用「銀行＋時間＋金額＋餘額」認同一筆；備註空白的那份用有備註的補上
+                ident = (bank, tx.when, round(tx.amount, 2), None if tx.balance is None else round(tx.balance, 2),
+                         tx.currency, tx.ledger)
+                if tx.balance is None:
+                    ident = ident + (tx.key,)
+                if ident in seen:
+                    first = seen[ident]
+                    if not first.note and tx.note:
+                        first.note = tx.note
+                    continue
+                if tx.key in keys:
+                    continue
+                seen[ident] = tx
+                keys.add(tx.key)
+                out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
     return out, warn
 
