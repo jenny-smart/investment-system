@@ -110,6 +110,14 @@ def _click(*names) -> bool:
 def _wait_page(path_part: str, label: str, need) -> None:
     """等到真的在明細頁（網址對、而且看得到明細表格或日期欄）才往下做。"""
     from .login import drain_stdin
+    tab = "台幣活存" if "TWD" in path_part else "外幣活存"
+    for _ in range(2):  # 自動：帳戶綜覽（/scb/accOverview/savingTWD 或 savingForeign）→ 分頁 → 帳戶的「交易明細」
+        if path_part in _eval(_js(URL_BODY)):
+            return
+        _click(tab)
+        time.sleep(3)
+        _click("交易明細", "明細查詢", "查詢明細", "帳戶明細", "交易明細查詢", "明細")
+        time.sleep(3)
     for attempt in range(5):
         url = _eval(_js(URL_BODY))
         if path_part in url:
