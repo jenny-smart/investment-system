@@ -77,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     fnx = sub.add_parser("fetch-next", help="將來銀行：查詢主帳戶明細（先存結果文字＋格式樣本）")
     fnx.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fnx.add_argument("--keep-open", action="store_true")
+    fsc = sub.add_parser("fetch-sc", help="渣打：查詢台幣／外幣明細（目前半自動：請你點到明細頁）")
+    fsc.add_argument("--since", help="從哪天開始（預設本月 1 日）")
+    fsc.add_argument("--keep-open", action="store_true")
     for code, label in (("linebank", "LINE Bank"), ("yuanta", "元大")):
         fx = sub.add_parser(f"fetch-{code}", help=f"{label}：自動查詢交易明細，存在本機")
         fx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01")
@@ -143,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date as _date
         from .next_tx import fetch as next_fetch
         next_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "fetch-sc":
+        from datetime import date as _date
+        from .sc_tx import fetch as sc_fetch
+        sc_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
     elif args.command in ("fetch-linebank", "fetch-yuanta"):
         from datetime import date as _date
         from .table_tx import fetch as table_fetch
