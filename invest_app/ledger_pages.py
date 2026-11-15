@@ -64,13 +64,13 @@ def render_bank_detail_page() -> None:
         st.info("還沒有資料。請在 Mac 執行一次：`python3 -m bank_sync publish`（會把已下載的銀行明細整理進總帳）。")
     else:
         amt = _amount_col(df)
-        df["月份"] = df["日期"].astype(str).str[:7]
+        df["月份"] = df["日期"].astype(str).str[:2] + "月"
         c1, c2, c3, c4 = st.columns([2, 1, 2, 2])
         banks = c1.multiselect("銀行", sorted(df["銀行"].unique()), key="bd_bank")
         months = ["全部"] + sorted(df["月份"].unique(), reverse=True)
         month = c2.selectbox("月份", months, key="bd_month")
         states = c3.multiselect("狀態", [s for s in STATE_ORDER if s in set(df["狀態"])], key="bd_state")
-        keyword = c4.text_input("搜尋（摘要／備註／記到）", key="bd_kw")
+        keyword = c4.text_input("搜尋（摘要／備註／其他）", key="bd_kw")
         view = df
         if banks:
             view = view[view["銀行"].isin(banks)]
@@ -79,7 +79,8 @@ def render_bank_detail_page() -> None:
         if states:
             view = view[view["狀態"].isin(states)]
         if keyword:
-            mask = view[["摘要", "備註", "記到細帳（列：正負金額）", "依據"]].astype(str).apply(
+            cols_ = [c for c in ("摘要", "備註", "銀行（細帳）", "其他", "依據") if c in view.columns]
+            mask = view[cols_].astype(str).apply(
                 lambda col: col.str.contains(keyword, case=False, regex=False)).any(axis=1)
             view = view[mask]
         counts = view["狀態"].value_counts()
@@ -87,12 +88,18 @@ def render_bank_detail_page() -> None:
         for col, name in zip(cols, STATE_ORDER):
             col.metric(name, int(counts.get(name, 0)))
         show = view.drop(columns=["月份"]).copy()
+        for c in ("收入", "支出", "餘額"):
+            if c in show.columns:
+                show[c] = pd.to_numeric(show[c].astype(str).str.replace(",", ""), errors="coerce")
         if amt:
             show[amt] = show[amt].map(_signed_money)
         st.dataframe(show, hide_index=True, use_container_width=True, height=560,
-                     column_config={"記到細帳（列：正負金額）": st.column_config.TextColumn(width="large"),
+                     column_config={"其他": st.column_config.TextColumn(width="large"),
+                                    "收入": st.column_config.NumberColumn(format="%,.2f"),
+                                    "支出": st.column_config.NumberColumn(format="%,.2f"),
+                                    "餘額": st.column_config.NumberColumn(format="%,.2f"),
                                     "依據": st.column_config.TextColumn(width="medium")})
-        st.caption("「記到細帳」：列號／列名後面是要加的正負金額；帳戶列公式已帶入的（例 116 加進建北）只會記另一邊。"
+        st.caption("「銀行（細帳）」「其他」：記到細帳哪一列、加多少（＋／−）；空白的銀行欄＝公式會自動帶入（例 116 加進建北）。"
                    "「待確認」請到總帳「銀行明細確認」分頁處理。資料每 2 分鐘重新讀一次。")
     _local_tools()
 

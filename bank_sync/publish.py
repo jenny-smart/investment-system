@@ -9,8 +9,7 @@ from datetime import datetime
 
 BANK_TITLE = "銀行明細"
 CARD_TITLE = "信用卡明細"
-BANK_HEAD = ["日期", "銀行", "帳戶", "摘要", "備註", "幣別", "金額（＋入／−出）", "餘額",
-             "記到細帳（列：正負金額）", "依據", "狀態"]
+BANK_HEAD = ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
 CARD_HEAD = ["帳單月份", "卡別", "消費日", "店名", "金額（＋消費／−退款）", "零用金分類",
              "記到細帳（列：正負金額）", "狀態"]
 WHO = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE Bank", "sc": "渣打"}
@@ -35,6 +34,25 @@ def _write(book, title: str, rows: list[list]) -> str:
     except Exception:
         pass
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
+
+
+def _split_postings(e, labels: list) -> tuple[str, str]:
+    """→ (銀行那邊「富邦:-115」, 其他「零用金-餐費 +115；119 配息-基富通-台 +97,292」)。只記備註的寫「備註」。"""
+    from .bank_ledger import ACCOUNT_ROWS, FX_ROWS, SC_FX_ROWS
+    names = {row: name for name, (row, _, _) in ACCOUNT_ROWS.items()}
+    names.update({row: f"台新{cur}" for cur, row in FX_ROWS.items()})
+    names.update({row: f"渣打{cur}" for cur, row in SC_FX_ROWS.items()})
+    if e.skip:
+        return "", ""
+    fmt = lambda a: f"{a:+,.2f}".replace(".00", "")
+    bank, other = [], []
+    for p in e.postings:
+        if isinstance(p.row, int) and p.row in names:
+            bank.append(f"{names[p.row]}:" + ("備註" if p.note_only else fmt(p.amount)))
+        else:
+            label = p.row if isinstance(p.row, str) else f"{p.row} {labels[p.row - 1] if p.row - 1 < len(labels) else ''}".strip()
+            other.append(f"{label} " + ("備註" if p.note_only else fmt(p.amount)))
+    return "；".join(bank), "；".join(other)
 
 
 def bank_rows(year: int, book) -> list[list]:
@@ -64,9 +82,11 @@ def bank_rows(year: int, book) -> list[list]:
             state = "待確認"
         else:
             state = "待寫入"
-        rows.append([t.day.isoformat(), WHO.get(t.bank, t.bank), t.account, t.summary, t.note,
-                     "台幣" if t.currency == "TWD" else t.currency, t.amount, "" if t.balance is None else t.balance,
-                     _describe(e, labels), e.reason, state])
+        bank_part, other_part = _split_postings(e, labels)
+        money = (lambda x: round(x, 2) if t.currency != "TWD" else int(round(x)))
+        rows.append([f"{t.day:%m/%d}", WHO.get(t.bank, t.bank), t.summary + ("" if t.currency == "TWD" else f"（{t.currency}）"),
+                     money(t.amount) if t.amount > 0 else "", money(-t.amount) if t.amount < 0 else "",
+                     "" if t.balance is None else t.balance, t.note, bank_part, other_part, e.reason, state])
     return rows
 
 
