@@ -294,7 +294,7 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
         return {"head": (result or {}).get("head", []), "rows": []}
     rows = list((result or {}).get("rows", []))
     for _ in range(30):  # 有「更多」就一直點
-        if not page.evaluate(CLICK_JS, ["載入更多", "顯示更多", "查看更多", "看更多", "更多", "更多明細", "下一頁", "下頁", "›", "»", ">"]):
+        if not page.evaluate(CLICK_JS, ["載入更多", "顯示更多", "查看更多", "看更多", "更多明細", "下一頁", "下頁"]):
             break
         page.wait_for_timeout(1200)
         more = page.evaluate(TABLE_JS, need) or {}

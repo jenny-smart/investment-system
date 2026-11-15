@@ -360,3 +360,15 @@ def test_audit_marks_missing(monkeypatch):
     assert "L22" in copy.notes and "不明款" in copy.notes["L22"]   # 代墊那列沒記 → 標黃
     assert "L2" not in copy.notes and "L38" not in copy.notes      # 已記、餘額相符 → 不標
     assert len(book.reqs) == 1
+
+
+def test_taishin_detail_layout():
+    from bank_sync.bank_ledger import _to_tx
+    head = ["交易日", "帳務日", "摘要", "詳細", "", "金額", "餘額", "備註"]
+    blk = {"type": "TWD", "account": "****273 敦南Richart二類帳戶", "ledger_row": "台新-Richard"}
+    t = _to_tx("taishin", blk, head, ["2026/11/13 10:00:00", "2026/11/13", "CD轉出", "金額 -60,000 餘額 91,418 備註 轉帳812-1 Ｕｎｃｌｅ", "交易明細"])
+    assert t.amount == -60000 and t.balance == 91418 and "Ｕｎｃｌｅ" in t.note
+    fx_head = ["交易日", "帳務日", "幣別", "摘要", "金額", "詳細", "餘額", "轉換金額", "交易匯率", "備註"]
+    fblk = {"type": "FX", "account": "****867 古亭外幣綜存", "ledger_row": "台新外幣各幣別列（全部）"}
+    f = _to_tx("taishin", fblk, fx_head, ["2026/11/10 10:00", "2026/11/10", "南非幣", "存入", "123.45", "餘額 999.99 轉換金額 交易匯率 備註 ABC1基金XX123"])
+    assert f.amount == 123.45 and f.balance == 999.99 and f.note == "ABC1基金XX123"

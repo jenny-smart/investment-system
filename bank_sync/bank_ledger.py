@@ -169,7 +169,10 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
         if bank == "linebank":
             tx.balance = None  # LINE Bank 明細沒有餘額
         else:
-            tx.balance = _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+            detail = _detail_cell(row) if (bank == "taishin" and "詳細" in head) else None
+            tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+            if tx.balance is None and bank == "taishin":
+                tx.balance = _num(_labeled(row, "餘額"))
         clock = get(_col(head, "交易時間", "時間"))
         tx.when = f"{tx.day.isoformat()} {clock or row[0]}"
     return tx
@@ -231,18 +234,45 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         amount = _signed(head, row)
         if amount is None:
             return None
-        return Tx(bank, account, "台新外幣", day, amount, cur, get(_col(head, "摘要")), get(_col(head, "備註")), key,
+        note = get(_col(head, "備註")) or _labeled(row, "備註")
+        return Tx(bank, account, "台新外幣", day, amount, cur, get(_col(head, "摘要")), note, key,
                   interest_only="只取利息" in ledger)
     if not ledger:
         return None
     amount = _signed(head, row)
     if amount is None:
         return None
-    return Tx(bank, account, ledger, day, amount, "TWD", get(_col(head, "摘要")), get(_col(head, "備註")), key)
+    detail = _detail_cell(row) if "詳細" in head else None
+    note = detail[2] if detail else get(_col(head, "備註"))
+    return Tx(bank, account, ledger, day, amount, "TWD", get(_col(head, "摘要")), note, key)
+
+
+DETAIL_RE = re.compile(r"金額\s*(-?[\d,]+(?:\.\d+)?)\s*餘額\s*(-?[\d,]+(?:\.\d+)?)\s*(?:備註\s*(.*))?$")
+
+
+def _detail_cell(row: list):
+    """台新明細有時變成「詳細」一格：『金額 -1,000 餘額 9,000 備註 …』→ (金額, 餘額, 備註)。"""
+    for cell in row:
+        m = DETAIL_RE.search(cell or "")
+        if m:
+            return _num(m.group(1)), _num(m.group(2)), (m.group(3) or "").strip()
+    return None
+
+
+def _labeled(row: list, label: str) -> str:
+    """從「餘額 999.99 轉換金額 交易匯率 備註 …」這種合併格取出某個標籤後面的內容。"""
+    for cell in row:
+        m = re.search(rf"{label}\s*(.*?)(?=\s*(?:餘額|轉換金額|交易匯率|備註)\b|$)", cell or "")
+        if m and cell.strip().startswith(("金額", "餘額")):
+            return m.group(1).strip()
+    return ""
 
 
 def _signed(head: list, row: list) -> float | None:
     get = lambda i: row[i] if i is not None and i < len(row) else ""
+    detail = _detail_cell(row)
+    if detail and (_col(head, "金額") is None or _col(head, "金額") >= len(row) - 1 or "詳細" in head):
+        return detail[0]
     out_i, in_i = _col(head, "支出", "支出金額", "提款"), _col(head, "存入", "存入金額", "存款")
     if out_i is not None or in_i is not None:
         o, i = _num(get(out_i)), _num(get(in_i))
