@@ -1,5 +1,5 @@
 {
-  "更新時間": "2026-11-15 05:31",
+  "更新時間": "2026-11-16 05:31",
   "夜盤": {
     "夜盤日期": "2026-11-16",
     "日盤日期": "2026-11-13",
@@ -81,10 +81,10 @@
     {
       "名稱": "美元/台幣",
       "代號": "TWD=X",
-      "收盤": 32.93899917602539,
-      "漲跌": 0.07709884643554688,
-      "漲跌幅": 0.002346146925840584,
-      "日期": "2026-11-13"
+      "收盤": 32.89799880981445,
+      "漲跌": -0.0410003662109375,
+      "漲跌幅": -0.0012447362468978585,
+      "日期": "2026-11-15"
     },
     {
       "名稱": "加權指數",
@@ -108,63 +108,63 @@
     "預估漲跌幅": -0.002920107678970662,
     "加權指數前收": 43675.12109375,
     "預估開盤": 43547.585037264165,
-    "台積電ADR溢價": 0.1177674470923622,
+    "台積電ADR溢價": 0.11637612143536402,
     "依據": [
       "夜盤收 43,706，較日盤收盤 -128 點（-0.29%）",
       "費半 -3.43%",
-      "台積電 ADR -1.67%，折合台股溢價 +11.8%",
+      "台積電 ADR -1.67%，折合台股溢價 +11.6%",
       "外資夜盤多空淨額 -1,631 口（偏空）"
     ],
     "說明": "預估開盤＝加權指數前收 ×（1＋夜盤近月較日盤收盤漲跌幅），只供參考。"
   },
   "新聞": [
     {
-      "標題": "下周大事不斷！「三大焦點」牽動美股走勢- 國際",
-      "來源": "工商時報",
-      "時間": "11/14 21:20",
-      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE9Ib2hFOGtvcS1CWW5mLVpQNGZab2RfWGVvOWVRUjF2YlZhVmpSY080b3Z6WmkyOE9MYTZDaEhiLWR6NHk3aEVwMjc3cURHTHQyaWxWbFBiSl9rMVlmLWlN?oc=5"
-    },
-    {
-      "標題": "〈台股風向球〉外資期貨做空未轉向前 題材股輪動維繫多方熱度",
-      "來源": "鉅亨網",
-      "時間": "11/14 23:48",
-      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE41S256YzNBSDZsNlBKWXBpWlpVUkpqWjFBdGVEcEZMcmM2cW5WQUprWFFnQ0xGWXVPeUNWRXc5VnhkT1JHU3FiT1pMcDQzNzA?oc=5"
-    },
-    {
-      "標題": "美股震盪引發避險潮 連增股息數十年老牌企業成焦點",
+      "標題": "不甩台股周線強彈10%？國家隊單週重砍「2檔正2ETF」逾4.4萬張 提款名單一次看",
       "來源": "Yahoo股市",
-      "時間": "11/14 19:20",
-      "連結": "https://news.google.com/rss/articles/CBMi8AJBVV95cUxPd1JtRTBzejhvTXRUQVgxcHA0SzlzcDJ3bXZ3bUFOeGxpWTRTY3JKNHlJaG1yNVdLVjZ4Qi1rTkV6V2xyTHVBMm9Uek5falZzS0Q4LS16Mml4M2tLUXdrb0Y0UTZTeUJheGZoTmV6VEJXUE50UHlHdUNhWUJsVUQ2VWQtNGt3N29GN3NjdUZ5bVZjbzhTdEJ5a2ctMTVvY2ZrdzU0QnY1MVJVak1LdmREWE1UWWUtZUNFNEpFZl92cE5hWHR2VnIyQm50cmFraWFYTUVRM1RudWJwTjhFelB4bGpvYU1CZWdMTEpJT1RyeWRpa1ZRQkZoRndZNDNWWEg3akhFNExRUjZPN1RUYkZGWk9mZnFWLTJ4Tmo5S2xqVUZOYkFGN2JLYWlfYlJVbV9DOUlxNUpPSVdhb3d1cWJiMWZZWGpSdUZGekJmNmlpSWl3MmNEWWJjN2ZXMU15UUc5RmRtc2t6YXNfbGRTVzRMSA?oc=5"
+      "時間": "11/15 22:02",
+      "連結": "https://news.google.com/rss/articles/CBMi3AJBVV95cUxNYXZNQTlmMFBFaXFENEVwNERmVUNCbG5Dek15Zy05S3haamhDWlVCbHI3VGFfQnpkZlBtdmtyWkphMjBHOVhNSzFPaFVCYUlkdjFjUmI4QW00am9GMmdKS3RsdTFBWXNLYldNUDRhV0EyYUg5OGp5RUxhemRjZDdMTWVZMFNzZUZRc0s0ZTFJcjJCNFVyLU1sbEJmNW94b0ktMWM3Rkd6SHNaMTRzZl8yWHBFQzZTdmo4Q2NJYllUQ2kxZEp0azdoX2tYZGhnWG1JMWJYaDZVTzVNUGlTWlR2TTY3QURwMmlzN2gzWDlVNlZ4aTVwUlNtdjVDYTgxRXRUVzBOTkFYSTlsc2FVbm1JNkhFMWIyR0l4d2ptZl9ZLUh0b3F0aGxKQ1otZXgtZU5mUU9UUW10Y3EyNU9uZVY0ZXBDV3Nuek9KTzZ1RnJJX1V1M0FMelVXaHhQVGg?oc=5"
     },
     {
-      "標題": "【即時新聞】應用材料(AMAT)受惠AI需求營收狂飆53%！這10檔美股獲利全擊敗華爾街預期",
-      "來源": "CMoney投資網誌",
-      "時間": "11/15 03:45",
-      "連結": "https://news.google.com/rss/articles/CBMikAFBVV95cUxNd0pNUGZJdHF2U3NJY0tpTi1lS1RlWUhqZlNLbjN3NnFxQkRoOTkzM3piZFJpYXUtWm80cUw5S0VzSndRNGx3TlR0ampGbzUwSjRjb21SX3o0c2FNdXU0RnNxc2t6b1JqN2JScHBEekdWeUZ0LWpRY25QQmU2bFZmdU81c2YwLTctVVI1c0t3bTk?oc=5"
+      "標題": "〈台股盤前要聞〉群創Q3每股賺0.96元連5季獲利、公股4金2銀前10月賺1440億元皆超越去年",
+      "來源": "鉅亨網",
+      "時間": "11/16 05:12",
+      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE16c0dmRTlpTjAzLUotbEdGWUJEQ3lHWlJ5WjNaQVJiS2UyeHozMjRfWHVwQ2xDS0ptaHIyWFF4S1g0ZjVFWGdsM0JvX1ItTTA?oc=5"
     },
     {
-      "標題": "2330 台積電 - 〈台股風向球〉外資期貨做空未轉向前題材股輪動維繫多方熱度- 股市爆料同學會",
-      "來源": "CMoney",
-      "時間": "11/15 00:00",
-      "連結": "https://news.google.com/rss/articles/CBMiWEFVX3lxTE9GWU40bGdqd2NEckp3a2xzUHhWaE5yRVBuazF4M3B6T0hNRzRDaEYxeWlSQ1FRcm9Pd2N2d01BckFkNk1YSVZXWFVVTUhOQ1IwbXhiektvR2Q?oc=5"
-    },
-    {
-      "標題": "美股收盤》黃仁勳風暴輝達續跌！拖累科技股 台積電ADR跌近2％",
-      "來源": "自由財經",
-      "時間": "11/14 05:48",
-      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE5BNG94OUpqbTFaRHFlMkdxWE5tbjg0dGRNN2Q0WE5SLXoxTTVKR3dfM3dkUEtBTDdYRm9zcThua3JPOV91dXBmU0tPb3hoQzNpR0JaNXJJbjc1Y1NLekcw0gFkQVVfeXFMUGVOZHJkb3BIbWtlaTVMS1FpV3dsWV9FdlBETy0yaFZuTTR1YlltZURhV3RMdHhlQkZLT3ZXSTBUWi1MalNkSkJTalZRZTdZZzhNS0RwWElMX3E1V3ZRNGxGd3U2dg?oc=5"
-    },
-    {
-      "標題": "通膨殺不死、美股利率再拉高？Fed「抗通膨二部曲」恐重擊科技股估值",
-      "來源": "美股放大鏡",
-      "時間": "11/15 01:00",
-      "連結": "https://news.google.com/rss/articles/CBMilAFBVV95cUxOYmNsTURSdnlxcmdudmpZODRYMzYzRk9nRVkxYXRTanJ2MzhEbkQ4RTV3b1dUTmxiR2xPLVV4MmNVUDdVQmlDSjBiNFk4OW52Z0F2SXNnWlNzak1wZjV3a09SQWcwOWw1Umc2Z3NNdENpT05oX2h2amNraW9VcXRFb0RBTHpyOEtuYzduVUlXcjJFN3dz?oc=5"
-    },
-    {
-      "標題": "輝達風暴延燒》科技股承壓拖累費半慘跌- 日報",
+      "標題": "台股本周震盪藏鋒- 日報",
       "來源": "工商時報",
-      "時間": "11/15 03:00",
-      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE9sQ3BidDVGaUlEbGlvS3ppWUNmSkNqTWM4OFVvRjJPbHV1eVVULVI4eElyME1iWWNVODAzb3FxNlJGUF8zRXMxRVh6SWFvOFh0dzlrb1V6SHdubVJ6OENN?oc=5"
+      "時間": "11/16 03:00",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE1MbmhSSXNqY2E5cTFBQ3ZrX1Znd05sQWxndGJGUk8temVVUlIzOEFlZXVKdk4zUlhOMzFxa0RIc3hlbVdDSzJOZ1gtNzJUUExHclB5RVpRUERBWC1PUFYw?oc=5"
+    },
+    {
+      "標題": "台股四箭齊發抗 AI 逆風 多頭拚重掌發球權 挑戰45,441點關卡 | 市場焦點 | 證券",
+      "來源": "經濟日報",
+      "時間": "11/16 01:37",
+      "連結": "https://news.google.com/rss/articles/CBMiWkFVX3lxTFB4U3o3UEVQNExzRGJWWmlOeFpnVV9TdkN0anZjY2drRmJyMzdTNUJoYjlZZjg4RjRCQ1VCcVdhSEdLRm9yVnJZZ1V6LXZ4YUp3MlRpX2ZWeEM1Zw?oc=5"
+    },
+    {
+      "標題": "台股殺1165點經理人亮牌！",
+      "來源": "翻爆",
+      "時間": "11/15 23:02",
+      "連結": "https://news.google.com/rss/articles/CBMiW0FVX3lxTE9IX2U0R2RUQmR1RGp4ZzVqZDZFVG5qdWVRSXAya2lhV0RJTUJJd0Y3T0xhcGZiX3VNLWc4UUNjWG1xbjJZUzJrZlpKMVlwN2xxZjZpVWJ6RGctOXc?oc=5"
+    },
+    {
+      "標題": "〈台股盤前要聞〉群創Q3每股賺0.96元連5季獲利、公股4金2銀前10月賺1440億元皆超越去年",
+      "來源": "CMoney",
+      "時間": "11/16 05:21",
+      "連結": "https://news.google.com/rss/articles/CBMiWEFVX3lxTE5qU1BLX3pGOEx3V243cnR5MTdHZ3l6V0NkMVFjRXVMeXpWZTh0eGVRdFZaQzczX1I1R0o0UnhIOUNZbThRVEhXbUQxQ1BOWHZSSlRqZVB3SnM?oc=5"
+    },
+    {
+      "標題": "台股紅包明天開搶！「這檔重電新兵」抽中潛在獲利8.5萬 2檔新股申購時間一次看",
+      "來源": "Yahoo股市",
+      "時間": "11/15 21:05",
+      "連結": "https://news.google.com/rss/articles/CBMitANBVV95cUxOd3lXYVZ0UWc3eTFUdlhUeUpIRVVMTEs4YUtDdG9HTUQ0bEw2YzM2Y0tfMnRtdnpOZmZFNHA3eU9tbVJVTUhlc3lFaEMxaW5DaHdwRFRTZnlQX19SVklRd3FjbVBsWi1vS0I4OWxMdWFuN1BNMms0VVBYS3FsZXFGdkdjdVFISVZaaE15bFBwZXVBQzZjZWxlS19MS1ZQWXNDV1F0RnI3WkRCbEVLdDhrV1FQZ3RMcnVrQmEyR0F1SWs3cms3cFpPcjBrYmFxTmZ5QnpxOFBQZVhpMWJKUUVCVDEyU2lkZU1lcEMtWS1aeXloRjVjSDN0WFdGTm1vSktQajBHZkxpblpSZWFiSkhIb3RoVUVwaW9RSkVVTG1KZHhLWWhRQ2xTS2lUWXBSdDRfcFF3QWxTZTNjNWdKOG83MVRfTDNfX2h6ajhheUNMRjFiOGU0UmFtY0dmVmVoT1RGLUdud2hJdXdXUUk0dGx5Vkl6XzI5R0k0d3FNOXBzZzhmN0VodndOTlpWSjhQVl9uVG51WnNDdVNrXzRZRTZCb1JaVUlxcmRHTGxyRkVMU3N2MVRJ?oc=5"
+    },
+    {
+      "標題": "台股金馬年2/1封關 春節休市9天",
+      "來源": "工商時報",
+      "時間": "11/16 03:00",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTFBHNUhpeG81VXVoczZpZi1tT3Y0akZ1SWVqVnh2ZTNickdhb0xTUE9tcXJJb2RiS0JTVlVYVUVhdjFRVlp0S2hwOGFfQU4wWGRrYkRtZjZHZlRyb1ZETk53?oc=5"
     }
   ],
   "熱門股": [
