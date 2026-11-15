@@ -202,6 +202,20 @@ def _accounts(page):
     return None, []
 
 
+DIALOGS: list = []
+
+
+def _watch_dialogs(page) -> None:
+    """富邦查詢條件不對時會跳 alert（例：區間超過），記下訊息再按掉。"""
+    def handle(d):
+        DIALOGS.append(d.message)
+        try:
+            d.accept()
+        except Exception:
+            pass
+    page.on("dialog", handle)
+
+
 def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool) -> dict:
     """選第 i 個帳號、填起訖日、按開始查詢、讀結果。"""
     frame = _goto_query(page)
@@ -214,9 +228,29 @@ def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool
         frame = frame2
         if frame.evaluate("() => { const s=[...document.querySelectorAll('select')].find(s=>[...s.options].some(o=>/請選擇/.test(o.text))); return s ? s.selectedIndex : -1; }") != i:
             frame.evaluate(ACCOUNT_JS, [i])
-    msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")])
-    if msg != "ok":
-        raise RuntimeError(f"填日期失敗：{msg}")
+    frame.wait_for_timeout(1500)  # 選帳號後富邦會重整查詢區，等它穩定再填日期
+    frame = _eval_any(page, READY_JS) or frame
+    want = [start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")]
+    got = None
+    for _ in range(3):
+        frame.evaluate(FILL_JS, want)  # 先勾「交易明細」、拿掉唯讀
+        frame.evaluate("() => document.querySelectorAll('input[name=\"form1:rdoGroup3\"]').forEach(r => r.checked = false)")
+        for fid, value in zip(("form1:startDate", "form1:endDate"), want):
+            box = frame.locator(f'[id="{fid}"]')
+            try:  # 用真的鍵盤輸入（JSF 只認使用者輸入）
+                box.click(timeout=3000)
+                box.fill("")
+                box.type(value, delay=30)
+                box.press("Tab")
+            except Exception:
+                pass
+        frame.wait_for_timeout(500)
+        got = frame.evaluate("() => [document.getElementById('form1:startDate')?.value, document.getElementById('form1:endDate')?.value]")
+        if got == want:
+            break
+        frame = _eval_any(page, READY_JS) or frame
+    if got != want:
+        print(f"  ⚠️ 日期欄沒填進去（要 {want}，現在是 {got}）")
     try:
         before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False) if compare else "null"
     except Exception:
@@ -225,10 +259,16 @@ def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool
         raise RuntimeError("找不到「開始查詢」")
     page.wait_for_timeout(3000)
     frame = _eval_any(page, READY_JS) or frame
-    return _read_table(frame, before=before)
+    data = _read_table(frame, before=before, timeout_s=12)
+    if DIALOGS:
+        data["note"] = "富邦跳出訊息：" + "／".join(DIALOGS[-2:])
+        DIALOGS.clear()
+    print(f"    {start:%m/%d}～{end:%m/%d}：{len(data['rows'])} 筆{'（' + data['note'] + '）' if data.get('note') else ''}")
+    return data
 
 
 def fetch_all(page, state: dict, since: date) -> list[dict]:
+    _watch_dialogs(page)
     frame = _goto_query(page)
     frame, options = _accounts(page)
     if not options:
@@ -250,9 +290,10 @@ def fetch_all(page, state: dict, since: date) -> list[dict]:
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
         start = max(start, today - timedelta(days=364))  # 富邦提供近一年
         windows, w = [], start
-        while w <= today:  # 每次查詢最多六個月 → 分段查
-            windows.append((w, min(w + timedelta(days=179), today)))
-            w = w + timedelta(days=180)
+        while w <= today:  # 一個月一段查（大範圍查詢富邦常常沒反應）
+            nxt = (w.replace(day=1) + timedelta(days=32)).replace(day=1)
+            windows.append((w, min(nxt - timedelta(days=1), today)))
+            w = nxt
         data = {"head": [], "rows": []}
         for w_start, w_end in windows:
             part = _query_window(page, i, kind, w_start, w_end, bool(out) or len(windows) > 1)

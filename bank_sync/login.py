@@ -289,6 +289,8 @@ def is_logged_in(page, bank: WebBank) -> bool:
             return False
         if _has_visible_password(page):
             return False
+        if bank.login_path and bank.host in page.url and bank.login_path not in page.url:
+            return True  # 將來：登入後就離開 /login 頁
         return any(_text_visible(page, m) for m in bank.logged_in_markers)
     except Exception:
         return False
