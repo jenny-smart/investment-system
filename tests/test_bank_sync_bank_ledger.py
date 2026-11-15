@@ -372,3 +372,13 @@ def test_taishin_detail_layout():
     fblk = {"type": "FX", "account": "****867 古亭外幣綜存", "ledger_row": "台新外幣各幣別列（全部）"}
     f = _to_tx("taishin", fblk, fx_head, ["2026/11/10 10:00", "2026/11/10", "南非幣", "存入", "123.45", "餘額 999.99 轉換金額 交易匯率 備註 ABC1基金XX123"])
     assert f.amount == 123.45 and f.balance == 999.99 and f.note == "ABC1基金XX123"
+
+
+def test_stock_money_rows():
+    a = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 3, -20, "轉帳", "抽籤處理費")
+    b = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 4, -150000, "證券交割", "買進")
+    c = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 5, 300000, "證券交割", "賣出")
+    got = classify([a, b, c], RULES)
+    assert [(p.row, p.amount) for p in got[0].postings] == [(43, -20), ("台股-新資金", 20)]
+    assert [(p.row, p.amount) for p in got[1].postings] == [(43, -150000), ("台股-新資金", 150000)]
+    assert [(p.row, p.amount) for p in got[2].postings] == [(43, 300000), ("台股-舊資金", -300000)]

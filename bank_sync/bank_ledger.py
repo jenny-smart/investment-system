@@ -59,6 +59,10 @@ ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
 ROW_PETTY_ADVANCE = "零用金-代墊"
 ROW_COMPANY_ADVANCE = "零用金-公司代墊"
+ROW_STOCK_OLD = "台股-舊資金"   # 賣出持有一年以上的股票
+ROW_STOCK_NEW = "台股-新資金"   # 抽籤（申購、中籤、未中籤退款）或買新股票
+STOCK_LOTTERY_WORDS = ("抽籤", "申購", "中籤", "預扣", "退款", "處理費")
+STOCK_WORDS = ("證券", "交割", "股票", "買進", "賣出", "股款")
 ROW_INSURANCE_REBATE = 127  # 回饋金-保險：新光（60,000，每 3 年 120,000）、國泰；公式會自動加進入帳的台新帳戶列
 INSURERS = (("新光", (60000, 120000)), ("國泰人壽", ()), ("國壽", ()), ("國泰", ()))
 OTHER_BANK_ROWS = (("渣打", 56), ("中國信託", 57), ("中信", 57), ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
@@ -418,6 +422,14 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
         elif t.amount > 0 and "配息" in text and "集保" not in text and re.search(r"\b0\d{3,4}[A-Z]?\b|\d{4}FUND|0\d{3,4}[A-Z]?$", text.upper().replace(" ", " ")):
             e.postings = [Posting(ROW_STOCK_DIVIDEND, t.amount)]  # Jenny：只記 116，帳戶列公式會自動帶入
             e.reason = "台股（ETF）配息 → 只記 116（帳戶列公式自動帶入）"
+        elif ("集保" not in text and "基金" not in text and not any(w in text for w in FUND_WORDS)
+              and any(w in text for w in STOCK_LOTTERY_WORDS + STOCK_WORDS)):
+            if any(w in text for w in STOCK_LOTTERY_WORDS) or t.amount < 0:
+                e.postings = [mine, Posting(ROW_STOCK_NEW, -t.amount)]
+                e.reason = "台股新資金（抽籤／買股票）— 請確認"
+            else:
+                e.postings = [mine, Posting(ROW_STOCK_OLD, -t.amount)]
+                e.reason = "台股舊資金（賣出持有一年以上）— 請確認"
         elif "集保" in text and "配息" in text and t.amount > 0:
             e.postings, e.reason = [mine, Posting(ROW_FUBON_FUND_DIVIDEND, t.amount)], "集保基金配息"
         elif t.amount > 0 and any(w in text for w in DIVIDEND_WORDS):
