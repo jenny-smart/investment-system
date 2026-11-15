@@ -269,7 +269,39 @@ def _internal_pairs(txs: list[Tx]) -> dict[str, str]:
     return pairs
 
 
-def classify(txs: list[Tx], rules=None) -> list[Entry]:
+def card_charges(year: int) -> list[tuple]:
+    """信用卡帳單的逐筆消費 [(卡別, 日期, 店名, 金額, 零用金分類)]（今年＋去年，比對公司匯回的代墊款用）。"""
+    from .ledger_sync import parsed_statements
+    rules = load_rules()
+    out = []
+    for y in (year - 1, year):
+        try:
+            files = parsed_statements(y)
+        except Exception:
+            continue
+        for f in files:
+            for c in f.statement.purchases:
+                out.append((f.bank, c.day, c.description, c.amount, categorize(c.description, rules)[0]))
+    return out
+
+
+def match_card(t: Tx, charges: list[tuple], days: int = 120) -> list[tuple] | None:
+    """富邦轉入金額＝之前刷卡的一筆，或幾筆公司代墊加起來 → 可能是公司匯回刷卡代墊的錢。"""
+    from itertools import combinations
+    want = int(round(t.amount))
+    near = [c for c in charges if 0 <= (t.day - c[1]).days <= days]
+    one = [c for c in near if c[3] == want]
+    if one:
+        return [one[-1]]
+    company = [c for c in near if "代墊" in c[4]][-12:]
+    for n in (2, 3, 4):
+        for combo in combinations(company, n):
+            if sum(c[3] for c in combo) == want:
+                return list(combo)
+    return None
+
+
+def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> list[Entry]:
     rules = rules if rules is not None else load_rules()
     pairs = _internal_pairs(txs)
     by_key = {t.key: t for t in txs}
@@ -363,6 +395,13 @@ def classify(txs: list[Tx], rules=None) -> list[Entry]:
             e.postings, e.reason = [mine], "自己帳戶互轉（另一邊明細尚未配對，請確認）"
         else:
             cat, why = categorize(t.note or t.summary, rules)
+            matched = match_card(t, charges) if (charges and t.amount > 0 and t.ledger == "富邦") else None
+            if matched:
+                cards = "、".join(f"{c[0]}卡 {c[1]:%m/%d} {c[2][:10]} {c[3]:,}" for c in matched)
+                e.postings = [mine, Posting(ROW_PETTY_ADVANCE, -t.amount)]
+                e.reason = f"可能是公司匯回刷卡代墊（對到 {cards}）— 請確認另一邊要記哪裡"
+                out.append(e)
+                continue
             if t.ledger == "富邦" and cat == "零用金-其他":
                 # Jenny：富邦 38 除了基富通配息，多半是代墊款進出，偶爾是個人帳 → 預設代墊，請確認
                 cat, why = ROW_PETTY_ADVANCE, "富邦多為代墊款，請確認"
@@ -623,7 +662,7 @@ def review(year: int) -> str:
     for w in warn[:10]:
         print("⚠️", w)
     applied = load_applied()
-    entries = classify([t for t in txs if t.key not in applied])
+    entries = classify([t for t in txs if t.key not in applied], charges=card_charges(year))
     from .google_auth import credentials
     book = open_book(credentials())
     detail = book.worksheet(f"{year}細帳")
@@ -865,7 +904,7 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
     pending = [t for t in txs if t.key not in applied]
     if not pending:
         print("沒有新的銀行明細要記。")
-    entries = classify(pending)
+    entries = classify(pending, charges=card_charges(year))
     from .google_auth import calendar_add_once, credentials
     creds = credentials()
     book = open_book(creds)

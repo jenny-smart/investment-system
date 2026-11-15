@@ -265,3 +265,14 @@ def test_sc_rules_and_fubon_default():
     formulas[87][11] = "=K88+L123"
     values, notes, errors = plan_cells([got["基金配息"]], formulas, labels, {"2026-11": 11}, date(2026, 11, 15))
     assert values == {"L123": "=300"} and errors == []
+
+
+def test_fubon_reimbursement_matches_card():
+    charges = [("sc", date(2026, 10, 20), "彭園餐廳", 2300, "零用金-公司代墊"),
+               ("taishin", date(2026, 10, 25), "星全安", 700, "零用金-公司代墊"),
+               ("dbs", date(2026, 10, 1), "早餐店", 80, "零用金-餐費")]
+    one = tx("fubon", "****871 (營業部)", "富邦", 4, 2300, "跨行轉入", "某公司")
+    two = tx("fubon", "****871 (營業部)", "富邦", 5, 3000, "跨行轉入", "某公司B")
+    got = {e.tx.note: e for e in classify([one, two], RULES, charges=charges)}
+    assert "彭園" in got["某公司"].reason and "請確認" in got["某公司"].reason
+    assert "星全安" in got["某公司B"].reason and "彭園" in got["某公司B"].reason  # 兩筆加起來 3000
