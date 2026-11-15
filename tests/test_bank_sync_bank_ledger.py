@@ -360,3 +360,42 @@ def test_audit_marks_missing(monkeypatch):
     assert "L22" in copy.notes and "不明款" in copy.notes["L22"]   # 代墊那列沒記 → 標黃
     assert "L2" not in copy.notes and "L38" not in copy.notes      # 已記、餘額相符 → 不標
     assert len(book.reqs) == 1
+
+
+def test_taishin_detail_layout():
+    from bank_sync.bank_ledger import _to_tx
+    head = ["交易日", "帳務日", "摘要", "詳細", "", "金額", "餘額", "備註"]
+    blk = {"type": "TWD", "account": "****273 敦南Richart二類帳戶", "ledger_row": "台新-Richard"}
+    t = _to_tx("taishin", blk, head, ["2026/11/13 10:00:00", "2026/11/13", "CD轉出", "金額 -60,000 餘額 91,418 備註 轉帳812-1 Ｕｎｃｌｅ", "交易明細"])
+    assert t.amount == -60000 and t.balance == 91418 and "Ｕｎｃｌｅ" in t.note
+    fx_head = ["交易日", "帳務日", "幣別", "摘要", "金額", "詳細", "餘額", "轉換金額", "交易匯率", "備註"]
+    fblk = {"type": "FX", "account": "****867 古亭外幣綜存", "ledger_row": "台新外幣各幣別列（全部）"}
+    f = _to_tx("taishin", fblk, fx_head, ["2026/11/10 10:00", "2026/11/10", "南非幣", "存入", "123.45", "餘額 999.99 轉換金額 交易匯率 備註 ABC1基金XX123"])
+    assert f.amount == 123.45 and f.balance == 999.99 and f.note == "ABC1基金XX123"
+
+
+def test_stock_money_rows():
+    a = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 3, -20, "轉帳", "抽籤處理費")
+    b = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 4, -150000, "證券交割", "買進")
+    c = tx("taishin", "****159 建北綜活儲存款", "台新-建北", 5, 300000, "證券交割", "賣出")
+    got = classify([a, b, c], RULES)
+    assert [(p.row, p.amount) for p in got[0].postings] == [(43, -20), ("台股-新資金", 20)]
+    assert [(p.row, p.amount) for p in got[1].postings] == [(43, -150000), ("台股-新資金", 150000)]
+    assert [(p.row, p.amount) for p in got[2].postings] == [(43, 300000), ("台股-舊資金", -300000)]
+
+
+def test_publish_bank_rows(monkeypatch):
+    import bank_sync.bank_ledger as bl
+    from bank_sync.publish import bank_rows
+    shown = [[""] * 13 for _ in range(60)]
+    shown[0] = ["2026"] + [f"2026-{m:02d}" for m in range(1, 13)]
+    shown[37][0], shown[1][0] = "富邦", "零用金-餐費"
+    a = tx("fubon", "****990 (新店分行)", "富邦", 2, -100, "行動自轉", "早餐")
+    book = AuditBook(AuditWS("2026細帳", shown, [r[:] for r in shown], [[""] * 13 for _ in range(60)]))
+    monkeypatch.setattr(bl, "load_transactions", lambda: ([a], []))
+    monkeypatch.setattr(bl, "card_charges", lambda y: [])
+    monkeypatch.setattr(bl, "load_applied", lambda: set())
+    rows = bank_rows(2026, book)
+    assert rows[0] == ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
+    assert rows[1][:5] == ["11/02", "富邦", "行動自轉", "", 100]
+    assert rows[1][7] == "富邦:-100" and rows[1][8] == "零用金-餐費 +100" and rows[1][10] == "待寫入"

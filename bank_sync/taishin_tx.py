@@ -294,7 +294,7 @@ def _query(page, button_names: list[str], need: list[str], timeout_s: float = 20
         return {"head": (result or {}).get("head", []), "rows": []}
     rows = list((result or {}).get("rows", []))
     for _ in range(30):  # 有「更多」就一直點
-        if not page.evaluate(CLICK_JS, ["載入更多", "顯示更多", "更多", "下一頁"]):
+        if not page.evaluate(CLICK_JS, ["載入更多", "顯示更多", "查看更多", "看更多", "更多明細", "下一頁", "下頁"]):
             break
         page.wait_for_timeout(1200)
         more = page.evaluate(TABLE_JS, need) or {}
@@ -331,7 +331,7 @@ def fetch_twd(page, state: dict, since: date) -> list[dict]:
         period = period_for(start, date.today())
         page.evaluate(SELECT_JS, ["請選擇帳號", i, ""])
         page.evaluate(SELECT_JS, ["請選擇查詢期間", 0, period])
-        page.evaluate(SELECT_JS, ["由新到舊", 0, "由舊到新"])
+        page.evaluate(SELECT_JS, ["由新到舊", 0, "由新到舊"])  # 新的在前：就算結果有上限也不會漏掉最近的
         page.wait_for_timeout(400)
         try:
             data = _query(page, ["查詢"], ["交易日", "摘要"])
@@ -343,6 +343,8 @@ def fetch_twd(page, state: dict, since: date) -> list[dict]:
         if not data.get("error"):
             data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), since)
         out.append({"type": "TWD", "account": name, "ledger_row": _ledger_row(name), "from": start.isoformat(), **data})
+        if total in (30, 50, 100, 150, 200):
+            print(f"  ⚠️ {name} 剛好 {total} 筆，可能是網銀一頁的上限，後面還有沒抓到")
         print(f"  台幣 {name}：{start:%m/%d} 起查「{period}」共 {total} 筆，新的 {len(data['rows'])} 筆{'' if _ledger_row(name) else '（細帳未對應）'}{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 
@@ -364,7 +366,7 @@ def fetch_fx(page, state: dict, since: date) -> list[dict]:
         page.wait_for_timeout(600)
         page.evaluate(SELECT_JS, ["請選擇幣別", 0, "全部"])
         page.evaluate(SELECT_JS, ["請選擇查詢期間", 0, period])
-        page.evaluate(SELECT_JS, ["由新到舊", 0, "由舊到新"])
+        page.evaluate(SELECT_JS, ["由新到舊", 0, "由新到舊"])  # 新的在前：就算結果有上限也不會漏掉最近的
         page.wait_for_timeout(400)
         try:
             data = _query(page, ["確認查詢"], ["交易日", "幣別", "摘要"])
@@ -376,6 +378,8 @@ def fetch_fx(page, state: dict, since: date) -> list[dict]:
         if not data.get("error"):
             data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), since)
         out.append({"type": "FX", "account": name, "from": start.isoformat(), "ledger_row": "台新外幣各幣別列（全部）" if FX_LEDGER_ACCOUNT in name else ("台新外幣各幣別列（只取利息）" if FX_INTEREST_ONLY in name else ""), **data})
+        if total in (30, 50, 100, 150, 200):
+            print(f"  ⚠️ {name} 剛好 {total} 筆，可能是網銀一頁的上限，後面還有沒抓到")
         print(f"  外幣 {name}：{start:%m/%d} 起查「{period}」共 {total} 筆，新的 {len(data['rows'])} 筆{'  ⚠️ ' + data['error'] if data.get('error') else ''}")
     return out
 

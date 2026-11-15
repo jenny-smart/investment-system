@@ -59,6 +59,10 @@ ROW_FUBON_FUND_DIVIDEND = 119
 ROW_UNCLE = 95
 ROW_PETTY_ADVANCE = "零用金-代墊"
 ROW_COMPANY_ADVANCE = "零用金-公司代墊"
+ROW_STOCK_OLD = "台股-舊資金"   # 賣出持有一年以上的股票
+ROW_STOCK_NEW = "台股-新資金"   # 抽籤（申購、中籤、未中籤退款）或買新股票
+STOCK_LOTTERY_WORDS = ("抽籤", "申購", "中籤", "預扣", "退款", "處理費")
+STOCK_WORDS = ("證券", "交割", "股票", "買進", "賣出", "股款")
 ROW_INSURANCE_REBATE = 127  # 回饋金-保險：新光（60,000，每 3 年 120,000）、國泰；公式會自動加進入帳的台新帳戶列
 INSURERS = (("新光", (60000, 120000)), ("國泰人壽", ()), ("國壽", ()), ("國泰", ()))
 OTHER_BANK_ROWS = (("渣打", 56), ("中國信託", 57), ("中信", 57), ("郵局", 42), ("中華郵政", 42), ("樂天", 58))
@@ -169,7 +173,10 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
         if bank == "linebank":
             tx.balance = None  # LINE Bank 明細沒有餘額
         else:
-            tx.balance = _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+            detail = _detail_cell(row) if (bank == "taishin" and "詳細" in head) else None
+            tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+            if tx.balance is None and bank == "taishin":
+                tx.balance = _num(_labeled(row, "餘額"))
         clock = get(_col(head, "交易時間", "時間"))
         tx.when = f"{tx.day.isoformat()} {clock or row[0]}"
     return tx
@@ -231,18 +238,45 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         amount = _signed(head, row)
         if amount is None:
             return None
-        return Tx(bank, account, "台新外幣", day, amount, cur, get(_col(head, "摘要")), get(_col(head, "備註")), key,
+        note = get(_col(head, "備註")) or _labeled(row, "備註")
+        return Tx(bank, account, "台新外幣", day, amount, cur, get(_col(head, "摘要")), note, key,
                   interest_only="只取利息" in ledger)
     if not ledger:
         return None
     amount = _signed(head, row)
     if amount is None:
         return None
-    return Tx(bank, account, ledger, day, amount, "TWD", get(_col(head, "摘要")), get(_col(head, "備註")), key)
+    detail = _detail_cell(row) if "詳細" in head else None
+    note = detail[2] if detail else get(_col(head, "備註"))
+    return Tx(bank, account, ledger, day, amount, "TWD", get(_col(head, "摘要")), note, key)
+
+
+DETAIL_RE = re.compile(r"金額\s*(-?[\d,]+(?:\.\d+)?)\s*餘額\s*(-?[\d,]+(?:\.\d+)?)\s*(?:備註\s*(.*))?$")
+
+
+def _detail_cell(row: list):
+    """台新明細有時變成「詳細」一格：『金額 -1,000 餘額 9,000 備註 …』→ (金額, 餘額, 備註)。"""
+    for cell in row:
+        m = DETAIL_RE.search(cell or "")
+        if m:
+            return _num(m.group(1)), _num(m.group(2)), (m.group(3) or "").strip()
+    return None
+
+
+def _labeled(row: list, label: str) -> str:
+    """從「餘額 999.99 轉換金額 交易匯率 備註 …」這種合併格取出某個標籤後面的內容。"""
+    for cell in row:
+        m = re.search(rf"{label}\s*(.*?)(?=\s*(?:餘額|轉換金額|交易匯率|備註)\b|$)", cell or "")
+        if m and cell.strip().startswith(("金額", "餘額")):
+            return m.group(1).strip()
+    return ""
 
 
 def _signed(head: list, row: list) -> float | None:
     get = lambda i: row[i] if i is not None and i < len(row) else ""
+    detail = _detail_cell(row)
+    if detail and (_col(head, "金額") is None or _col(head, "金額") >= len(row) - 1 or "詳細" in head):
+        return detail[0]
     out_i, in_i = _col(head, "支出", "支出金額", "提款"), _col(head, "存入", "存入金額", "存款")
     if out_i is not None or in_i is not None:
         o, i = _num(get(out_i)), _num(get(in_i))
@@ -388,6 +422,14 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
         elif t.amount > 0 and "配息" in text and "集保" not in text and re.search(r"\b0\d{3,4}[A-Z]?\b|\d{4}FUND|0\d{3,4}[A-Z]?$", text.upper().replace(" ", " ")):
             e.postings = [Posting(ROW_STOCK_DIVIDEND, t.amount)]  # Jenny：只記 116，帳戶列公式會自動帶入
             e.reason = "台股（ETF）配息 → 只記 116（帳戶列公式自動帶入）"
+        elif ("集保" not in text and "基金" not in text and not any(w in text for w in FUND_WORDS)
+              and any(w in text for w in STOCK_LOTTERY_WORDS + STOCK_WORDS)):
+            if any(w in text for w in STOCK_LOTTERY_WORDS) or t.amount < 0:
+                e.postings = [mine, Posting(ROW_STOCK_NEW, -t.amount)]
+                e.reason = "台股新資金（抽籤／買股票）— 請確認"
+            else:
+                e.postings = [mine, Posting(ROW_STOCK_OLD, -t.amount)]
+                e.reason = "台股舊資金（賣出持有一年以上）— 請確認"
         elif "集保" in text and "配息" in text and t.amount > 0:
             e.postings, e.reason = [mine, Posting(ROW_FUBON_FUND_DIVIDEND, t.amount)], "集保基金配息"
         elif t.amount > 0 and any(w in text for w in DIVIDEND_WORDS):
@@ -700,6 +742,7 @@ def review(year: int) -> str:
     print(f"確認表：{url}")
     print("在「你的確認」選 確認／略過；另一邊要改的，在「改記到」填列號（例 105）或列名（例 零用金-餐費）。")
     print("填好後執行：python3 -m bank_sync bank-ledger --apply")
+    _publish_quietly(year)
     from .progress_log import log_run
     log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆")
     return url
@@ -905,6 +948,15 @@ def print_balance(rows: list[list]) -> int:
     return bad
 
 
+def _publish_quietly(year: int) -> None:
+    """順便更新總帳「銀行明細」「信用卡明細」分頁（App 網頁讀這兩頁）；失敗不影響主流程。"""
+    try:
+        from .publish import publish
+        publish(year)
+    except (Exception, SystemExit) as exc:
+        print(f"（App 用的明細分頁沒更新：{exc}）")
+
+
 def run(year: int, apply: bool = False, force: bool = False) -> Path:
     txs, warn = load_transactions()
     for w in warn[:10]:
@@ -990,6 +1042,7 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
     write_balance_sheet(book, after)
     if after_bad:
         print(f"⚠️ 寫入後還有 {after_bad} 列跟銀行餘額不同，請看「銀行餘額核對」分頁")
+    _publish_quietly(year)
     from .progress_log import log_run
     banks_done = {}
     for e in entries:
@@ -1070,6 +1123,9 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
             listing.append([month, t.day.isoformat(), line, "", "找不到列", e.reason])
             continue
         own_r = rows[0][0] if rows else None
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}.get(t.bank, t.bank)
+        memo = re.sub(r"\s*\S*分行$|\d{6,}", "", t.note or t.summary).strip()[:12]
+        short = f"{t.day:%m/%d} {who} {memo}"
         col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
         status = []
         for k, (r, p) in enumerate(rows):
@@ -1083,11 +1139,11 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
             elsewhere = _find_in_column(formulas, c, p.amount, {rr for rr, _ in rows})
             if elsewhere:
                 where = "、".join(f"{x + 1} {labels[x]}" for x in elsewhere[:3])
-                mark(r, c, "elsewhere", f"⚠️ {line}：應記在這列，但金額出現在 {where}")
+                mark(r, c, "elsewhere", f"{short} → 在 {where}")
                 status.append(f"{r + 1} 記在別列（{where}）")
             else:
                 kind = "missing_own" if k == 0 else "missing_other"
-                mark(r, c, kind, f"❌ {line}：這列沒找到 {p.amount:+,.2f}".replace(".00", "") + f"（{e.reason}）")
+                mark(r, c, kind, f"{short} 未記 {p.amount:+,.2f}".replace(".00", ""))
                 status.append(f"{r + 1} 沒記")
         bad = any("沒記" in x or "別列" in x for x in status)
         listing.append([month, t.day.isoformat(), line, "；".join(status), "⚠️" if bad else "✓", e.reason])
@@ -1111,7 +1167,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
         if row_no in FX_ROWS.values() or row_no in SC_FX_ROWS.values():
             continue  # 外幣列含定存，用 bank-review 的外幣總覽核對
         if cur is not None and abs(cur - bank) >= 0.5:
-            mark(row_no - 1, c, "balance", f"🔴 {month} 細帳 {cur:,.0f}，銀行最後餘額 {bank:,.0f}，差 {cur - bank:+,.0f}")
+            mark(row_no - 1, c, "balance", f"月底 細帳 {cur:,.0f}／銀行 {bank:,.0f}")
             listing.append([month, "", f"{row_no} {labels[row_no - 1]} 月底餘額", f"細帳 {cur:,.0f}／銀行 {bank:,.0f}", "⚠️", "月底餘額不同"])
 
     # 寫到副本：底色＋備註（保留原本的備註）
@@ -1129,7 +1185,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
     for cell, lines in notes.items():
         r, c = _rc(cell)
         existing = old[r][c] if r < len(old) and c < len(old[r]) else ""
-        merged[cell] = "\n".join(x for x in ("【銀行核對】\n" + "\n".join(lines), existing.strip()) if x)
+        merged[cell] = "\n".join(x for x in ("【核對】" + "；".join(lines), existing.strip()) if x)
     if merged:
         _set_notes(copy, merged)
 

@@ -202,21 +202,54 @@ def _accounts(page):
     return None, []
 
 
-def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool) -> dict:
-    """選第 i 個帳號、填起訖日、按開始查詢、讀結果。"""
+DIALOGS: list = []
+
+
+def _watch_dialogs(page) -> None:
+    """富邦查詢條件不對時會跳 alert（例：區間超過），記下訊息再按掉。"""
+    def handle(d):
+        DIALOGS.append(d.message)
+        try:
+            d.accept()
+        except Exception:
+            pass
+    page.on("dialog", handle)
+
+
+QUICK = ((1, "rdoDay1", "當天"), (3, "rdoDay3", "3天內"), (7, "rdoDay7", "近一週"), (14, "rdoDay14", "近二週"),
+         (21, "rdoDay21", "近三週"), (30, "rdoDay30", "近1個月"), (60, "rdoDay60", "近2個月"), (90, "rdoDay90", "近3個月"),
+         (180, "rdoDay180", "近6個月"))
+
+
+def quick_ranges(start: date, today: date) -> list[tuple[str, str]]:
+    """用富邦的「快速查詢」：挑剛好涵蓋的選項；超過六個月再加「6個月前至近1年內」。"""
+    need = (today - start).days + 1
+    first = next(((rid, label) for days, rid, label in QUICK if days >= need), ("rdoDay180", "近6個月"))
+    out = [first]
+    if need > 180:
+        out.append(("rdoDay180_365", "6個月前至近1年內"))
+    return out
+
+
+def _query_window(page, i: int, radio: str, label: str, compare: bool) -> dict:
+    """選第 i 個帳號、勾快速查詢、按開始查詢、讀結果。"""
     frame = _goto_query(page)
     frame, _ = _accounts(page)
     frame.evaluate(ACCOUNT_JS, [i])
-    frame.wait_for_timeout(800)  # 選帳號後頁面可能重整
+    frame.wait_for_timeout(1500)  # 選帳號後富邦會重整查詢區
     frame = _eval_any(page, READY_JS) or frame
     frame2, _ = _accounts(page)
     if frame2 is not None:
         frame = frame2
         if frame.evaluate("() => { const s=[...document.querySelectorAll('select')].find(s=>[...s.options].some(o=>/請選擇/.test(o.text))); return s ? s.selectedIndex : -1; }") != i:
             frame.evaluate(ACCOUNT_JS, [i])
-    msg = frame.evaluate(FILL_JS, [start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d")])
-    if msg != "ok":
-        raise RuntimeError(f"填日期失敗：{msg}")
+            frame.wait_for_timeout(1500)
+            frame = _eval_any(page, READY_JS) or frame
+    frame.evaluate("() => { const r = document.getElementById('form1:rdoTxDetail'); if (r && !r.checked) r.click(); }")
+    try:
+        frame.locator(f'[id="form1:{radio}"]').check(timeout=4000)  # 真的點（JSF 認使用者點選）
+    except Exception:
+        frame.evaluate("id => document.getElementById(id)?.click()", f"form1:{radio}")
     try:
         before = json.dumps(frame.evaluate(TABLE_JS, NEED), ensure_ascii=False) if compare else "null"
     except Exception:
@@ -225,10 +258,16 @@ def _query_window(page, i: int, kind: str, start: date, end: date, compare: bool
         raise RuntimeError("找不到「開始查詢」")
     page.wait_for_timeout(3000)
     frame = _eval_any(page, READY_JS) or frame
-    return _read_table(frame, before=before)
+    data = _read_table(frame, before=before, timeout_s=15)
+    if DIALOGS:
+        data["note"] = "富邦跳出訊息：" + "／".join(DIALOGS[-2:])
+        DIALOGS.clear()
+    print(f"    {label}：{len(data['rows'])} 筆{'（' + data['note'] + '）' if data.get('note') else ''}")
+    return data
 
 
 def fetch_all(page, state: dict, since: date) -> list[dict]:
+    _watch_dialogs(page)
     frame = _goto_query(page)
     frame, options = _accounts(page)
     if not options:
@@ -249,13 +288,9 @@ def fetch_all(page, state: dict, since: date) -> list[dict]:
         key = f"{kind}:{name}"
         start = parse_day(state.get(key, {}).get("last_date", "")) or since
         start = max(start, today - timedelta(days=364))  # 富邦提供近一年
-        windows, w = [], start
-        while w <= today:  # 每次查詢最多六個月 → 分段查
-            windows.append((w, min(w + timedelta(days=179), today)))
-            w = w + timedelta(days=180)
         data = {"head": [], "rows": []}
-        for w_start, w_end in windows:
-            part = _query_window(page, i, kind, w_start, w_end, bool(out) or len(windows) > 1)
+        for radio, label in quick_ranges(start, today):
+            part = _query_window(page, i, radio, label, bool(out) or len(data["rows"]) > 0)
             data["head"] = part.get("head") or data["head"]
             data["rows"] += [r for r in part["rows"] if r not in data["rows"]]
             if part.get("note"):
