@@ -117,6 +117,26 @@ def _wait_lines(page, before: list, timeout_ms: int = 15000) -> list:
     return lines
 
 
+MORE_NAMES = ("查看更多", "載入更多", "顯示更多", "更多明細", "更多", "下一頁", "下一筆")
+
+
+def _load_all(page, lines: list) -> list:
+    """一個月的明細可能要往下捲或按「更多／下一頁」才會全部出現：一直捲到底、按更多，直到內容不再變多。"""
+    for _ in range(40):
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(900)
+        clicked = any(_click(page, n) for n in MORE_NAMES if page.get_by_text(n, exact=True).count())
+        page.wait_for_timeout(1200 if clicked else 600)
+        now = page.evaluate(CONTENT_JS)
+        if len(now) <= len(lines) and not clicked:
+            break
+        if now == lines:
+            break
+        lines = now
+    page.evaluate("() => window.scrollTo(0, 0)")
+    return lines
+
+
 def _goto_details(page) -> None:
     """只用點選切頁，不重新載入網址（重新載入會被將來銀行登出）。"""
     from .login import drain_stdin, open_menu
@@ -243,7 +263,7 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                     if not clicked:
                         print(f"  找不到「{label}」按鈕，略過")
                         continue
-                    lines = _wait_lines(page, before)
+                    lines = _load_all(page, _wait_lines(page, before))
                     pages.append({"period": label, "lines": lines})
                     print(f"  {label}：結果區 {len(lines)} 行")
             except KeyboardInterrupt:
