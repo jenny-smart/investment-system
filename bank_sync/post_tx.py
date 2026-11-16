@@ -12,7 +12,7 @@ import json
 import os
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .credentials import BANK_DIR
@@ -122,17 +122,31 @@ RADIO_JS = r"""
 PERIODS = ((1, "當日"), (7, "一週"), (31, "一個月"), (92, "三個月"), (183, "六個月"))
 
 
-def _set_period(page, start: date) -> str:
-    """選查詢期間：剛好涵蓋的選項；超過六個月改「自訂」並輸入民國年起訖日。"""
+def plan_queries(start: date, today: date) -> list:
+    """要查哪幾次：六個月內 → 一個剛好涵蓋的選項；超過 → 先「六個月」，再「自訂」補更早那段（自訂一次不超過六個月）。"""
+    need = (today - start).days + 1
+    label = next((name for days, name in PERIODS if days >= need), None)
+    if label:
+        return [label]
+    out, cursor = ["六個月"], start
+    six_start = today - timedelta(days=182)
+    while cursor < six_start:
+        end = min(cursor + timedelta(days=179), six_start + timedelta(days=30))  # 跟「六個月」重疊一點，不會漏
+        out.append((cursor, end))
+        cursor = end + timedelta(days=1)
+    return out
+
+
+def _set_period(page, period) -> str:
+    """period：「一週／一個月／六個月…」或 (起日, 迄日) 用自訂。"""
     page.evaluate(RADIO_JS, "區間查詢")
-    need = (date.today() - start).days + 1
-    label = next((name for days, name in PERIODS if days >= need), "自訂")
-    if label != "自訂":
-        page.evaluate(RADIO_JS, label)
-        return label
+    if isinstance(period, str):
+        page.evaluate(RADIO_JS, period)
+        return period
+    start, end = period
     page.evaluate(RADIO_JS, "自訂")
     roc = lambda d: f"{d.year - 1911}/{d.month:02d}/{d.day:02d}"
-    want = [roc(start), roc(date.today())]
+    want = [roc(start), roc(end)]
     set_js = r"""
     (vals) => {
       // 日期欄（值像 115/11/16，可能沒寫 type、可能唯讀）：直接改值並觸發事件
@@ -148,7 +162,7 @@ def _set_period(page, start: date) -> str:
     }
     """
     # 1) jQuery 日曆元件：用元件自己的 setDate（郵局的日期欄只認日曆選的值）
-    dates = [start, date.today()]
+    dates = [start, end]
     got = page.evaluate(r"""
     (ymd) => {
       const $ = window.jQuery;
@@ -192,7 +206,7 @@ def _set_period(page, start: date) -> str:
     page.keyboard.press("Escape")  # 關掉日曆
     if got != want:
         print(f"  ⚠️ 自訂日期沒填進去（要 {want}，現在是 {got}）")
-    return f"自訂 {roc(start)}～{roc(date.today())}"
+    return f"自訂 {roc(start)}～{roc(end)}"
 
 
 def fetch(since: date = None, keep_open: bool = False) -> Path:
@@ -225,25 +239,33 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 _goto(page)
                 key = "TWD:郵局存簿"
                 start = parse_day(progress.get(key, {}).get("last_date", "")) or since
-                label = _set_period(page, start)
-                print(f"  查詢期間：{label}")
-                _click(page, "查詢")
-                page.wait_for_timeout(3000)
-                shown = page.evaluate("() => { const t = document.body.innerText; const a = t.match(/查詢起始日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); const b = t.match(/查詢迄止日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); return [a ? a[1] : '', b ? b[1] : '']; }")
-                print(f"  郵局實際查詢：{shown[0]}～{shown[1]}")
-                try:  # 每頁筆數選「全部」
-                    page.evaluate("""() => { const s = [...document.querySelectorAll('select')].find(x => [...x.options].some(o => o.text.trim() === '全部'));
-                        if (s) { s.selectedIndex = [...s.options].findIndex(o => o.text.trim() === '全部'); s.dispatchEvent(new Event('change', {bubbles: true})); } }""")
+                rows = []
+                for n, period in enumerate(plan_queries(start, date.today())):
+                    if n:
+                        _goto(page)
+                    label = _set_period(page, period)
+                    _click(page, "查詢")
+                    page.wait_for_timeout(3000)
+                    shown = page.evaluate("() => { const t = document.body.innerText; const a = t.match(/查詢起始日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); const b = t.match(/查詢迄止日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); return [a ? a[1] : '', b ? b[1] : '']; }")
+                    try:  # 每頁筆數選「全部」
+                        page.evaluate("""() => { const s = [...document.querySelectorAll('select')].find(x => [...x.options].some(o => o.text.trim() === '全部'));
+                            if (s) { s.selectedIndex = [...s.options].findIndex(o => o.text.trim() === '全部'); s.dispatchEvent(new Event('change', {bubbles: true})); } }""")
+                        page.wait_for_timeout(1500)
+                    except Exception:
+                        pass
+                    part = []
+                    if "查無資料" not in page.evaluate("() => document.body.innerText"):
+                        with page.expect_download(timeout=30000) as info:
+                            if not _click(page, "存成CSV"):
+                                raise RuntimeError("找不到「存成CSV」")
+                        target = TX_DIR / f"{stamp}_post_{n + 1}.csv"
+                        info.value.save_as(str(target))
+                        os.chmod(target, 0o600)
+                        part = parse_csv(target.read_bytes())
+                    rows += [r for r in part if r not in rows]
+                    print(f"  查詢 {label}（郵局實際 {shown[0]}～{shown[1]}）：{len(part)} 筆")
+                    _click(page, "回上一頁", "上一頁", "重新查詢")
                     page.wait_for_timeout(1500)
-                except Exception:
-                    pass
-                with page.expect_download(timeout=30000) as info:
-                    if not _click(page, "存成CSV"):
-                        raise RuntimeError("找不到「存成CSV」")
-                target = TX_DIR / f"{stamp}_post.csv"
-                info.value.save_as(str(target))
-                os.chmod(target, 0o600)
-                rows = parse_csv(target.read_bytes())
                 total = len(rows)
                 rows.sort(key=lambda r: (r[0], r[1]))
                 new, progress[key] = keep_new(rows, progress.get(key, {}), start)
