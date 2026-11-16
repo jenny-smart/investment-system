@@ -23,7 +23,7 @@ LOG_DIR = BANK_DIR / "_app_logs"
 TX_DIR = BANK_DIR / "transactions" / "taishin"
 STATEMENT_DIR = BANK_DIR / "statements"
 CARD_BANKS = {"fubon": "富邦", "taishin": "台新", "sc": "渣打", "dbs": "星展", "cathay": "國泰世華", "hsbc": "滙豐", "ubot": "聯邦"}
-FETCH_BANKS = {"taishin": "台新", "fubon": "富邦", "next": "將來", "linebank": "LINE Bank", "yuanta": "元大", "sc": "渣打"}
+FETCH_BANKS = {"taishin": "台新", "fubon": "富邦", "next": "將來", "linebank": "LINE Bank", "yuanta": "元大", "sc": "渣打", "post": "郵局"}
 LOGIN_BANKS = {"taishin": "台新", "fubon": "富邦", "sc": "渣打", "linebank": "LINE Bank", "yuanta": "元大", "next": "將來"}
 
 

@@ -77,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     fnx = sub.add_parser("fetch-next", help="將來銀行：查詢主帳戶明細（先存結果文字＋格式樣本）")
     fnx.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fnx.add_argument("--keep-open", action="store_true")
+    fpo = sub.add_parser("fetch-post", help="郵局：下載存簿交易明細（CSV），存在本機")
+    fpo.add_argument("--since", help="從哪天開始（預設本月 1 日）")
+    fpo.add_argument("--keep-open", action="store_true")
     fsc = sub.add_parser("fetch-sc", help="渣打：查詢台幣／外幣明細（目前半自動：請你點到明細頁）")
     fsc.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fsc.add_argument("--keep-open", action="store_true")
@@ -88,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     br.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     ba = sub.add_parser("bank-audit", help="全年核對：複製細帳、把沒記到的明細用底色標出（原細帳不動）")
     ba.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
-    ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc"])
+    ba.add_argument("--bank", action="append", choices=["fubon", "taishin", "next", "yuanta", "linebank", "sc", "post"])
     ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
     dg = sub.add_parser("diag", help="檢查本機最新明細檔的格式（數字→9、中文→○，可貼給 Claude）")
     dg.add_argument("bank")
@@ -157,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
         from datetime import date as _date
         from .next_tx import fetch as next_fetch
         next_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "fetch-post":
+        from datetime import date as _date
+        from .post_tx import fetch as post_fetch
+        post_fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
     elif args.command == "fetch-sc":
         from datetime import date as _date
         from .sc_tx import fetch as sc_fetch
@@ -185,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
                         from .next_tx import fetch as f
                     elif code == "sc":
                         from .sc_tx import fetch as f
+                    elif code == "post":
+                        from .post_tx import fetch as f
                     else:
                         from functools import partial
                         from .table_tx import fetch as tf

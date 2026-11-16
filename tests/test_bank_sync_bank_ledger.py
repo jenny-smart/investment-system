@@ -421,3 +421,16 @@ def test_fx_bond_fund_buy():
     t = tx("taishin", "****867 古亭外幣綜存", "台新外幣", 6, -91066, "支出", "IYA5 高盛新興債 FY040000581", "南非幣")
     e = classify([t], RULES)[0]
     assert [(p.row, p.amount) for p in e.postings] == [(92, -91066), (110, 91066)]
+
+
+def test_post_csv_and_ledger():
+    from bank_sync.bank_ledger import _to_tx
+    from bank_sync.post_tx import HEAD, parse_csv
+    raw = ("帳號,00012345\n交易日期 交易時間,摘要,沖銷記號,提款金額,存款金額,結存金額,備註,附言\n"
+           "115/11/05 10:21:33,跨行轉,,500,,1500,轉帳,\n115/11/06 09:00:00,利息,,,3,1503,,\n").encode("big5")
+    rows = parse_csv(raw)
+    assert rows[0][:2] == ["2026/11/05", "10:21:33"]
+    t = _to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[0])
+    assert t.amount == -500 and t.balance == 1500 and t.when == "2026-11-05 10:21:33"
+    e = classify([_to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[1])], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(42, 3)]

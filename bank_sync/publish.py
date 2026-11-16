@@ -21,7 +21,7 @@ def account_label(t) -> str:
     return f"{kind} {name}"
 CARD_HEAD = ["帳單月份", "卡別", "消費日", "店名", "金額（＋消費／−退款）", "零用金分類",
              "記到細帳（列：正負金額）", "狀態"]
-WHO = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE Bank", "sc": "渣打"}
+WHO = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE Bank", "sc": "渣打", "post": "郵局"}
 
 
 def _write(book, title: str, rows: list[list]) -> str:
