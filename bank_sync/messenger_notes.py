@@ -167,11 +167,15 @@ def parse_receipt(text: str) -> dict | None:
     return {"store": store, "items": items, "total": int(total.group(1).replace(",", ""))}
 
 
+STAMP_RE = re.compile(r"(20\d{2}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日|(?:週|星期|周)[一二三四五六日天]|昨天|今天)\s*"
+                      r"(?:上午|下午|中午|晚上|凌晨|早上)?\s*\d{1,2}:\d{2}")
+
+
 def _date_line(line: str, today):
-    t = line.strip()
-    if not t or len(t) > 30 or "=" in t or "＝" in t or ITEM_RE.search(t) or TOTAL_RE.search(t):
-        return None
-    return parse_date_label(t, today)
+    """只認 Messenger 的時間分隔列（整行就是「2026年1月22日 上午10:05」「週五 下午6:24」這種），
+    訊息內文的「週六11:00-18:00」「1/24(六)尾牙」不算"""
+    m = STAMP_RE.fullmatch(line.strip())
+    return parse_date_label(m.group(1), today) if m else None
 
 
 def lines_to_receipts(lines: list, today) -> list:
@@ -261,31 +265,52 @@ def fetch(since=None, thread: str = DEFAULT_THREAD) -> Path:
     raw = MSG_DIR / f"raw_{stamp}.txt"
     raw.write_text("\n".join(lines), "utf-8")
     os.chmod(raw, 0o600)
-    receipts = [r for r in lines_to_receipts(lines, today) if not r["day"] or r["day"] >= since.isoformat()]
-    old = json.loads(RECEIPTS.read_text("utf-8")) if RECEIPTS.exists() else []
-    keyof = lambda r: (r["day"], r["total"], tuple((i["name"], i["qty"]) for i in r["items"]))
-    merged = {keyof(r): r for r in old + receipts}
-    allr = sorted(merged.values(), key=lambda r: r["day"])
-    RECEIPTS.write_text(json.dumps(allr, ensure_ascii=False, indent=1), "utf-8")
-    os.chmod(RECEIPTS, 0o600)
-    nodate = sum(1 for r in receipts if not r["day"])
-    print(f"  讀了 {len(lines)} 行對話，找到 {len(receipts)} 張收據" + (f"（{nodate} 張認不出日期）" if nodate else ""))
-    # 3) 每筆郵局支出：找那天的收據
-    used = set()
-    for t in spends:
-        rs = match_receipt(t.day, t.amount, allr, used)
-        if rs:
-            print(f"  ✓ {t.day:%m/%d} 郵局 {t.amount:,.0f} → {receipt_note(rs)}")
-        else:
-            same = [r for r in allr if r.get("day") == t.day.isoformat()]
-            hint = "；".join(f"{r['store']} 總 {r['total']}" for r in same) or "那天沒有收據"
-            print(f"  ✗ {t.day:%m/%d} 郵局 {t.amount:,.0f} → 對不到（{hint}）")
+    report(lines, since, spends)
     shape = BANK_DIR / "_explore" / f"messenger_shape_{stamp}.txt"
     shape.parent.mkdir(parents=True, exist_ok=True)
     head = [f"url={info.get('url')} 捲動區={info.get('boxes')} roles={info.get('roles')}"]
     shape.write_text("\n".join(head + [_shape(x)[:120] for x in lines[:400]]), "utf-8")
     print(f"  收據（只在本機）：{RECEIPTS}\n  格式樣本（認不出時上傳給 Claude）：{shape}")
     return RECEIPTS
+
+
+def report(lines: list, since, spends=None) -> list:
+    """對話文字 → 收據（存 receipts.json，since 之後的整段換新）→ 每筆郵局支出對當天收據"""
+    from datetime import date
+    today = date.today()
+    spends = _post_expenses() if spends is None else spends
+    receipts = [r for r in lines_to_receipts(lines, today) if not r["day"] or r["day"] >= since.isoformat()]
+    old = [r for r in load_receipts() if r.get("day") and r["day"] < since.isoformat()]
+    allr = sorted(old + receipts, key=lambda r: r["day"])
+    RECEIPTS.write_text(json.dumps(allr, ensure_ascii=False, indent=1), "utf-8")
+    os.chmod(RECEIPTS, 0o600)
+    nodate = sum(1 for r in receipts if not r["day"])
+    print(f"  讀了 {len(lines)} 行對話，找到 {len(receipts)} 張收據" + (f"（{nodate} 張認不出日期）" if nodate else ""))
+    used, ok = set(), 0
+    for t in spends:
+        rs = match_receipt(t.day, t.amount, allr, used)
+        if rs:
+            ok += 1
+            print(f"  ✓ {t.day:%m/%d} 郵局 {t.amount:,.0f} → {receipt_note(rs)}")
+        else:
+            near = [r for r in allr if r.get("day") and 0 <= (t.day - date.fromisoformat(r["day"])).days <= 7]
+            hint = "；".join(f"{r['day'][5:].replace('-', '/')} 總 {r['total']}" for r in near[-3:]) or "前一週沒有收據"
+            print(f"  ✗ {t.day:%m/%d} 郵局 {t.amount:,.0f} → 對不到（{hint}）")
+    print(f"  對到 {ok}/{len(spends)} 筆")
+    return allr
+
+
+def reparse(since=None) -> list:
+    """不開瀏覽器：用本機上次存的對話文字重新解析、重新對"""
+    from datetime import date, timedelta
+    raws = sorted(MSG_DIR.glob("raw_*.txt"))
+    if not raws:
+        print("本機還沒有對話文字，請先跑 messenger-fetch")
+        return []
+    spends = _post_expenses()
+    since = since or (spends[0].day - timedelta(days=7) if spends else date(date.today().year, 1, 1))
+    print(f"用 {raws[-1].name} 重新解析")
+    return report(raws[-1].read_text("utf-8").splitlines(), since, spends)
 
 
 def load_receipts() -> list:
@@ -306,7 +331,9 @@ def match_receipt(day, amount: float, receipts: list, used: set, window: int = 4
             if i not in used and r.get("day") and 0 <= (day - date.fromisoformat(r["day"])).days <= window]
     pool.sort(key=lambda x: x[1]["day"], reverse=True)  # 同一天優先，再往前找
     for n in (1, 2, 3, 4):
-        for combo in combinations(pool[:15], n):
+        # 幾張加總（取貨時一起到貨）只找三週內的
+        cands = pool if n == 1 else [x for x in pool if (day - date.fromisoformat(x[1]["day"])).days <= 21]
+        for combo in combinations(cands[:15], n):
             if sum(r["total"] for _, r in combo) == want:
                 used.update(i for i, _ in combo)
                 return [r for _, r in combo]

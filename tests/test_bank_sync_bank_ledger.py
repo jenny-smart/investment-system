@@ -471,3 +471,12 @@ def test_messenger_receipt_parse_and_match():
     assert len(match_receipt(date(2026, 11, 16), -467, [r, other], set())) == 2   # 取貨時一起到貨
     assert match_receipt(date(2026, 11, 12), -367, [r], set()) == []              # 收據不會晚於消費日
     assert receipt_note([r]).startswith("嘉興店 11/13 竹絲蝦餃×2 250")
+
+
+def test_messenger_date_only_from_stamp_lines():
+    from datetime import date
+    from bank_sync.messenger_notes import lines_to_receipts
+    lines = ["2026年1月14日 下午7:16", "週六11:00-18:00", "1/24(六)尾牙，各店公休一日！",
+             "(嘉興店)1. YENS蒸魚卵 × 1 = 120", "總金額：【120】"]
+    r = lines_to_receipts(lines, date(2026, 11, 16))
+    assert r[0]["day"] == "2026-01-14" and r[0]["total"] == 120
