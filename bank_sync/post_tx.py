@@ -104,6 +104,49 @@ def parse_csv(raw: bytes) -> list[list[str]]:
     return out
 
 
+RADIO_JS = r"""
+(name) => {
+  // 點「文字＝name」旁邊的 radio（區間查詢／一週／一個月／自訂…）
+  const vis = e => e.getClientRects().length > 0;
+  const radios = [...document.querySelectorAll('input[type=radio]')];
+  for (const r of radios) {
+    const lab = (r.id && document.querySelector(`label[for="${r.id}"]`)) || r.closest('label');
+    let text = lab ? lab.innerText : '';
+    if (!text) { let n = r.nextSibling; while (n && !(n.textContent || '').trim()) n = n.nextSibling; text = n ? n.textContent : ''; }
+    if (text.replace(/\s+/g, '') === name) { (lab && vis(lab) ? lab : r).click(); if (!r.checked) r.click(); return r.checked; }
+  }
+  return false;
+}
+"""
+
+PERIODS = ((1, "當日"), (7, "一週"), (31, "一個月"), (92, "三個月"), (183, "六個月"))
+
+
+def _set_period(page, start: date) -> str:
+    """選查詢期間：剛好涵蓋的選項；超過六個月改「自訂」並輸入民國年起訖日。"""
+    page.evaluate(RADIO_JS, "區間查詢")
+    need = (date.today() - start).days + 1
+    label = next((name for days, name in PERIODS if days >= need), "自訂")
+    if label != "自訂":
+        page.evaluate(RADIO_JS, label)
+        return label
+    page.evaluate(RADIO_JS, "自訂")
+    roc = lambda d: f"{d.year - 1911}/{d.month:02d}/{d.day:02d}"
+    boxes = page.locator("input[type=text]").filter(has_text="")
+    targets = [i for i in range(boxes.count()) if re.fullmatch(r"\d{3}/\d{2}/\d{2}", boxes.nth(i).input_value() or "")]
+    for i, value in zip(targets[:2], (roc(start), roc(date.today()))):
+        box = boxes.nth(i)
+        try:
+            box.click(timeout=3000)
+            box.fill("")
+            box.type(value, delay=40)
+            box.press("Tab")
+        except Exception:
+            pass
+    page.keyboard.press("Escape")  # 關掉日曆
+    return f"自訂 {roc(start)}～{roc(date.today())}"
+
+
 def fetch(since: date = None, keep_open: bool = False) -> Path:
     from playwright.sync_api import sync_playwright
     from .login import acquire_lock, launch_context, logout_all, open_bank, wait_for_logins
@@ -132,6 +175,12 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
             page.wait_for_timeout(2000)
             try:
                 _goto(page)
+                key = "TWD:郵局存簿"
+                start = parse_day(progress.get(key, {}).get("last_date", "")) or since
+                label = _set_period(page, start)
+                print(f"  查詢期間：{label}")
+                _click(page, "查詢")
+                page.wait_for_timeout(3000)
                 try:  # 每頁筆數選「全部」
                     page.evaluate("""() => { const s = [...document.querySelectorAll('select')].find(x => [...x.options].some(o => o.text.trim() === '全部'));
                         if (s) { s.selectedIndex = [...s.options].findIndex(o => o.text.trim() === '全部'); s.dispatchEvent(new Event('change', {bubbles: true})); } }""")
@@ -145,8 +194,6 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 info.value.save_as(str(target))
                 os.chmod(target, 0o600)
                 rows = parse_csv(target.read_bytes())
-                key = "TWD:郵局存簿"
-                start = parse_day(progress.get(key, {}).get("last_date", "")) or since
                 total = len(rows)
                 rows.sort(key=lambda r: (r[0], r[1]))
                 new, progress[key] = keep_new(rows, progress.get(key, {}), start)
