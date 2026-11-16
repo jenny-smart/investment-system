@@ -68,6 +68,29 @@ def _roc(text: str) -> str:
     return f"{y}/{int(m.group(2)):02d}/{int(m.group(3)):02d}"
 
 
+def _cell(text: str) -> str:
+    """郵局 CSV 的文字格式 ="87" → 87"""
+    t = (text or "").strip()
+    m = re.fullmatch(r'="?(.*?)"?', t)
+    return (m.group(1) if m and t.startswith("=") else t).strip()
+
+
+def clean_rows(rows: list) -> list:
+    """去掉 ="…" 外殼；「續上一筆」（金額 0）併進前一筆的備註／附言，不另算一筆。
+    欄位：日期、時間、摘要、提款、存款、結存、備註、附言"""
+    out = []
+    for r in rows:
+        r = [_cell(c) for c in r] + [""] * (8 - len(r))
+        if r[2].startswith("續上一筆") and out:
+            prev = out[-1]
+            for i in (6, 7):
+                if r[i] and r[i] not in prev[i]:
+                    prev[i] = f"{prev[i]} {r[i]}".strip()
+            continue
+        out.append(r[:8])
+    return out
+
+
 def parse_csv(raw: bytes) -> list[list[str]]:
     text = None
     for enc in ("utf-8-sig", "big5", "cp950", "utf-16"):
@@ -101,7 +124,7 @@ def parse_csv(raw: bytes) -> list[list[str]]:
         else:
             clock = get(i_time)
         out.append([day, clock, get(i_memo), get(i_out), get(i_in), get(i_bal), get(i_note), get(i_msg)])
-    return out
+    return clean_rows(out)
 
 
 RADIO_JS = r"""

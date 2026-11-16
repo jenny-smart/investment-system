@@ -434,3 +434,26 @@ def test_post_csv_and_ledger():
     assert t.amount == -500 and t.balance == 1500 and t.when == "2026-11-05 10:21:33"
     e = classify([_to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[1])], RULES)[0]
     assert [(p.row, p.amount) for p in e.postings] == [(42, 3)]
+
+
+def test_post_clean_rows_merges_continuation():
+    from bank_sync.post_tx import clean_rows
+    rows = [["2026/01/22", "16:57", "跨行轉入", "", "5,000", "5,293", '="008862"', ""],
+            ["2026/01/22", "16:57", "續上一筆", "", '="0"', "5,293", "823將來銀行", ""],
+            ["2026/01/22", "16:57", "續上一筆", "", '="0"', "5,293", "823-1", "珍妮郵局"],
+            ["2026/01/23", "10:00", "消費扣款", '="87"', "", '="413"', '="7913"', ""]]
+    out = clean_rows(rows)
+    assert len(out) == 2
+    assert out[0][6] == "008862 823將來銀行 823-1" and out[0][7] == "珍妮郵局"
+    assert out[1][3] == "87" and out[1][5] == "413"
+
+
+def test_post_interest_and_no_self_transfer():
+    from bank_sync import bank_ledger as L
+    head = ["交易日期", "交易時間", "摘要", "提款金額", "存款金額", "結存金額", "備註", "附言"]
+    blk = {"type": "TWD", "account": "郵局存簿", "ledger_row": "郵局", "head": head}
+    t1 = L._to_tx("post", blk, head, ["2026/06/21", "01:51", "利　　息", "", "10", "1,484", "OF", ""])
+    t2 = L._to_tx("post", blk, head, ["2026/01/22", "16:57", "跨行轉入", "", "5,000", "5,293", "823將來銀行", "珍妮郵局"])
+    es = L.classify([t1, t2], {}, [])
+    assert es[0].reason == "利息"
+    assert all(p.row != 42 or p.amount > 0 for p in es[1].postings)

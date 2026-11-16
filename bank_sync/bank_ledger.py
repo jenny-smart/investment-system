@@ -150,7 +150,11 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
     for bank in ("fubon", "next", "taishin", "yuanta", "linebank", "sc", "post"):
         for block in _blocks(bank):
             head = block.get("head") or []
-            for row in block.get("rows") or []:
+            rows = block.get("rows") or []
+            if bank == "post":
+                from .post_tx import clean_rows
+                rows = clean_rows(rows)
+            for row in rows:
                 tx = _to_tx(bank, block, head, row)
                 if tx == "SKIP":
                     continue
@@ -234,7 +238,8 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         if out_ is None and in_ is None:
             return None
         note = " ".join(x for x in (get(_col(head, "備註")), get(_col(head, "附言"))) if x)
-        return Tx(bank, account, "郵局", day, (in_ or 0) - (out_ or 0), "TWD", get(_col(head, "摘要")), note, key)
+        summary = re.sub(r"\s", "", get(_col(head, "摘要")))  # 「利　　息」→「利息」
+        return Tx(bank, account, "郵局", day, (in_ or 0) - (out_ or 0), "TWD", summary, note, key)
     if bank == "sc":
         amount = _num(get(_col(head, "金額")).replace("$", ""))
         if amount is None:
@@ -461,7 +466,7 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
             e.postings, e.reason = [mine, Posting(ROW_UNCLE, -t.amount)], "uncle → 借出+投資"
         elif "line" in low and t.amount > 0 and "line bank" not in low:
             e.postings, e.reason = [mine, Posting(ROW_PETTY_ADVANCE, -t.amount)], "LINE 轉入 → 零用金-代墊 減項"
-        elif (bank_row := next((r for w, r in OTHER_BANK_ROWS if w.lower() in low), None)) is not None:
+        elif (bank_row := next((r for w, r in OTHER_BANK_ROWS if w.lower() in low and r != row), None)) is not None:
             e.postings, e.reason = [mine, Posting(bank_row, -t.amount)], "轉到其他自己的銀行"
         elif any(w.lower() in low for w in OWN_BANK_WORDS):
             e.postings, e.reason = [mine], "自己帳戶互轉（另一邊明細尚未配對，請確認）"
