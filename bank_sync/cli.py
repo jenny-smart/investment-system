@@ -68,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
     ftx = sub.add_parser("fetch-taishin", help="台新：自動查詢台幣／外幣交易明細，存在本機")
     ftx.add_argument("--since", help="第一次（或要重抓）從哪天開始，例如 2026-11-01；平常不用給，會從上次最後一筆日期查到今天")
     ftx.add_argument("--keep-open", action="store_true")
+    wk = sub.add_parser("weekly", help="每週更新：先查信，只登入有動靜的銀行，再抓信用卡帳單、發布到網頁")
+    wk.add_argument("--dry-run", action="store_true", help="只查信、列出要登入哪幾家")
+    wk.add_argument("--days", type=int, default=7, help="最多往回看幾天的信（預設 7）")
+    wk.add_argument("--bank", action="append", default=[], help="只跑這幾家（taishin/fubon/next/linebank/sc/yuanta/post）")
+    sub.add_parser("weekly-install", help="裝成 Mac 排程：每週三 11:00 打開終端機跑 weekly")
+    sub.add_parser("weekly-uninstall", help="移除每週排程")
     sub.add_parser("app-install", help="把銀行帳戶頁裝成 Mac 背景服務（http://localhost:8502，只要做一次）")
     sub.add_parser("app-status", help="看銀行帳戶頁背景服務狀態")
     sub.add_parser("app-uninstall", help="移除銀行帳戶頁背景服務")
@@ -153,6 +159,12 @@ def main(argv: list[str] | None = None) -> int:
         from .taishin_tx import fetch
         from datetime import date as _date
         fetch(_date.fromisoformat(args.since) if args.since else None, args.keep_open)
+    elif args.command == "weekly":
+        from .weekly import run as weekly_run
+        weekly_run(args.dry_run, args.days, tuple(args.bank))
+    elif args.command in ("weekly-install", "weekly-uninstall"):
+        from . import weekly
+        (weekly.install if args.command == "weekly-install" else weekly.uninstall)()
     elif args.command in ("app-install", "app-status", "app-uninstall"):
         from . import app_service
         {"app-install": app_service.install, "app-status": app_service.status, "app-uninstall": app_service.uninstall}[args.command]()
