@@ -132,18 +132,39 @@ def _set_period(page, start: date) -> str:
         return label
     page.evaluate(RADIO_JS, "自訂")
     roc = lambda d: f"{d.year - 1911}/{d.month:02d}/{d.day:02d}"
-    boxes = page.locator("input[type=text]").filter(has_text="")
-    targets = [i for i in range(boxes.count()) if re.fullmatch(r"\d{3}/\d{2}/\d{2}", boxes.nth(i).input_value() or "")]
-    for i, value in zip(targets[:2], (roc(start), roc(date.today()))):
-        box = boxes.nth(i)
-        try:
-            box.click(timeout=3000)
-            box.fill("")
-            box.type(value, delay=40)
-            box.press("Tab")
-        except Exception:
-            pass
+    want = [roc(start), roc(date.today())]
+    set_js = r"""
+    (vals) => {
+      // 日期欄（值像 115/11/16，可能沒寫 type、可能唯讀）：直接改值並觸發事件
+      const boxes = [...document.querySelectorAll('input')].filter(i => /^\d{3}\/\d{2}\/\d{2}$/.test(i.value || '') || /date|Date|DT|dt/.test(i.name + i.id));
+      boxes.slice(0, 2).forEach((b, k) => {
+        b.removeAttribute('readonly');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+        setter.call(b, vals[k]);
+        for (const ev of ['input', 'change', 'blur']) b.dispatchEvent(new Event(ev, {bubbles: true}));
+        if (window.jQuery) { try { window.jQuery(b).val(vals[k]).trigger('change'); } catch (e) {} }
+      });
+      return boxes.slice(0, 2).map(b => b.value);
+    }
+    """
+    got = page.evaluate(set_js, want)
+    if got != want:  # 還不行就用鍵盤輸入
+        boxes = page.locator("input")
+        idx = [i for i in range(boxes.count()) if re.fullmatch(r"\d{3}/\d{2}/\d{2}", boxes.nth(i).input_value() or "")]
+        for i, value in zip(idx[:2], want):
+            try:
+                box = boxes.nth(i)
+                box.click(timeout=3000)
+                box.press("Meta+A")
+                box.press("Backspace")
+                box.type(value, delay=40)
+                box.press("Tab")
+            except Exception:
+                pass
+        got = page.evaluate("() => [...document.querySelectorAll('input')].filter(i => /^\\d{3}\\/\\d{2}\\/\\d{2}$/.test(i.value || '')).slice(0, 2).map(i => i.value)")
     page.keyboard.press("Escape")  # 關掉日曆
+    if got != want:
+        print(f"  ⚠️ 自訂日期沒填進去（要 {want}，現在是 {got}）")
     return f"自訂 {roc(start)}～{roc(date.today())}"
 
 
@@ -181,6 +202,8 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 print(f"  查詢期間：{label}")
                 _click(page, "查詢")
                 page.wait_for_timeout(3000)
+                shown = page.evaluate("() => { const t = document.body.innerText; const a = t.match(/查詢起始日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); const b = t.match(/查詢迄止日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); return [a ? a[1] : '', b ? b[1] : '']; }")
+                print(f"  郵局實際查詢：{shown[0]}～{shown[1]}")
                 try:  # 每頁筆數選「全部」
                     page.evaluate("""() => { const s = [...document.querySelectorAll('select')].find(x => [...x.options].some(o => o.text.trim() === '全部'));
                         if (s) { s.selectedIndex = [...s.options].findIndex(o => o.text.trim() === '全部'); s.dispatchEvent(new Event('change', {bubbles: true})); } }""")
