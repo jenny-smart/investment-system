@@ -178,7 +178,25 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 keys.add(tx.key)
                 out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
+    attach_receipts(out)
     return out, warn
+
+
+def attach_receipts(txs: list) -> int:
+    """郵局消費扣款 → 用消費日回找 Messenger 收據（同金額，或幾張加總），品項寫進備註"""
+    from .messenger_notes import load_receipts, match_receipt, receipt_note
+    receipts = load_receipts()
+    if not receipts:
+        return 0
+    used, hit = set(), 0
+    for t in txs:
+        if t.bank != "post" or t.amount >= 0 or "利息" in t.summary:
+            continue
+        rs = match_receipt(t.day, t.amount, receipts, used)
+        if rs:
+            t.note = receipt_note(rs)
+            hit += 1
+    return hit
 
 
 ONLY_ACCOUNTS = {"yuanta": ("大同",), "linebank": ("主帳戶",)}  # Jenny：元大只記大同、LINE Bank 只記主帳戶

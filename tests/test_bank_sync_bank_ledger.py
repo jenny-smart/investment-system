@@ -457,3 +457,17 @@ def test_post_interest_and_no_self_transfer():
     es = L.classify([t1, t2], {}, [])
     assert es[0].reason == "利息"
     assert all(p.row != 42 or p.amount > 0 for p in es[1].postings)
+
+
+def test_messenger_receipt_parse_and_match():
+    from datetime import date
+    from bank_sync.messenger_notes import parse_receipt, match_receipt, receipt_note, parse_date_label
+    r = parse_receipt("(嘉興店)1. 竹絲蝦餃(10入/盒)# × 2 = 250\n(嘉興店)2. 第一石鹼馬桶清潔劑# × 3 = 117\n總金額 :【367】")
+    assert r["store"] == "嘉興店" and r["total"] == 367 and len(r["items"]) == 2
+    assert parse_date_label("週五 18:24", date(2026, 11, 16)) == date(2026, 11, 13)
+    r["day"] = "2026-11-13"
+    other = {"store": "嘉興店", "day": "2026-11-10", "total": 100, "items": [{"name": "A", "qty": 1, "amount": 100}]}
+    assert match_receipt(date(2026, 11, 13), -367, [r, other], set()) == [r]
+    assert len(match_receipt(date(2026, 11, 16), -467, [r, other], set())) == 2   # 取貨時一起到貨
+    assert match_receipt(date(2026, 11, 12), -367, [r], set()) == []              # 收據不會晚於消費日
+    assert receipt_note([r]).startswith("嘉興店 11/13 竹絲蝦餃×2 250")
