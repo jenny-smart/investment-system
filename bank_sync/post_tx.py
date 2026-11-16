@@ -239,14 +239,21 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 _goto(page)
                 key = "TWD:郵局存簿"
                 start = parse_day(progress.get(key, {}).get("last_date", "")) or since
-                rows = []
+                rows, earliest = [], None
                 for n, period in enumerate(plan_queries(start, date.today())):
                     if n:
                         _goto(page)
                     label = _set_period(page, period)
                     _click(page, "查詢")
                     page.wait_for_timeout(3000)
-                    shown = page.evaluate("() => { const t = document.body.innerText; const a = t.match(/查詢起始日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); const b = t.match(/查詢迄止日期\\s*(\\d{3}\\/\\d{2}\\/\\d{2})/); return [a ? a[1] : '', b ? b[1] : '']; }")
+                    shown = page.evaluate(r"""() => { const t = document.body.innerText;
+                        const p = t.match(/查詢期間\s*[:：]?\s*(\d{3}\/\d{1,2}\/\d{1,2})\s*[~～－-]\s*(\d{3}\/\d{1,2}\/\d{1,2})/);
+                        if (p) return [p[1], p[2]];
+                        const a = t.match(/查詢起始日期\s*(\d{3}\/\d{1,2}\/\d{1,2})/); const b = t.match(/查詢迄止日期\s*(\d{3}\/\d{1,2}\/\d{1,2})/);
+                        return [a ? a[1] : '', b ? b[1] : '']; }""")
+                    got = parse_day(shown[0])
+                    if got and (earliest is None or got < earliest):
+                        earliest = got
                     try:  # 每頁筆數選「全部」
                         page.evaluate("""() => { const s = [...document.querySelectorAll('select')].find(x => [...x.options].some(o => o.text.trim() === '全部'));
                             if (s) { s.selectedIndex = [...s.options].findIndex(o => o.text.trim() === '全部'); s.dispatchEvent(new Event('change', {bubbles: true})); } }""")
@@ -274,8 +281,10 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
                 results.append({"type": "TWD", "account": "郵局存簿", "ledger_row": "郵局", "from": start.isoformat(),
                                 "head": HEAD, "rows": new})
                 print(f"  郵局存簿：下載 {total} 筆（{span}），新的 {len(new)} 筆")
-                if days and min(days) > start:
-                    print(f"  ⚠️ 郵局下載的明細從 {min(days):%m/%d} 開始，比要的 {start:%m/%d} 晚；查詢期間要調整（請告訴我郵局的期間怎麼選）")
+                if earliest and earliest > start:
+                    print(f"  ⚠️ 郵局實際查詢只從 {earliest:%Y/%m/%d} 開始，比要的 {start:%Y/%m/%d} 晚，前面那段沒查到")
+                elif days and min(days) > start:
+                    print(f"  （{start:%m/%d}～{min(days):%m/%d} 之間郵局沒有交易）")
             except KeyboardInterrupt:
                 problem = "已中斷（Ctrl+C）"
                 print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
