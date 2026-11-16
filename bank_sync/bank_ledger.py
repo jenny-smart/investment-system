@@ -184,7 +184,7 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
 
 def attach_receipts(txs: list) -> int:
     """郵局消費扣款 → 用消費日回找 Messenger 收據（同金額，或幾張加總），品項寫進備註"""
-    from .messenger_notes import load_receipts, match_receipt, receipt_note
+    from .messenger_notes import load_receipts, match_note
     receipts = load_receipts()
     if not receipts:
         return 0
@@ -192,9 +192,9 @@ def attach_receipts(txs: list) -> int:
     for t in txs:
         if t.bank != "post" or t.amount >= 0 or "利息" in t.summary:
             continue
-        rs = match_receipt(t.day, t.amount, receipts, used)
-        if rs:
-            t.note = receipt_note(rs)
+        note, state = match_note(t.day, t.amount, receipts, used)
+        if note:
+            t.note = note
             hit += 1
     return hit
 

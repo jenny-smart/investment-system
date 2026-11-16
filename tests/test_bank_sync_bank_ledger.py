@@ -480,3 +480,13 @@ def test_messenger_date_only_from_stamp_lines():
              "(嘉興店)1. YENS蒸魚卵 × 1 = 120", "總金額：【120】"]
     r = lines_to_receipts(lines, date(2026, 11, 16))
     assert r[0]["day"] == "2026-01-14" and r[0]["total"] == 120
+
+
+def test_messenger_dedupe_and_diff_note():
+    from datetime import date
+    from bank_sync.messenger_notes import dedupe, match_note
+    r = lambda d: {"store": "嘉興店", "day": d, "total": 367, "items": [{"name": "蝦餃", "qty": 2, "amount": 367}]}
+    rs = dedupe([r("2026-11-11"), r("2026-11-13"), r("2026-11-13")])
+    assert len(rs) == 1 and rs[0]["day"] == "2026-11-13"
+    note, state = match_note(date(2026, 11, 13), -345, rs, set())
+    assert state == "diff" and "差 -22" in note

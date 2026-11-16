@@ -193,6 +193,25 @@ def lines_to_receipts(lines: list, today) -> list:
             if rec:
                 rec["day"] = day.isoformat() if day else ""
                 out.append(rec)
+    return dedupe(out)
+
+
+def _sig(r: dict) -> tuple:
+    return (r["total"], tuple((i["name"], i["qty"], i["amount"]) for i in r["items"]))
+
+
+def dedupe(receipts: list, days: int = 14) -> list:
+    """同一張訂單會被通知好幾次（到貨通知、可取貨明細、未取貨明細）：
+    兩週內內容一模一樣的只留一張，日期用最後一次通知（最接近取貨）"""
+    from datetime import date
+    out = []
+    for r in receipts:
+        twin = next((o for o in reversed(out) if _sig(o) == _sig(r) and o["day"] and r["day"]
+                     and 0 <= (date.fromisoformat(r["day"]) - date.fromisoformat(o["day"])).days <= days), None)
+        if twin:
+            twin["day"] = r["day"]
+        else:
+            out.append(r)
     return out
 
 
@@ -286,17 +305,14 @@ def report(lines: list, since, spends=None) -> list:
     os.chmod(RECEIPTS, 0o600)
     nodate = sum(1 for r in receipts if not r["day"])
     print(f"  讀了 {len(lines)} 行對話，找到 {len(receipts)} 張收據" + (f"（{nodate} 張認不出日期）" if nodate else ""))
-    used, ok = set(), 0
+    used, ok, diff = set(), 0, 0
     for t in spends:
-        rs = match_receipt(t.day, t.amount, allr, used)
-        if rs:
-            ok += 1
-            print(f"  ✓ {t.day:%m/%d} 郵局 {t.amount:,.0f} → {receipt_note(rs)}")
-        else:
-            near = [r for r in allr if r.get("day") and 0 <= (t.day - date.fromisoformat(r["day"])).days <= 7]
-            hint = "；".join(f"{r['day'][5:].replace('-', '/')} 總 {r['total']}" for r in near[-3:]) or "前一週沒有收據"
-            print(f"  ✗ {t.day:%m/%d} 郵局 {t.amount:,.0f} → 對不到（{hint}）")
-    print(f"  對到 {ok}/{len(spends)} 筆")
+        note, state = match_note(t.day, t.amount, allr, used)
+        ok += state == "ok"
+        diff += state == "diff"
+        mark = {"ok": "✓", "diff": "≈"}.get(state, "✗")
+        print(f"  {mark} {t.day:%m/%d} 郵局 {t.amount:,.0f} → {note or '前一週沒有收據'}")
+    print(f"  金額相同 {ok} 筆、有差額 {diff} 筆、對不到 {len(spends) - ok - diff} 筆（共 {len(spends)}）")
     return allr
 
 
@@ -338,6 +354,31 @@ def match_receipt(day, amount: float, receipts: list, used: set, window: int = 4
                 used.update(i for i, _ in combo)
                 return [r for _, r in combo]
     return []
+
+
+def nearest_receipt(day, amount: float, receipts: list, used: set, window: int = 7):
+    """金額對不上時：找消費日（含）前一週內、總金額最接近的那張，回傳 (收據, 實付−收據)"""
+    from datetime import date
+    want = round(abs(amount))
+    pool = [(i, r) for i, r in enumerate(receipts)
+            if i not in used and r.get("day") and 0 <= (day - date.fromisoformat(r["day"])).days <= window]
+    if not pool:
+        return None
+    i, r = min(pool, key=lambda x: (abs(x[1]["total"] - want), (day - date.fromisoformat(x[1]["day"])).days))
+    used.add(i)
+    return r, want - r["total"]
+
+
+def match_note(day, amount: float, receipts: list, used: set) -> tuple:
+    """回傳 (備註, 狀態)：狀態 = 'ok' 金額相同／'diff' 有差額／'' 對不到"""
+    rs = match_receipt(day, amount, receipts, used)
+    if rs:
+        return receipt_note(rs), "ok"
+    near = nearest_receipt(day, amount, receipts, used)
+    if near:
+        r, diff = near
+        return f"{receipt_note([r])}（收據 {r['total']}，實付 {round(abs(amount))}，差 {diff:+d}）", "diff"
+    return "", ""
 
 
 def receipt_note(rs: list) -> str:
