@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     me = sub.add_parser("messenger-explore", help="打開 Messenger 記帳對話，記錄訊息格式（原文只存本機）")
     me.add_argument("--thread", default="https://www.messenger.com/t/111433143973520")
     mf = sub.add_parser("messenger-fetch", help="讀 Messenger 對話裡的收據（日期＋品項＋總金額），之後自動對郵局等扣款")
-    mf.add_argument("--since", default=f"{__import__('datetime').date.today().year}-01-01")
+    mf.add_argument("--since", default="", help="預設：郵局最早一筆支出的前一週")
     mf.add_argument("--thread", default="https://www.messenger.com/t/111433143973520")
     sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "messenger-fetch":
         from datetime import date as _d
         from .messenger_notes import fetch as m_fetch
-        m_fetch(_d.fromisoformat(args.since), args.thread)
+        m_fetch(_d.fromisoformat(args.since) if args.since else None, args.thread)
     elif args.command == "app-password":
         from .app_auth import set_password_cli
         set_password_cli()

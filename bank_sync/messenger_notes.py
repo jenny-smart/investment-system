@@ -91,28 +91,42 @@ ITEM_RE = re.compile(r"(?:[(（]([^()（）]{1,12})[)）])?\s*\d{1,2}\s*[.．、
 TOTAL_RE = re.compile(r"總金額\s*[:：]?\s*[【\[]?\s*\$?([\d,]+)")
 WEEK = "一二三四五六日"
 
-# 依 DOM 順序抓：日期分隔列（h4 或 短文字）＋每則訊息文字；捲動容器也一併回傳
-CAPTURE_JS = r"""
+# 找對話的捲動區（main 裡面 overflow auto/scroll、文字最多的那塊），回傳它的文字；可順便捲動
+TEXT_JS = r"""
 (scroll) => {
-  const vis = e => e.getClientRects().length > 0;
   const main = document.querySelector('[role="main"]') || document.body;
-  const rows = [...main.querySelectorAll('[role="row"]')].filter(vis);
-  let box = rows.length ? rows[0].parentElement : null;
-  while (box && !(box.scrollHeight > box.clientHeight + 20 && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+  const boxes = [...main.querySelectorAll('div')].filter(e => {
+    const s = getComputedStyle(e);
+    return /auto|scroll/.test(s.overflowY) && e.scrollHeight > e.clientHeight + 50 && e.clientHeight > 200;
+  });
+  boxes.sort((a, b) => (b.innerText || '').length - (a.innerText || '').length);
+  const box = boxes[0];
   if (box && scroll === 'top') box.scrollTop = 0;
-  if (box && scroll === 'down') box.scrollTop = box.scrollTop + box.clientHeight * 0.8;
+  if (box && scroll === 'down') box.scrollTop = box.scrollTop + box.clientHeight * 0.7;
+  const roles = {};
+  main.querySelectorAll('[role]').forEach(e => { const r = e.getAttribute('role'); roles[r] = (roles[r] || 0) + 1; });
   return {
+    found: !!box, text: box ? box.innerText : '', height: box ? box.scrollHeight : 0,
     atBottom: box ? box.scrollTop + box.clientHeight >= box.scrollHeight - 5 : true,
-    rows: rows.map(r => {
-      const h = r.querySelector('h4,h3,[role="heading"]');
-      const tips = [...r.querySelectorAll('[aria-label],[title],[data-tooltip-content]')]
-        .map(e => e.getAttribute('aria-label') || e.getAttribute('title') || e.getAttribute('data-tooltip-content') || '')
-        .filter(t => /\d/.test(t)).slice(0, 3);
-      return {text: (r.innerText || '').trim().slice(0, 2000), heading: h ? h.innerText.trim() : '', tips};
-    }),
+    url: location.href.split('?')[0], boxes: boxes.length, roles,
   };
 }
 """
+
+
+def merge_lines(merged: list, new: list) -> list:
+    """捲動時前後兩段畫面會重疊：把新的一段接在後面（去掉重疊的部分）"""
+    if not merged:
+        return list(new)
+    for k in range(min(len(merged), len(new)), 0, -1):
+        if merged[-k:] == new[:k]:
+            return merged + new[k:]
+    # 找新段開頭在舊段裡的位置
+    head = new[:3]
+    for i in range(len(merged) - len(head), -1, -1):
+        if merged[i:i + len(head)] == head:
+            return merged[:i] + new
+    return merged + new
 
 
 def parse_date_label(text: str, today):
@@ -153,31 +167,59 @@ def parse_receipt(text: str) -> dict | None:
     return {"store": store, "items": items, "total": int(total.group(1).replace(",", ""))}
 
 
-def rows_to_receipts(rows: list, today) -> list:
-    """依序走過訊息列：遇到日期就記住，遇到收據就掛上那天"""
-    out, day = [], None
-    for r in rows:
-        for label in (r.get("heading", ""), r.get("text", "") if len(r.get("text", "")) <= 30 else "", *r.get("tips", [])):
-            got = parse_date_label(label, today) if label else None
-            if got:
-                day = got
-                break
-        rec = parse_receipt(r.get("text", ""))
-        if rec:
-            rec["day"] = day.isoformat() if day else ""
-            out.append(rec)
+def _date_line(line: str, today):
+    t = line.strip()
+    if not t or len(t) > 30 or "=" in t or "＝" in t or ITEM_RE.search(t) or TOTAL_RE.search(t):
+        return None
+    return parse_date_label(t, today)
+
+
+def lines_to_receipts(lines: list, today) -> list:
+    """依序走過對話文字：遇到日期就記住，收集到「總金額」就是一張收據，掛上那天"""
+    out, day, buf = [], None, []
+    for line in lines:
+        got = _date_line(line, today)
+        if got:
+            day, buf = got, []
+            continue
+        buf.append(line)
+        if TOTAL_RE.search(line):
+            rec = parse_receipt("\n".join(buf))
+            buf = []
+            if rec:
+                rec["day"] = day.isoformat() if day else ""
+                out.append(rec)
     return out
 
 
-def fetch(since, thread: str = DEFAULT_THREAD) -> Path:
-    """打開對話 → 往上捲到 since 之前 → 由上往下讀每一則 → 解析收據存在本機 receipts.json"""
-    from datetime import date
+def rows_to_receipts(rows: list, today) -> list:
+    lines = []
+    for r in rows:
+        lines += [x for x in (r.get("heading", ""), *(r.get("text", "").splitlines())) if x]
+    return lines_to_receipts(lines, today)
+
+
+def _post_expenses() -> list:
+    """本機郵局明細裡的支出（消費日、金額）"""
+    from .bank_ledger import load_transactions
+    txs, _ = load_transactions()
+    return [t for t in txs if t.bank == "post" and t.amount < 0 and "利息" not in t.summary]
+
+
+def fetch(since=None, thread: str = DEFAULT_THREAD) -> Path:
+    """先看郵局有支出的日期 → 打開 Messenger 對話往上捲到最早那天 → 讀對話文字 → 每個支出日找那天的收據"""
+    from datetime import date, timedelta
     from playwright.sync_api import sync_playwright
     from .login import acquire_lock, launch_context
     MSG_DIR.mkdir(parents=True, exist_ok=True)
     today = date.today()
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
-    seen, ordered = set(), []
+    spends = _post_expenses()
+    if spends:
+        print(f"郵局支出 {len(spends)} 筆（{spends[0].day:%m/%d}～{spends[-1].day:%m/%d}）")
+        since = since or spends[0].day - timedelta(days=7)
+    since = since or date(today.year, 1, 1)
+    lines, info = [], {}
     lock = acquire_lock()
     try:
         with sync_playwright() as p:
@@ -185,55 +227,63 @@ def fetch(since, thread: str = DEFAULT_THREAD) -> Path:
             page = context.new_page()
             page.goto(thread)
             input("請在 Chrome 登入 Messenger、看到記帳對話後，回到這裡按 Enter…")
-            # 1) 往上捲，直到最上面的日期早於 since，或再也載不出更舊的
-            stale, top = 0, None
-            for _ in range(400):
-                snap = page.evaluate(CAPTURE_JS, "top")
-                page.wait_for_timeout(1500)
-                first = next((parse_date_label(r["heading"] or (r["text"] if len(r["text"]) <= 30 else ""), today)
-                              for r in snap["rows"] if parse_date_label(r["heading"] or (r["text"] if len(r["text"]) <= 30 else ""), today)), None)
+            info = page.evaluate(TEXT_JS, "")
+            if not info["found"]:
+                print("  ⚠️ 找不到對話的捲動區（請上傳下面的格式樣本）")
+            # 1) 往上捲到 since 之前（Messenger 捲到頂才會載入更舊的）
+            last_h, stale, first = 0, 0, None
+            for n in range(600):
+                snap = page.evaluate(TEXT_JS, "top")
+                page.wait_for_timeout(1200)
+                days = [d for d in (_date_line(x, today) for x in snap["text"].splitlines()) if d]
+                first = min(days) if days else first
                 if first and first < since:
                     break
-                key = snap["rows"][0]["text"][:80] if snap["rows"] else ""
-                stale = stale + 1 if key == top else 0
-                top = key
-                if stale >= 6:
+                stale = stale + 1 if snap["height"] == last_h else 0
+                last_h = snap["height"]
+                if stale >= 8:
                     print(f"  ⚠️ 對話最上面只到 {first or '？'}，載不出更舊的訊息")
                     break
+                if n and n % 20 == 0:
+                    print(f"  往上捲中…目前到 {first or '？'}")
             print(f"  已捲到 {first or '？'}，開始往下讀…")
-            # 2) 由上往下讀（Messenger 只保留畫面附近的訊息，所以一段一段讀、去重）
-            for _ in range(2000):
-                snap = page.evaluate(CAPTURE_JS, "")
-                for r in snap["rows"]:
-                    k = (r["text"], r["heading"], tuple(r["tips"]))
-                    if k not in seen:
-                        seen.add(k)
-                        ordered.append(r)
+            # 2) 由上往下一段一段讀，接起來
+            for _ in range(3000):
+                snap = page.evaluate(TEXT_JS, "")
+                lines = merge_lines(lines, [x.strip() for x in snap["text"].splitlines() if x.strip()])
                 if snap["atBottom"]:
                     break
-                page.evaluate(CAPTURE_JS, "down")
-                page.wait_for_timeout(700)
+                page.evaluate(TEXT_JS, "down")
+                page.wait_for_timeout(500)
             context.close()
     finally:
         lock.close()
-    raw = MSG_DIR / f"raw_{stamp}.json"
-    raw.write_text(json.dumps(ordered, ensure_ascii=False, indent=1), "utf-8")
+    raw = MSG_DIR / f"raw_{stamp}.txt"
+    raw.write_text("\n".join(lines), "utf-8")
     os.chmod(raw, 0o600)
-    receipts = [r for r in rows_to_receipts(ordered, today) if not r["day"] or r["day"] >= since.isoformat()]
+    receipts = [r for r in lines_to_receipts(lines, today) if not r["day"] or r["day"] >= since.isoformat()]
     old = json.loads(RECEIPTS.read_text("utf-8")) if RECEIPTS.exists() else []
     keyof = lambda r: (r["day"], r["total"], tuple((i["name"], i["qty"]) for i in r["items"]))
     merged = {keyof(r): r for r in old + receipts}
-    RECEIPTS.write_text(json.dumps(sorted(merged.values(), key=lambda r: r["day"]), ensure_ascii=False, indent=1), "utf-8")
+    allr = sorted(merged.values(), key=lambda r: r["day"])
+    RECEIPTS.write_text(json.dumps(allr, ensure_ascii=False, indent=1), "utf-8")
     os.chmod(RECEIPTS, 0o600)
     nodate = sum(1 for r in receipts if not r["day"])
-    print(f"  讀了 {len(ordered)} 則訊息，找到 {len(receipts)} 張收據" + (f"（{nodate} 張認不出日期）" if nodate else ""))
-    for r in receipts[-5:]:
-        print(f"    {r['day'] or '？'} {r['store']} {len(r['items'])} 項 總金額 {r['total']}")
+    print(f"  讀了 {len(lines)} 行對話，找到 {len(receipts)} 張收據" + (f"（{nodate} 張認不出日期）" if nodate else ""))
+    # 3) 每筆郵局支出：找那天的收據
+    used = set()
+    for t in spends:
+        rs = match_receipt(t.day, t.amount, allr, used)
+        if rs:
+            print(f"  ✓ {t.day:%m/%d} 郵局 {t.amount:,.0f} → {receipt_note(rs)}")
+        else:
+            same = [r for r in allr if r.get("day") == t.day.isoformat()]
+            hint = "；".join(f"{r['store']} 總 {r['total']}" for r in same) or "那天沒有收據"
+            print(f"  ✗ {t.day:%m/%d} 郵局 {t.amount:,.0f} → 對不到（{hint}）")
     shape = BANK_DIR / "_explore" / f"messenger_shape_{stamp}.txt"
     shape.parent.mkdir(parents=True, exist_ok=True)
-    shape.write_text("\n".join(_shape(r["text"])[:120] + (f" ｜標題：{_shape(r['heading'])}" if r["heading"] else "")
-                               + (f" ｜提示：{' / '.join(_shape(t)[:40] for t in r['tips'])}" if r["tips"] else "")
-                               for r in ordered[:300]), "utf-8")
+    head = [f"url={info.get('url')} 捲動區={info.get('boxes')} roles={info.get('roles')}"]
+    shape.write_text("\n".join(head + [_shape(x)[:120] for x in lines[:400]]), "utf-8")
     print(f"  收據（只在本機）：{RECEIPTS}\n  格式樣本（認不出時上傳給 Claude）：{shape}")
     return RECEIPTS
 
@@ -254,7 +304,7 @@ def match_receipt(day, amount: float, receipts: list, used: set, window: int = 4
     want = round(abs(amount))
     pool = [(i, r) for i, r in enumerate(receipts)
             if i not in used and r.get("day") and 0 <= (day - date.fromisoformat(r["day"])).days <= window]
-    pool.sort(key=lambda x: x[1]["day"], reverse=True)  # 越接近消費日越優先
+    pool.sort(key=lambda x: x[1]["day"], reverse=True)  # 同一天優先，再往前找
     for n in (1, 2, 3, 4):
         for combo in combinations(pool[:15], n):
             if sum(r["total"] for _, r in combo) == want:
