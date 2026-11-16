@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     dg.add_argument("bank")
     pb = sub.add_parser("publish", help="把本機銀行明細、信用卡明細寫進總帳「銀行明細」「信用卡明細」分頁（App 網頁看得到）")
     pb.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    me = sub.add_parser("messenger-explore", help="打開 Messenger 記帳對話，記錄訊息格式（原文只存本機）")
+    me.add_argument("--thread", default="https://www.messenger.com/t/111433143973520")
     sub.add_parser("app-password", help="設定／重設本機銀行頁的進入密碼")
     bl = sub.add_parser("bank-ledger", help="銀行明細（台新／富邦／將來）→ 細帳；預設只比對")
     bl.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
@@ -211,6 +213,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "publish":
         from .publish import publish
         publish(args.year)
+    elif args.command == "messenger-explore":
+        from .messenger_notes import explore as m_explore
+        m_explore(args.thread)
     elif args.command == "app-password":
         from .app_auth import set_password_cli
         set_password_cli()
