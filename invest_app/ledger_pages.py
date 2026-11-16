@@ -33,11 +33,16 @@ STATE_ORDER = ["待確認", "待寫入", "已寫入細帳", "細帳已有", "略
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _load(sheet: str) -> pd.DataFrame:
-    rows = gviz_values(MAIN_GOOGLE_SHEET_ID, sheet, "A1:L8000")
-    if not rows or len(rows) < 2:
-        return pd.DataFrame()
-    head = [str(h) for h in rows[0]]
-    return pd.DataFrame(rows[1:], columns=head)
+    """用 CSV 匯出讀（gviz 會猜欄位型態，混合欄位的少數值會變空白）。"""
+    import io
+    import requests
+    response = requests.get(f"https://docs.google.com/spreadsheets/d/{MAIN_GOOGLE_SHEET_ID}/gviz/tq",
+                            params={"tqx": "out:csv", "sheet": sheet, "headers": "1"}, timeout=30)
+    response.raise_for_status()
+    if "<html" in response.text[:200].lower():
+        raise RuntimeError("Google Sheet 讀取失敗（權限？）")
+    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+    return df
 
 
 def _amount_col(df: pd.DataFrame) -> str:
@@ -53,20 +58,29 @@ def _signed_money(v) -> str:
     return text
 
 
+def _reload_button(key: str) -> None:
+    if st.button("🔄 重新讀取", key=key):
+        _load.clear()
+        st.rerun()
+
+
 def render_bank_detail_page() -> None:
     st.subheader("銀行明細")
+    _reload_button("bd_reload")
     try:
         df = _load("銀行明細")
     except Exception as exc:
-        st.warning(f"讀不到總帳「銀行明細」分頁：{exc}")
+        st.warning(f"讀不到總帳「銀行明細」分頁：{type(exc).__name__}: {exc}")
         df = pd.DataFrame()
     if df.empty:
         st.info("還沒有資料。請在 Mac 執行一次：`python3 -m bank_sync publish`（會把已下載的銀行明細整理進總帳）。")
     else:
         amt = _amount_col(df)
         df["月份"] = df["日期"].astype(str).str[:2] + "月"
-        c1, c2, c3, c4 = st.columns([2, 1, 2, 2])
+        c1, c1b, c2, c3, c4 = st.columns([2, 2, 1, 2, 2])
         banks = c1.multiselect("銀行", sorted(df["銀行"].unique()), key="bd_bank")
+        pool = df[df["銀行"].isin(banks)] if banks else df
+        accounts = c1b.multiselect("帳戶", sorted(pool["帳戶"].unique()) if "帳戶" in df.columns else [], key="bd_acct")
         months = ["全部"] + sorted(df["月份"].unique(), reverse=True)
         month = c2.selectbox("月份", months, key="bd_month")
         states = c3.multiselect("狀態", [s for s in STATE_ORDER if s in set(df["狀態"])], key="bd_state")
@@ -74,6 +88,8 @@ def render_bank_detail_page() -> None:
         view = df
         if banks:
             view = view[view["銀行"].isin(banks)]
+        if accounts:
+            view = view[view["帳戶"].isin(accounts)]
         if month != "全部":
             view = view[view["月份"] == month]
         if states:
@@ -88,16 +104,14 @@ def render_bank_detail_page() -> None:
         for col, name in zip(cols, STATE_ORDER):
             col.metric(name, int(counts.get(name, 0)))
         show = view.drop(columns=["月份"]).copy()
-        for c in ("收入", "支出", "餘額"):
+        for c in ("收入", "支出", "餘額"):  # 數字加千分位，空白就留空白（不要顯示 None）
             if c in show.columns:
-                show[c] = pd.to_numeric(show[c].astype(str).str.replace(",", ""), errors="coerce")
+                nums = pd.to_numeric(show[c].astype(str).str.replace(",", ""), errors="coerce")
+                show[c] = nums.map(lambda x: "" if pd.isna(x) else f"{x:,.2f}".rstrip("0").rstrip("."))
         if amt:
             show[amt] = show[amt].map(_signed_money)
         st.dataframe(show, hide_index=True, use_container_width=True, height=560,
                      column_config={"其他": st.column_config.TextColumn(width="large"),
-                                    "收入": st.column_config.NumberColumn(format="%,.2f"),
-                                    "支出": st.column_config.NumberColumn(format="%,.2f"),
-                                    "餘額": st.column_config.NumberColumn(format="%,.2f"),
                                     "依據": st.column_config.TextColumn(width="medium")})
         st.caption("「銀行（細帳）」「其他」：記到細帳哪一列、加多少（＋／−）；空白的銀行欄＝公式會自動帶入（例 116 加進建北）。"
                    "「待確認」請到總帳「銀行明細確認」分頁處理。資料每 2 分鐘重新讀一次。")
@@ -106,10 +120,11 @@ def render_bank_detail_page() -> None:
 
 def render_card_detail_page() -> None:
     st.subheader("信用卡明細")
+    _reload_button("cd_reload")
     try:
         df = _load("信用卡明細")
     except Exception as exc:
-        st.warning(f"讀不到總帳「信用卡明細」分頁：{exc}")
+        st.warning(f"讀不到總帳「信用卡明細」分頁：{type(exc).__name__}: {exc}")
         return
     if df.empty:
         st.info("還沒有資料。請在 Mac 執行一次：`python3 -m bank_sync publish`。")

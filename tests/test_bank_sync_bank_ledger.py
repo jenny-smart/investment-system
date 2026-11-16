@@ -396,6 +396,41 @@ def test_publish_bank_rows(monkeypatch):
     monkeypatch.setattr(bl, "card_charges", lambda y: [])
     monkeypatch.setattr(bl, "load_applied", lambda: set())
     rows = bank_rows(2026, book)
-    assert rows[0] == ["日期", "銀行", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
-    assert rows[1][:5] == ["11/02", "富邦", "行動自轉", "", 100]
-    assert rows[1][7] == "富邦:-100" and rows[1][8] == "零用金-餐費 +100" and rows[1][10] == "待寫入"
+    assert rows[0] == ["日期", "銀行", "帳戶", "摘要", "收入", "支出", "餘額", "備註", "銀行（細帳）", "其他", "依據", "狀態"]
+    assert rows[1][:6] == ["11/02", "富邦", "台幣 新店分行", "行動自轉", "", 100]
+    assert rows[1][8] == "富邦:-100" and rows[1][9] == "零用金-餐費 +100" and rows[1][11] == "待寫入"
+
+
+def test_load_dedupes_layout_variants(tmp_path, monkeypatch):
+    import json
+    import bank_sync.bank_ledger as bl
+    monkeypatch.setattr(bl, "TX_ROOT", tmp_path)
+    (tmp_path / "taishin").mkdir()
+    blk = {"type": "TWD", "account": "****273 敦南Richart二類帳戶", "ledger_row": "台新-Richard"}
+    a = dict(blk, head=["交易日", "帳務日", "摘要", "金額", "餘額", "備註", ""],
+             rows=[["2026/11/13 11:05:00", "2026/11/13", "CD轉出", "-60,000", "91,418", "", "交易明細"]])
+    b = dict(blk, head=["交易日", "帳務日", "摘要", "詳細", "", "金額", "餘額", "備註"],
+             rows=[["2026/11/13 11:05:00", "2026/11/13", "CD轉出", "金額 -60,000 餘額 91,418 備註 網路跨行 Ｕｎｃｌｅ", "交易明細"]])
+    (tmp_path / "taishin" / "20261115_1540.json").write_text(json.dumps({"accounts": [b]}), "utf-8")
+    (tmp_path / "taishin" / "20261115_1523.json").write_text(json.dumps({"accounts": [a]}), "utf-8")
+    txs, _ = bl.load_transactions()
+    assert len(txs) == 1 and "Ｕｎｃｌｅ" in txs[0].note
+
+
+def test_fx_bond_fund_buy():
+    t = tx("taishin", "****867 古亭外幣綜存", "台新外幣", 6, -91066, "支出", "IYA5 高盛新興債 FY040000581", "南非幣")
+    e = classify([t], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(92, -91066), (110, 91066)]
+
+
+def test_post_csv_and_ledger():
+    from bank_sync.bank_ledger import _to_tx
+    from bank_sync.post_tx import HEAD, parse_csv
+    raw = ("帳號,00012345\n交易日期 交易時間,摘要,沖銷記號,提款金額,存款金額,結存金額,備註,附言\n"
+           "115/11/05 10:21:33,跨行轉,,500,,1500,轉帳,\n115/11/06 09:00:00,利息,,,3,1503,,\n").encode("big5")
+    rows = parse_csv(raw)
+    assert rows[0][:2] == ["2026/11/05", "10:21:33"]
+    t = _to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[0])
+    assert t.amount == -500 and t.balance == 1500 and t.when == "2026-11-05 10:21:33"
+    e = classify([_to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[1])], RULES)[0]
+    assert [(p.row, p.amount) for p in e.postings] == [(42, 3)]

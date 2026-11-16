@@ -40,6 +40,7 @@ ACCOUNT_ROWS = {
     "元大": (40, 41, "元大"),
     "連線": (52, 53, "連線"),
     "渣打": (56, None, "渣打"),   # 渣打台幣沒有利息
+    "郵局": (42, None, "郵局"),
 }
 FX_ROWS = {"人民幣": 83, "日圓": 91, "美元": 90, "南非幣": 92}
 # 渣打外幣（Jenny 2026-11-15）：外幣利息加在該幣別列；基金投資 107/108；基金配息 123/124；
@@ -145,8 +146,8 @@ def _blocks(bank: str):
 
 def load_transactions() -> tuple[list[Tx], list[str]]:
     """讀三家已抓到的明細，轉成統一格式。回傳 (交易, 無法解析的警告)。"""
-    out, warn, seen = [], [], set()
-    for bank in ("fubon", "next", "taishin", "yuanta", "linebank", "sc"):
+    out, warn, seen, keys = [], [], {}, set()
+    for bank in ("fubon", "next", "taishin", "yuanta", "linebank", "sc", "post"):
         for block in _blocks(bank):
             head = block.get("head") or []
             for row in block.get("rows") or []:
@@ -156,9 +157,22 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 if tx is None:
                     warn.append(f"{bank} {block.get('account')}：看不懂這筆格式 {len(row)} 欄")
                     continue
-                if tx.key not in seen:
-                    seen.add(tx.key)
-                    out.append(tx)
+                # 同一筆交易可能在不同次下載、不同表格版面各存了一次（欄位排法不同）：
+                # 用「銀行＋時間＋金額＋餘額」認同一筆；備註空白的那份用有備註的補上
+                ident = (bank, tx.when, round(tx.amount, 2), None if tx.balance is None else round(tx.balance, 2),
+                         tx.currency, tx.ledger)
+                if tx.balance is None:
+                    ident = ident + (tx.key,)
+                if ident in seen:
+                    first = seen[ident]
+                    if not first.note and tx.note:
+                        first.note = tx.note
+                    continue
+                if tx.key in keys:
+                    continue
+                seen[ident] = tx
+                keys.add(tx.key)
+                out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
     return out, warn
 
@@ -174,7 +188,7 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
             tx.balance = None  # LINE Bank 明細沒有餘額
         else:
             detail = _detail_cell(row) if (bank == "taishin" and "詳細" in head) else None
-            tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "餘額")))
+            tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "結存金額", "餘額")))
             if tx.balance is None and bank == "taishin":
                 tx.balance = _num(_labeled(row, "餘額"))
         clock = get(_col(head, "交易時間", "時間"))
@@ -215,6 +229,12 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
             summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
         return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)
+    if bank == "post":
+        out_, in_ = _num(get(_col(head, "提款金額"))), _num(get(_col(head, "存款金額")))
+        if out_ is None and in_ is None:
+            return None
+        note = " ".join(x for x in (get(_col(head, "備註")), get(_col(head, "附言"))) if x)
+        return Tx(bank, account, "郵局", day, (in_ or 0) - (out_ or 0), "TWD", get(_col(head, "摘要")), note, key)
     if bank == "sc":
         amount = _num(get(_col(head, "金額")).replace("$", ""))
         if amount is None:
@@ -373,7 +393,8 @@ def classify(txs: list[Tx], rules=None, charges: list[tuple] | None = None) -> l
             own = FX_ROWS.get(t.currency)
             note_up = text.upper()
             is_interest = "利息" in text or re.search(r"\bINT", note_up) is not None  # Jenny：有 INT 就是利息
-            is_fund_buy = re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", note_up) is not None  # 例：0407…ZAR＝投資基金
+            is_fund_buy = (re.search(r"\d{6,}(ZAR|USD|CNY|JPY|RMB)\b", note_up) is not None  # 例：0407…ZAR＝投資基金
+                           or (t.amount < 0 and re.search(r"FY\d{6,}|基金|債", text) is not None))  # 例：IYA5 高盛新興債 FY0400…
             if own is None:
                 e.skip, e.reason = True, f"幣別 {t.currency} 細帳沒有對應列"
             elif is_interest:
@@ -474,7 +495,7 @@ def _row_index(labels: list, row) -> int | None:
 
 
 def note_line(t: Tx, amount: float) -> str:
-    who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}[t.bank]
+    who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打", "post": "郵局"}[t.bank]
     money = f"{amount:+,.2f}" if t.currency != "TWD" else f"{amount:+,.0f}"
     return f"{t.day:%m/%d} {who}{t.account.split(' ')[0]} {t.summary} {t.note} {money}".replace("  ", " ").strip()
 
@@ -671,7 +692,7 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
         t = e.tx
         choice, target = answers.get(_code(t), ("", ""))
         state = ("已記過" if "已記過（細帳" in e.reason else "⚠️ 請確認" if needs_check(e) else ("略過" if e.skip else "自動"))
-        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}.get(t.bank, t.bank)
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打", "post": "郵局"}.get(t.bank, t.bank)
         money = t.amount if t.currency != "TWD" else int(round(t.amount))
         rows.append([state, t.day.isoformat(), f"{who} {t.account}", t.ledger + ("" if t.currency == "TWD" else f"（{t.currency}）"),
                      money, t.summary, t.note, _describe(e, labels), e.reason, choice, target, _code(t)])
@@ -1123,7 +1144,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
             listing.append([month, t.day.isoformat(), line, "", "找不到列", e.reason])
             continue
         own_r = rows[0][0] if rows else None
-        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打"}.get(t.bank, t.bank)
+        who = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE", "sc": "渣打", "post": "郵局"}.get(t.bank, t.bank)
         memo = re.sub(r"\s*\S*分行$|\d{6,}", "", t.note or t.summary).strip()[:12]
         short = f"{t.day:%m/%d} {who} {memo}"
         col_letter = re.match(r"[A-Z]+", a1(0, c)).group(0)
