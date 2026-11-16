@@ -22,7 +22,7 @@ TX_DIR = BANK_DIR / "transactions" / "post"
 STATE_FILE = TX_DIR / "_state.json"
 HEAD = ["交易日期", "交易時間", "摘要", "提款金額", "存款金額", "結存金額", "備註", "附言"]
 
-READY_JS = "() => /結存金額/.test(document.body.innerText) && /存成CSV/.test(document.body.innerText)"
+READY_JS = "() => /區間查詢/.test(document.body.innerText) && /自訂/.test(document.body.innerText)"  # 查詢條件頁
 
 
 def _click(page, *names) -> bool:
@@ -52,10 +52,10 @@ def _goto(page) -> None:
         elif step % 3 == 1:
             _click(page, "帳戶查詢")
         else:
-            _click(page, "交易明細", "存簿交易明細", "交易明細查詢")
+            _click(page, "交易明細查詢", "交易明細", "存簿交易明細")
         page.wait_for_timeout(1500)
     drain_stdin()
-    input("  請在 Chrome 點到「我的帳戶 → 帳戶查詢 → 交易明細」，看到明細後回到這裡按 Enter：")
+    input("  請在 Chrome 點到「我的帳戶 → 交易明細查詢」（看得到「區間查詢／自訂」的那頁），回到這裡按 Enter：")
 
 
 def _roc(text: str) -> str:
@@ -147,21 +147,48 @@ def _set_period(page, start: date) -> str:
       return boxes.slice(0, 2).map(b => b.value);
     }
     """
-    got = page.evaluate(set_js, want)
-    if got != want:  # 還不行就用鍵盤輸入
+    # 1) jQuery 日曆元件：用元件自己的 setDate（郵局的日期欄只認日曆選的值）
+    dates = [start, date.today()]
+    got = page.evaluate(r"""
+    (ymd) => {
+      const $ = window.jQuery;
+      const boxes = [...document.querySelectorAll('input')].filter(i => /^\d{3}\/\d{2}\/\d{2}$/.test(i.value || ''));
+      if (!$ || !boxes.length) return null;
+      boxes.slice(0, 2).forEach((b, k) => {
+        try { if ($(b).datepicker) $(b).datepicker('setDate', new Date(ymd[k][0], ymd[k][1] - 1, ymd[k][2])); } catch (e) {}
+        try { $(b).trigger('change'); } catch (e) {}
+      });
+      return boxes.slice(0, 2).map(b => b.value);
+    }
+    """, [[d.year, d.month, d.day] for d in dates])
+    if got != want:  # 2) 真的用滑鼠點日曆：點日期欄 → 選年、選月 → 點日
         boxes = page.locator("input")
         idx = [i for i in range(boxes.count()) if re.fullmatch(r"\d{3}/\d{2}/\d{2}", boxes.nth(i).input_value() or "")]
-        for i, value in zip(idx[:2], want):
+        months = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"]
+        for i, d in zip(idx[:2], dates):
             try:
-                box = boxes.nth(i)
-                box.click(timeout=3000)
-                box.press("Meta+A")
-                box.press("Backspace")
-                box.type(value, delay=40)
-                box.press("Tab")
+                boxes.nth(i).click(timeout=3000)
+                page.wait_for_timeout(500)
+                sels = page.locator("select:visible")
+                for k in range(sels.count()):
+                    opts = sels.nth(k).locator("option").all_inner_texts()
+                    if str(d.year - 1911) in [o.strip() for o in opts]:
+                        sels.nth(k).select_option(label=str(d.year - 1911))
+                    elif months[d.month - 1] in [o.strip() for o in opts]:
+                        sels.nth(k).select_option(label=months[d.month - 1])
+                page.wait_for_timeout(300)
+                cell = page.locator("td:visible, a:visible").filter(has_text=re.compile(rf"^\s*{d.day}\s*$"))
+                for k in range(cell.count()):
+                    c = cell.nth(k)
+                    if "disabled" not in (c.get_attribute("class") or "") and "unselectable" not in (c.get_attribute("class") or ""):
+                        c.click(timeout=3000)
+                        break
+                page.wait_for_timeout(300)
             except Exception:
-                pass
-        got = page.evaluate("() => [...document.querySelectorAll('input')].filter(i => /^\\d{3}\\/\\d{2}\\/\\d{2}$/.test(i.value || '')).slice(0, 2).map(i => i.value)")
+                continue
+        got = [boxes.nth(i).input_value() for i in idx[:2]]
+    if got != want:  # 3) 最後才直接改值
+        got = page.evaluate(set_js, want)
     page.keyboard.press("Escape")  # 關掉日曆
     if got != want:
         print(f"  ⚠️ 自訂日期沒填進去（要 {want}，現在是 {got}）")
