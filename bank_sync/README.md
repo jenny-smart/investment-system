@@ -24,7 +24,7 @@ python -m bank_sync login fubon sc     # 只開指定銀行
 |---|---|---|
 | taishin | 台新 | |
 | fubon | 富邦 | 先點右上「登入」開彈窗再填（參照 tool-system） |
-| sc | 渣打 | 渣打會擋程式控制的 Chrome：改開一個一般模式的專用 Chrome（~/Bank account/chrome_profile_native），不影響平常的 Chrome；明細只查外幣：自動點「外幣活存」→ 每個幣別的「明細」，不用按 Enter。 |
+| sc | 渣打 | 渣打會擋程式控制的 Chrome：改開一個一般模式的專用 Chrome（~/Bank account/chrome_profile_native），不影響平常的 Chrome；明細只查外幣：自動點「外幣活存」→ 敦化、古亭每個外幣帳戶的每個幣別「明細」→「外幣定存」，不用按 Enter。 |
 | linebank | LINE Bank | 無圖形驗證碼，可能要在手機 App 確認 |
 | yuanta | 元大（個人網銀） | |
 | next | 將來銀行 | |
