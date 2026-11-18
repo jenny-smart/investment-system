@@ -434,3 +434,59 @@ def test_post_csv_and_ledger():
     assert t.amount == -500 and t.balance == 1500 and t.when == "2026-11-05 10:21:33"
     e = classify([_to_tx("post", {"account": "郵局存簿", "ledger_row": "郵局"}, HEAD, rows[1])], RULES)[0]
     assert [(p.row, p.amount) for p in e.postings] == [(42, 3)]
+
+
+def test_post_clean_rows_merges_continuation():
+    from bank_sync.post_tx import clean_rows
+    rows = [["2026/01/22", "16:57", "跨行轉入", "", "5,000", "5,293", '="008862"', ""],
+            ["2026/01/22", "16:57", "續上一筆", "", '="0"', "5,293", "823將來銀行", ""],
+            ["2026/01/22", "16:57", "續上一筆", "", '="0"', "5,293", "823-1", "珍妮郵局"],
+            ["2026/01/23", "10:00", "消費扣款", '="87"', "", '="413"', '="7913"', ""]]
+    out = clean_rows(rows)
+    assert len(out) == 2
+    assert out[0][6] == "008862 823將來銀行 823-1" and out[0][7] == "珍妮郵局"
+    assert out[1][3] == "87" and out[1][5] == "413"
+
+
+def test_post_interest_and_no_self_transfer():
+    from bank_sync import bank_ledger as L
+    head = ["交易日期", "交易時間", "摘要", "提款金額", "存款金額", "結存金額", "備註", "附言"]
+    blk = {"type": "TWD", "account": "郵局存簿", "ledger_row": "郵局", "head": head}
+    t1 = L._to_tx("post", blk, head, ["2026/06/21", "01:51", "利　　息", "", "10", "1,484", "OF", ""])
+    t2 = L._to_tx("post", blk, head, ["2026/01/22", "16:57", "跨行轉入", "", "5,000", "5,293", "823將來銀行", "珍妮郵局"])
+    es = L.classify([t1, t2], {}, [])
+    assert es[0].reason == "利息"
+    assert all(p.row != 42 or p.amount > 0 for p in es[1].postings)
+
+
+def test_messenger_receipt_parse_and_match():
+    from datetime import date
+    from bank_sync.messenger_notes import parse_receipt, match_receipt, receipt_note, parse_date_label
+    r = parse_receipt("(嘉興店)1. 竹絲蝦餃(10入/盒)# × 2 = 250\n(嘉興店)2. 第一石鹼馬桶清潔劑# × 3 = 117\n總金額 :【367】")
+    assert r["store"] == "嘉興店" and r["total"] == 367 and len(r["items"]) == 2
+    assert parse_date_label("週五 18:24", date(2026, 11, 16)) == date(2026, 11, 13)
+    r["day"] = "2026-11-13"
+    other = {"store": "嘉興店", "day": "2026-11-10", "total": 100, "items": [{"name": "A", "qty": 1, "amount": 100}]}
+    assert match_receipt(date(2026, 11, 13), -367, [r, other], set()) == [r]
+    assert len(match_receipt(date(2026, 11, 16), -467, [r, other], set())) == 2   # 取貨時一起到貨
+    assert match_receipt(date(2026, 11, 12), -367, [r], set()) == []              # 收據不會晚於消費日
+    assert receipt_note([r]).startswith("嘉興店 11/13 竹絲蝦餃×2 250")
+
+
+def test_messenger_date_only_from_stamp_lines():
+    from datetime import date
+    from bank_sync.messenger_notes import lines_to_receipts
+    lines = ["2026年1月14日 下午7:16", "週六11:00-18:00", "1/24(六)尾牙，各店公休一日！",
+             "(嘉興店)1. YENS蒸魚卵 × 1 = 120", "總金額：【120】"]
+    r = lines_to_receipts(lines, date(2026, 11, 16))
+    assert r[0]["day"] == "2026-01-14" and r[0]["total"] == 120
+
+
+def test_messenger_dedupe_and_diff_note():
+    from datetime import date
+    from bank_sync.messenger_notes import dedupe, match_note
+    r = lambda d: {"store": "嘉興店", "day": d, "total": 367, "items": [{"name": "蝦餃", "qty": 2, "amount": 367}]}
+    rs = dedupe([r("2026-11-11"), r("2026-11-13"), r("2026-11-13")])
+    assert len(rs) == 1 and rs[0]["day"] == "2026-11-13"
+    note, state = match_note(date(2026, 11, 13), -345, rs, set())
+    assert state == "diff" and "差 -22" in note
