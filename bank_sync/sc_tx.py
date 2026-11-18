@@ -6,7 +6,9 @@
   外幣明細 /scb/accOverview/savingForeignDetails：日期 input[name=DateStart]／[name=DateEnd] → 「查詢」，
     表格 交易時間／金額／餘額／摘要說明（頁面上方寫幣別，例 USD）
   登出：「登出」→ 確認視窗「確認」
-從帳戶綜覽點到明細頁的方式還沒探索，所以先「半自動」：程式請你點到明細頁，之後填日期、查詢、讀表格都自動。
+只查外幣（台幣不查）。全自動、不用按 Enter：
+  帳戶綜覽 →「外幣活存」分頁 → 幣別表（幣別／開戶日期／最近交易日期／帳戶金額／明細）
+  → 只點「最近交易日期」在查詢起日之後的幣別的「明細」→ 填日期、查詢、讀表格 → 回到幣別表換下一個幣別。
 """
 from __future__ import annotations
 
@@ -23,10 +25,9 @@ from .taishin_tx import keep_new, parse_day, shape_report
 HOST = "ebank.standardchartered.com.tw"
 TX_DIR = BANK_DIR / "transactions" / "sc"
 STATE_FILE = TX_DIR / "_state.json"
-PAGES = (
-    ("TWD", "savingTWD/detail", ("__DateStart", "__DateEnd"), ["交易時間", "摘要", "金額"], "台幣帳戶明細"),
-    ("FX", "savingForeignDetails", ("DateStart", "DateEnd"), ["交易時間", "金額", "摘要說明"], "外幣帳戶明細"),
-)
+FX_PATH = "savingForeignDetails"
+FX_DATES = ("DateStart", "DateEnd")
+FX_NEED = ["交易時間", "金額", "摘要說明"]
 CURRENCY_CODES = {"USD": "美元", "ZAR": "南非幣", "CNY": "人民幣", "JPY": "日圓", "AUD": "澳幣", "EUR": "歐元"}
 
 DEEP = r"""
@@ -88,6 +89,39 @@ CLICK_BODY = r"""
 
 URL_BODY = "return location.href;"
 
+# 外幣活存分頁的幣別表：回傳每列 [列序, 幣別文字, 最近交易日期]
+FX_ROWS_BODY = r"""
+  for (const t of all('table')) {
+    if (!vis(t)) continue;
+    const rows = [...t.rows];
+    const hi = rows.findIndex(r => { const c = [...r.cells].map(x => clean(x.innerText)); return c.includes('幣別') && c.includes('最近交易日期'); });
+    if (hi < 0) continue;
+    const head = [...rows[hi].cells].map(x => clean(x.innerText));
+    const ci = head.indexOf('幣別'), li = head.indexOf('最近交易日期');
+    return JSON.stringify(rows.slice(hi + 1).map((r, i) => [i, clean((r.cells[ci] || {}).innerText), clean((r.cells[li] || {}).innerText)])
+      .filter(x => x[1]));
+  }
+  return '[]';
+"""
+
+# 點幣別表第 __I__ 列的「明細」
+FX_DETAIL_BODY = r"""
+  const i = __I__;
+  for (const t of all('table')) {
+    if (!vis(t)) continue;
+    const rows = [...t.rows];
+    const hi = rows.findIndex(r => { const c = [...r.cells].map(x => clean(x.innerText)); return c.includes('幣別') && c.includes('最近交易日期'); });
+    if (hi < 0) continue;
+    const row = rows.slice(hi + 1)[i];
+    if (!row) return '';
+    const e = [...row.querySelectorAll('a,button,[role=button],span,div')].find(x => clean(x.innerText) === '明細');
+    if (!e) return '';
+    (e.closest('a,button,[role=button]') || e).click();
+    return 'ok';
+  }
+  return '';
+"""
+
 
 def _eval(js: str) -> str:
     from .native_chrome import evaluate
@@ -107,26 +141,38 @@ def _click(*names) -> bool:
     return bool(_eval(_js(CLICK_BODY, NAMES=list(names))))
 
 
-def _wait_page(path_part: str, label: str, need) -> None:
-    """等到真的在明細頁（網址對、而且看得到明細表格或日期欄）才往下做。"""
-    from .login import drain_stdin
-    tab = "台幣活存" if "TWD" in path_part else "外幣活存"
-    for _ in range(2):  # 自動：帳戶綜覽（/scb/accOverview/savingTWD 或 savingForeign）→ 分頁 → 帳戶的「交易明細」
+def _fx_rows() -> list:
+    try:
+        return json.loads(_eval(_js(FX_ROWS_BODY)) or "[]")
+    except Exception:
+        return []
+
+
+def _open_fx_list() -> list:
+    """回到「外幣活存」幣別表；回傳幣別列。找不到就丟錯（不請你手動點）。"""
+    for step in range(4):
+        rows = _fx_rows()
+        if rows:
+            return rows
+        if step == 1:
+            _click("帳戶綜覽")
+            time.sleep(3)
+        _click("外幣活存")
+        time.sleep(3)
+    raise RuntimeError("找不到「外幣活存」的幣別表")
+
+
+def _wait_url(path_part: str, seconds: float = 15) -> bool:
+    for _ in range(int(seconds / 1.5)):
         if path_part in _eval(_js(URL_BODY)):
-            return
-        _click(tab)
-        time.sleep(3)
-        _click("交易明細", "明細查詢", "查詢明細", "帳戶明細", "交易明細查詢", "明細")
-        time.sleep(3)
-    for attempt in range(5):
-        url = _eval(_js(URL_BODY))
-        if path_part in url:
-            return
-        drain_stdin()
-        hint = "台幣活存 → 點帳戶 → 交易明細" if "TWD" in path_part else "外幣活存 → 點帳戶／幣別 → 交易明細"
-        input(f"  請在渣打專用 Chrome 點到「{label}」（{hint}），看到「查詢」按鈕後回到這裡按 Enter：")
-        time.sleep(1)
-    raise RuntimeError(f"一直沒到「{label}」頁（目前網址 {_eval(_js(URL_BODY)).split('?')[0]}）")
+            return True
+        time.sleep(1.5)
+    return False
+
+
+def _currency_code(text: str) -> str:
+    m = re.search(r"(?<![A-Z])([A-Z]{3})(?![A-Z])", text)
+    return m.group(1) if m else text
 
 
 def _query(kind, names, need, start: date) -> dict:
@@ -183,25 +229,30 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
     except Exception:
         pass
     try:
-        for kind, path_part, names, need, label in PAGES:
-            more = True
-            while more:
-                _wait_page(path_part, label, need)
-                data = _query(kind, names, need, max(since, date.today() - timedelta(days=180)))
-                cur = CURRENCY_CODES.get(data["currency"], data["currency"]) if kind == "FX" else "TWD"
-                key = f"{kind}:{cur}"
-                start = parse_day(progress.get(key, {}).get("last_date", "")) or since
-                total = len(data["rows"])
-                data["rows"], progress[key] = keep_new(data["rows"], progress.get(key, {}), start)
-                name = "渣打台幣" if kind == "TWD" else f"渣打外幣 {cur}"
-                results.append({"type": kind, "account": name, "currency": cur, "ledger_row": "渣打",
-                                "from": start.isoformat(), "head": data["head"], "rows": data["rows"]})
-                print(f"  {name}：共 {total} 筆，新的 {len(data['rows'])} 筆")
-                more = False
-                if kind == "FX":
-                    from .login import drain_stdin
-                    drain_stdin()
-                    more = input("  還有其他幣別（例：南非幣）嗎？切到該幣別明細頁後輸入 y，沒有就直接按 Enter：").strip().lower() == "y"
+        today = date.today()
+        for idx, cur_text, last_text in _open_fx_list():
+            code = _currency_code(cur_text)
+            cur = CURRENCY_CODES.get(code, code)
+            key = f"FX:{cur}"
+            start = parse_day(progress.get(key, {}).get("last_date", "")) or since
+            last_tx = parse_day(last_text)
+            name = f"渣打外幣 {cur}"
+            if not last_tx or last_tx < start:
+                print(f"  {name}：最近交易 {last_text or '—'}，查詢起日 {start} 之後沒有交易，略過")
+                continue
+            _open_fx_list()
+            if not _eval(_js(FX_DETAIL_BODY, I=idx)) or not _wait_url(FX_PATH):
+                print(f"  ⚠️ {name}：點不到「明細」，略過")
+                problem = problem or f"{name} 點不到明細"
+                continue
+            data = _query("FX", FX_DATES, FX_NEED, max(start, today - timedelta(days=180)))
+            total = len(data["rows"])
+            data["rows"], progress[key] = keep_new(data["rows"], progress.get(key, {}), start)
+            results.append({"type": "FX", "account": name, "currency": cur, "ledger_row": "渣打",
+                            "from": start.isoformat(), "head": data["head"], "rows": data["rows"]})
+            print(f"  {name}：共 {total} 筆，新的 {len(data['rows'])} 筆")
+            _eval("history.back()")
+            time.sleep(3)
     except KeyboardInterrupt:
         problem = "已中斷（Ctrl+C）"
         print("⚠️ 已中斷（Ctrl+C），先幫你登出…")
