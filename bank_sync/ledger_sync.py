@@ -135,7 +135,42 @@ class ParsedFile:
         return f"{self.bank}:{self.path.name}"
 
 
+PARSED_CACHE = STATEMENT_DIR / "_parsed_cache.json"
+
+
+def _parser_version() -> str:
+    """解析程式改了就讓快取失效。"""
+    import hashlib
+    src = Path(__file__).with_name("statement_parser.py").read_bytes()
+    return hashlib.sha1(src).hexdigest()[:12]
+
+
+def _dump_statement(st: Statement) -> dict:
+    return {"bank": st.bank, "due": st.due.isoformat() if st.due else None, "total_due": st.total_due,
+            "warnings": st.warnings,
+            "charges": [[c.day.isoformat(), c.description, c.amount, c.card] for c in st.charges]}
+
+
+def _load_statement(d: dict) -> Statement:
+    return Statement(d["bank"], date.fromisoformat(d["due"]) if d.get("due") else None, d.get("total_due"),
+                     [Charge(date.fromisoformat(c[0]), c[1], c[2], c[3]) for c in d.get("charges", [])],
+                     list(d.get("warnings", [])))
+
+
+def _read_cache() -> dict:
+    try:
+        data = json.loads(PARSED_CACHE.read_text("utf-8"))
+        return data if data.get("version") == _parser_version() else {}
+    except Exception:
+        return {}
+
+
 def parsed_statements(year: int, path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[ParsedFile]:
+    """讀今年的帳單。解析過的 PDF 存在 statements/_parsed_cache.json（同檔名、大小、修改時間就直接用），
+    所以每週只有新下載的帳單會真的打開解析。"""
+    import os
+    cache = _read_cache().get("files", {})
+    fresh: dict = {}
     out = []
     for source in SOURCES:
         if source.code not in CARD_ROW_PREFIX or (banks and source.code not in banks):
@@ -143,18 +178,37 @@ def parsed_statements(year: int, path: Path = DEFAULT_CREDENTIALS_FILE, banks: t
         folder = STATEMENT_DIR / source.name
         if not folder.exists():
             continue
-        try:
-            password = load_section(source.code, ("pdf_password",), path)["pdf_password"]
-        except (KeyError, ValueError):
-            password = ""
+        password = None
         for pdf in sorted(list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))):
-            try:
-                st = parse(source.code, open_pdf_text(pdf, password))
-            except Exception as exc:
-                st = Statement(source.code, warnings=[f"打不開：{exc}"])
+            stat = pdf.stat()
+            key = f"{source.code}/{pdf.name}"
+            sig = [stat.st_size, int(stat.st_mtime)]
+            hit = cache.get(key)
+            if hit and hit.get("sig") == sig:
+                st = _load_statement(hit["statement"])
+            else:
+                if password is None:
+                    try:
+                        password = load_section(source.code, ("pdf_password",), path)["pdf_password"]
+                    except (KeyError, ValueError):
+                        password = ""
+                try:
+                    st = parse(source.code, open_pdf_text(pdf, password))
+                except Exception as exc:
+                    st = Statement(source.code, warnings=[f"打不開：{exc}"])
+            if not any(w.startswith("打不開") for w in st.warnings):
+                fresh[key] = {"sig": sig, "statement": _dump_statement(st)}
             if st.due and st.due.year != year:
                 continue
             out.append(ParsedFile(source.code, pdf, st))
+    if banks:  # 只跑部分銀行時，保留其他銀行的快取
+        fresh = {**{k: v for k, v in cache.items() if k not in fresh}, **fresh}
+    try:
+        PARSED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        PARSED_CACHE.write_text(json.dumps({"version": _parser_version(), "files": fresh}, ensure_ascii=False), "utf-8")
+        os.chmod(PARSED_CACHE, 0o600)
+    except OSError:
+        pass
     return out
 
 

@@ -142,14 +142,18 @@ def open_pdf_text(pdf_path: Path, password: str) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def check_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = ()) -> list[dict]:
-    """用帳密檔裡的 pdf_password 試開已下載的帳單，回報能否讀出文字（不印出帳單內容）。"""
+def check_statements(path: Path = DEFAULT_CREDENTIALS_FILE, banks: tuple = (), only_files: list | None = None) -> list[dict]:
+    """用帳密檔裡的 pdf_password 試開已下載的帳單，回報能否讀出文字（不印出帳單內容）。
+    only_files：只試開這些檔（每週排程只看這次新下載的）。"""
+    only = {str(Path(f)) for f in only_files} if only_files is not None else None
     results = []
     for source in SOURCES:
         if banks and source.code not in banks:
             continue
         folder = STATEMENT_DIR / source.name
         pdfs = sorted(folder.glob("*.pdf")) + sorted(folder.glob("*.PDF")) if folder.exists() else []
+        if only is not None:
+            pdfs = [p for p in pdfs if str(p) in only]
         if not pdfs:
             continue
         try:

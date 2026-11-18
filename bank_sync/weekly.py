@@ -76,8 +76,12 @@ def run(dry_run: bool = False, days: int = 7, only: tuple = (), ask: bool = True
     print("\n━━━ 信用卡帳單（信箱）━━━")
     try:
         from .mail_statements import check_statements, fetch_statements
-        fetch_statements(1)
-        check_statements()
+        saved = fetch_statements(1)  # 只看最近一個月的信；下載過的不重抓（statements/_fetched.json）
+        new_files = [f for item in saved for f in item["files"]]
+        if new_files:
+            check_statements(only_files=new_files)
+        else:
+            print("沒有新帳單（之前下載過的都存在本機，不重抓）")
     except (Exception, SystemExit) as exc:
         print(f"⚠️ 信用卡帳單沒抓到：{exc}")
     print("\n━━━ 發布到網頁（銀行明細／信用卡明細）━━━")
