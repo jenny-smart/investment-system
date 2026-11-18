@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     fpo = sub.add_parser("fetch-post", help="郵局：下載存簿交易明細（CSV），存在本機")
     fpo.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fpo.add_argument("--keep-open", action="store_true")
-    fsc = sub.add_parser("fetch-sc", help="渣打：自動查詢外幣明細（只查最近有交易的幣別）")
+    fsc = sub.add_parser("fetch-sc", help="渣打：自動查詢外幣各幣別明細")
     fsc.add_argument("--since", help="從哪天開始（預設本月 1 日）")
     fsc.add_argument("--keep-open", action="store_true")
     for code, label in (("linebank", "LINE Bank"), ("yuanta", "元大")):

@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
 
 class ScFetchTest(unittest.TestCase):
-    def test_fetch_clicks_only_recent_currency_details(self):
+    def test_fetch_clicks_every_currency_detail(self):
         import tempfile
         from pathlib import Path
         tmp = Path(tempfile.mkdtemp())
@@ -83,5 +83,5 @@ class ScFetchTest(unittest.TestCase):
                 mock.patch("builtins.print"), \
                 mock.patch.object(builtins, "input", side_effect=AssertionError("不該要求按 Enter")):
             sc_tx.fetch(since=date(2026, 11, 1))
-        self.assertEqual(page.clicked, ["美金 USD", "南非幣 ZAR"])
-        self.assertEqual(query.call_count, 2)
+        self.assertEqual(page.clicked, ["人民幣 CNY", "美金 USD", "南非幣 ZAR"])
+        self.assertEqual(query.call_count, 3)

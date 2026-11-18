@@ -8,7 +8,7 @@
   登出：「登出」→ 確認視窗「確認」
 只查外幣（台幣不查）。全自動、不用按 Enter：
   帳戶綜覽 →「外幣活存」分頁 → 幣別表（幣別／開戶日期／最近交易日期／帳戶金額／明細）
-  → 只點「最近交易日期」在查詢起日之後的幣別的「明細」→ 填日期、查詢、讀表格 → 回到幣別表換下一個幣別。
+  → 每個幣別都點「明細」→ 填日期、查詢、讀表格 → 回到幣別表換下一個幣別。
 """
 from __future__ import annotations
 
@@ -235,11 +235,7 @@ def fetch(since: date = None, keep_open: bool = False) -> Path:
             cur = CURRENCY_CODES.get(code, code)
             key = f"FX:{cur}"
             start = parse_day(progress.get(key, {}).get("last_date", "")) or since
-            last_tx = parse_day(last_text)
             name = f"渣打外幣 {cur}"
-            if not last_tx or last_tx < start:
-                print(f"  {name}：最近交易 {last_text or '—'}，查詢起日 {start} 之後沒有交易，略過")
-                continue
             _open_fx_list()
             if not _eval(_js(FX_DETAIL_BODY, I=idx)) or not _wait_url(FX_PATH):
                 print(f"  ⚠️ {name}：點不到「明細」，略過")
