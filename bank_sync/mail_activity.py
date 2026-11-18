@@ -1,8 +1,6 @@
-"""每週排程的第一步：讀 jenny@hers.com.tw 信箱，看各銀行「上次抓明細之後」有沒有動靜，有才登入。
+"""每週排程的第一步：讀 jenny@hers.com.tw 信箱，列出各銀行「上次抓明細之後」的交易／登入通知。
 
-- 交易信（轉帳、申購、定存、入帳…）→ 一定要登入
-- 只有登入通知 → 也列進去（將來、LINE Bank、渣打、郵局轉帳或消費不一定寄信）
-- 只有廣告、對帳單、停損停利、信用卡帳單 → 跳過
+2026-11-18 起：每家都登入確認（轉入、信用卡扣款不一定寄信），信箱結果只當參考列出來，不再決定略過哪家。
 
 從「上次抓這家明細的時間」開始看信，所以我們自己抓明細時產生的登入通知不會被算進去。
 信箱用 IMAP（同 fetch-statements 的本機設定），只讀主旨與寄件者，不讀內文、不改信。
@@ -108,7 +106,7 @@ def check(days: int = 7, path: Path = DEFAULT_CREDENTIALS_FILE, verbose: bool = 
                         info["tx"].append(f"{sent.astimezone():%m/%d %H:%M} {_decode(msg.get('Subject'))[:30]}")
                     elif kind == "login":
                         info["login"].append(f"{sent.astimezone():%m/%d %H:%M}")
-            info["run"] = bool(info["tx"]) or (bank.always and bool(info["login"]))
+            info["run"] = True  # 每家都登入確認：轉入、信用卡扣款不一定有通知
             out.append(info)
     finally:
         try:
@@ -121,7 +119,7 @@ def check(days: int = 7, path: Path = DEFAULT_CREDENTIALS_FILE, verbose: bool = 
 
 
 def print_plan(info: list[dict]) -> None:
-    print("📬 信箱檢查（上次抓明細之後的銀行通知）")
+    print("📬 信箱檢查（上次抓明細之後的銀行通知；每家都會登入確認）")
     for b in info:
         mark = "▶ 要登入" if b["run"] else "　略過　"
         since = f"{b['since'].astimezone():%m/%d %H:%M} 起"

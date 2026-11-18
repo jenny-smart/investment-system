@@ -85,3 +85,18 @@ class ScFetchTest(unittest.TestCase):
             sc_tx.fetch(since=date(2026, 11, 1))
         self.assertEqual(page.clicked, ["人民幣 CNY", "美金 USD", "南非幣 ZAR"])
         self.assertEqual(query.call_count, 3)
+
+
+class WeeklyAllBanksTest(unittest.TestCase):
+    def test_every_bank_logged_in_even_without_notices(self):
+        from bank_sync import weekly
+        plan = [{"code": "taishin", "name": "台新", "run": True}, {"code": "yuanta", "name": "元大", "run": True}]
+        with mock.patch("bank_sync.mail_activity.check", return_value=plan):
+            self.assertEqual(weekly.run(dry_run=True), ["taishin", "yuanta"])
+
+    def test_mail_failure_falls_back_to_all_banks(self):
+        from bank_sync import weekly
+        from bank_sync.mail_activity import BANKS
+        with mock.patch("bank_sync.mail_activity.check", side_effect=SystemExit("no mail")), \
+                mock.patch("builtins.print"):
+            self.assertEqual(weekly.run(dry_run=True), [b.code for b in BANKS])

@@ -1,4 +1,4 @@
-"""每週三排程：先查信 → 只登入有動靜的銀行（一家抓完登出再下一家）→ 信用卡帳單 → 發布到網頁。
+"""每週三排程：先查信（列出通知）→ 每家銀行都登入確認（一家抓完登出再下一家）→ 信用卡帳單 → 發布到網頁。
 
 python3 -m bank_sync weekly              手動跑一次（會先列出要登入哪幾家，按 Enter 開始）
 python3 -m bank_sync weekly --dry-run    只查信、列出要登入哪幾家
@@ -50,11 +50,12 @@ def run(dry_run: bool = False, days: int = 7, only: tuple = (), ask: bool = True
     try:
         plan = check(days)
     except (Exception, SystemExit) as exc:
-        print(f"⚠️ 信箱讀不到（{exc}）→ 改跑每週固定的台新、將來")
-        plan = [{"code": c, "name": n, "run": True} for c, n in (("taishin", "台新"), ("next", "將來"))]
+        from .mail_activity import BANKS
+        print(f"⚠️ 信箱讀不到（{exc}）→ 照樣每家都登入")
+        plan = [{"code": b.code, "name": b.name, "run": True} for b in BANKS]
     todo = [b for b in plan if b["run"] and (not only or b["code"] in only)]
     if not todo:
-        print("✓ 上次抓明細之後各銀行都沒有動靜，這次不用登入。")
+        print("（沒有要登入的銀行）")
     if dry_run:
         return [b["code"] for b in todo]
     if todo and ask:
@@ -88,9 +89,8 @@ def run(dry_run: bool = False, days: int = 7, only: tuple = (), ask: bool = True
         print(f"⚠️ 發布失敗：{exc}")
     try:
         from .progress_log import log_run
-        skipped = [b["name"] for b in plan if not b["run"]]
         log_run("每週銀行更新", None, BANK_DIR / "transactions", [],
-                message=f"登入：{'、'.join(b['name'] for b in todo) or '無'}；略過（沒動靜）：{'、'.join(skipped) or '無'}")
+                message=f"登入：{'、'.join(b['name'] for b in todo) or '無'}；完成：{'、'.join(b['name'] for b in todo if b['code'] in done) or '無'}")
     except Exception:
         pass
     return done
@@ -116,7 +116,7 @@ def install() -> None:
     result = subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"排程安裝失敗：{result.stderr.strip() or result.stdout.strip()}")
-    print("✓ 已安裝：每週三 11:00 自動打開「終端機」，先查信，再只登入有動靜的銀行。")
+    print("✓ 已安裝：每週三 11:00 自動打開「終端機」，先查信，再每家銀行都登入確認。")
     print("  （那時 Mac 在睡眠的話，醒來後會補跑一次；第一次可能會問是否允許控制「終端機」，請按允許）")
 
 
