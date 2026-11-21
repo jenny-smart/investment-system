@@ -178,6 +178,7 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 keys.add(tx.key)
                 out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
+    fix_linebank_mirror(out)
     attach_receipts(out)
     return out, warn
 
@@ -218,6 +219,38 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
     return tx
 
 
+LINE_OUT = ("支出", "轉出", "提款", "扣款", "付款")
+
+
+def _linebank_sign(raw: str, row_text: str) -> int:
+    """LINE Bank 金額格寫「存入 NT$12」「支出 NT$8,526」；金額格沒寫時看列前面的整列文字。0＝看不出來。"""
+    for text in (raw, row_text):
+        if "存入" in text or "轉入" in text:
+            return 1
+        if any(w in text for w in LINE_OUT) or text.strip().startswith("-"):
+            return -1
+    return 0
+
+
+def fix_linebank_mirror(txs: list) -> int:
+    """LINE Bank 看起來是「收入」，但同一天別家有一筆同金額「從連線銀行轉入」→ 其實是 LINE Bank 轉出，改成負的。
+    （例：11/17 LINE Bank「將來商業-Jenny」8,526 ＝ 轉到將來，將來那邊是 轉入 8,526、備註 連線銀行-…）"""
+    fixed = 0
+    for t in txs:
+        if t.bank != "linebank" or t.amount <= 0 or "利息" in t.summary:
+            continue
+        for o in txs:
+            if o.bank == "linebank" or o.amount <= 0 or abs(o.amount - t.amount) > 0.5:
+                continue
+            if abs((o.day - t.day).days) > 1 or not re.search(r"連線|LINE", f"{o.summary} {o.note}", re.I):
+                continue
+            t.amount = -t.amount
+            t.note = (t.note + " " if t.note else "") + f"（對應 {o.ledger} 轉入，改為轉出）"
+            fixed += 1
+            break
+    return fixed
+
+
 def _to_tx_core(bank: str, block: dict, head: list, row: list):
     get = lambda i: row[i] if i is not None and i < len(row) else ""
     only = ONLY_ACCOUNTS.get(bank)
@@ -246,8 +279,9 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         amount = _num(re.sub(r"[^\d.,\-]", "", raw))
         if amount is None:
             return None
-        if any(w in raw for w in ("支出", "轉出", "提款", "扣款")) or raw.strip().startswith("-"):
-            amount = -abs(amount)
+        sign = _linebank_sign(raw, " ".join(row[:-3]))
+        if sign:
+            amount = sign * abs(amount)
         if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
             summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
         return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)

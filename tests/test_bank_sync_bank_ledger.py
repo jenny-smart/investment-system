@@ -490,3 +490,30 @@ def test_messenger_dedupe_and_diff_note():
     assert len(rs) == 1 and rs[0]["day"] == "2026-11-13"
     note, state = match_note(date(2026, 11, 13), -345, rs, set())
     assert state == "diff" and "差 -22" in note
+
+
+def test_linebank_sign_from_row_text_and_mirror():
+    from bank_sync.bank_ledger import Tx, _to_tx, fix_linebank_mirror
+    blk = {"account": "主帳戶 ****612", "ledger_row": "連線"}
+    head = ["時間", "摘要", "金額"]
+    out_row = ["2026年11月17日 06:13 將來商業-Jenny 支出 NT$8,526", "整列", "2026年11月17日 06:13", "將來商業-Jenny", "NT$8,526"]
+    assert _to_tx("linebank", blk, head, out_row).amount == -8526
+    # 金額格、整列都看不出方向時：用將來那邊「從連線銀行轉入」同金額改成轉出
+    plain = ["整列 2026年11月17日", "整列", "2026年11月17日 06:13", "將來商業-Jenny", "NT$8,526"]
+    line = _to_tx("linebank", blk, head, plain)
+    assert line.amount == 8526
+    nxt = Tx("next", "將來主帳戶", "將來", line.day, 8526, "TWD", "轉入", "連線銀行-111002393612", "k")
+    interest = _to_tx("linebank", blk, head, ["整列 2026年11月17日", "整列", "2026年11月17日 06:13", "20270817-2.2%", "NT$1,868"])
+    assert fix_linebank_mirror([line, nxt, interest]) == 1
+    assert line.amount == -8526 and interest.amount == 1868
+
+
+def test_publish_sorted_by_bank_then_date():
+    from datetime import date as d
+    from types import SimpleNamespace as NS
+    from bank_sync.publish import _bank_sort
+    e = lambda bank, acct, day: NS(tx=NS(bank=bank, account=acct, day=d(2026, 11, day), when=f"{day}"))
+    got = _bank_sort([e("linebank", "主", 17), e("next", "主", 17), e("taishin", "A", 16), e("next", "主", 16),
+                      e("fubon", "新店", 13), e("taishin", "A", 18)])
+    assert [(x.tx.bank, x.tx.day.day) for x in got] == [("taishin", 18), ("taishin", 16), ("fubon", 13),
+                                                        ("next", 17), ("next", 16), ("linebank", 17)]

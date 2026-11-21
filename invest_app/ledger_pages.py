@@ -11,6 +11,9 @@ import streamlit as st
 MAIN_GOOGLE_SHEET_ID = "19GikXQGPMl0Uoorh9eGs2CEYJIcj8Ybh6zhXcos-kQ0"  # 2025Jenny-總帳（同 invest_app.core）
 
 
+BANK_DISPLAY_ORDER = ("台新", "富邦", "渣打", "將來", "LINE Bank", "元大", "郵局")
+
+
 def gviz_values(sheet_id: str, sheet: str, cell_range: str) -> list[list]:
     """讀分頁儲存格實際值（同 invest_app.core.gviz_values；這裡不 import core，本機獨立頁不用裝 supabase）。"""
     import json
@@ -99,6 +102,9 @@ def render_bank_detail_page() -> None:
             mask = view[cols_].astype(str).apply(
                 lambda col: col.str.contains(keyword, case=False, regex=False)).any(axis=1)
             view = view[mask]
+        order = {b: i for i, b in enumerate(BANK_DISPLAY_ORDER)}  # 依銀行、帳戶排（同帳戶維持新的在上）
+        view = view.assign(_o=view["銀行"].map(lambda b: order.get(b, len(order)))) \
+            .sort_values(["_o"] + (["帳戶"] if "帳戶" in view.columns else []), kind="stable").drop(columns="_o")
         counts = view["狀態"].value_counts()
         cols = st.columns(len(STATE_ORDER))
         for col, name in zip(cols, STATE_ORDER):
