@@ -1,5 +1,5 @@
 {
-  "更新時間": "2026-11-21 05:31",
+  "更新時間": "2026-11-22 05:31",
   "夜盤": {
     "夜盤日期": "2026-11-23",
     "日盤日期": "2026-11-20",
@@ -16,13 +16,26 @@
     "夜盤量佔比": 0.4303141676529828,
     "夜盤未平倉": null
   },
-  "外資夜盤": null,
+  "外資夜盤": {
+    "多方口數": 55920.0,
+    "多方千元": 394193383.0,
+    "空方口數": 54490.0,
+    "空方千元": 384259771.0,
+    "淨額口數": 1430.0,
+    "淨額千元": 9933612.0
+  },
   "劇本": {
-    "編號": null,
+    "編號": 4,
     "夜盤量佔比": 0.4303141676529828,
     "近20晚平均佔比": 0.36606116650647275,
     "可信度": "可信度高",
-    "說明": "夜盤平盤或外資淨額為 0／尚未公布，無法歸類劇本"
+    "名稱": "劇本四",
+    "條件": "夜盤下跌＋外資偏多",
+    "解讀": [
+      "先跌",
+      "開低反彈"
+    ],
+    "說明": "夜盤下跌＋外資偏多 → 先跌、開低反彈；夜盤量佔比 43.0%（近 20 晚平均 36.6%），可信度高"
   },
   "國際盤": [
     {
@@ -44,17 +57,17 @@
     {
       "名稱": "那斯達克",
       "代號": "^IXIC",
-      "收盤": 22617.732421875,
-      "漲跌": -1261.466796875,
-      "漲跌幅": -0.05282701422770046,
+      "收盤": 22617.73046875,
+      "漲跌": -1261.46875,
+      "漲跌幅": -0.05282709601959734,
       "日期": "2026-11-20"
     },
     {
       "名稱": "費城半導體",
       "代號": "^SOX",
-      "收盤": 8408.5908203125,
-      "漲跌": -1011.12890625,
-      "漲跌幅": -0.10734171881980051,
+      "收盤": 8408.58984375,
+      "漲跌": -1011.1298828125,
+      "漲跌幅": -0.10734182249194027,
       "日期": "2026-11-20"
     },
     {
@@ -68,18 +81,18 @@
     {
       "名稱": "美元/台幣",
       "代號": "TWD=X",
-      "收盤": 32.96200180053711,
-      "漲跌": 0.032100677490234375,
-      "漲跌幅": 0.0009748185204166269,
+      "收盤": 33.02629852294922,
+      "漲跌": 0.09639739990234375,
+      "漲跌幅": 0.0029273516352855806,
       "日期": "2026-11-20"
     },
     {
       "名稱": "加權指數",
       "代號": "^TWII",
-      "收盤": 38426.890625,
-      "漲跌": -1768.01953125,
-      "漲跌幅": -0.04398615457472509,
-      "日期": "2026-11-19"
+      "收盤": 36033.2890625,
+      "漲跌": -2393.6015625,
+      "漲跌幅": -0.0622897539605444,
+      "日期": "2026-11-20"
     },
     {
       "名稱": "台積電",
@@ -93,64 +106,65 @@
   "開盤預估": {
     "方向": "開低",
     "預估漲跌幅": -0.05452264808362369,
-    "加權指數前收": 38426.890625,
-    "預估開盤": 36331.75479050523,
-    "台積電ADR溢價": 0.05053193121914523,
+    "加權指數前收": 36033.2890625,
+    "預估開盤": 34068.65872364982,
+    "台積電ADR溢價": 0.05258113200420045,
     "依據": [
       "夜盤收 33,919，較日盤收盤 -1,956 點（-5.45%）",
       "費半 -10.73%",
-      "台積電 ADR -9.48%，折合台股溢價 +5.1%"
+      "台積電 ADR -9.48%，折合台股溢價 +5.3%",
+      "外資夜盤多空淨額 +1,430 口（偏多）"
     ],
     "說明": "預估開盤＝加權指數前收 ×（1＋夜盤近月較日盤收盤漲跌幅），只供參考。"
   },
   "新聞": [
     {
-      "標題": "科技股無盡黑夜！美股費半9000點瀕臨失守、台積電ADR重摔4％ Anthropic一度狂挫9％",
-      "來源": "Yahoo股市",
-      "時間": "11/20 22:52",
-      "連結": "https://news.google.com/rss/articles/CBMimANBVV95cUxOandsX1RweTJ4R2xEcU4zMWpOTjJwY3F5bDlKMGlmeWhKX1hUNG1RUGV4cXZDVURIMUVKaU56ekl5VDlzcEk1bjBPckJqX2U5N3hubmRmaTVPdGY1NkJUNVZJS2V6M0FIaU9YS3UwUVZzUHRhb2dKMlBCbWpNc3NGYVloek15MzNVX2p6VVQ0eXA3eTdjaU1RT1FpRWRlbkpJaTJSUmtRbjEyNkphLXZlbTg1Z2plNFVzbkoyMGhxaHpacW9TUFY4enpyb0FjMXdNMjRlS2tUSjJ6c254dmJGQjkwX3pVSlc2OXV5WHpFakRLYnMxd1dHSFpITlM4cFFYMG1kR1cxdHlVdDQtWElXODhvYlZrdHpCMkp5ZHhVRVpfRlFud1BFd2tRTE9JUHpQcVJLT29vY3lGSEE4ZlZpMXpmZ3g2R2I0SmgwNlJMOS1iWS10dU1sZklZRnZNbzJJWERfUXktbnphemkyVXJVckRUTlhsMUFMM2NiRUJoSkE2TERJaDdHWGRGNDRnYXozeVM0Wnk4ZHg?oc=5"
+      "標題": "AI 融資添變數 台美股急跌後該減碼嗎？",
+      "來源": "鉅亨買基金",
+      "時間": "11/21 23:40",
+      "連結": "https://news.google.com/rss/articles/CBMimgFBVV95cUxORUJXQ3ZIU1ozcnBUenFXVlVWVkVTNDZTZjBzdWhSUkJpYUlKcTQxcEdHcWxvcEFmajcxS0txeUlZSVZjLXVuR0Z2WGJGQU1XRm1lWHZjVS1RUHRPRzRBd0ZFLVZOQW1Fck5qcnkxUmc5N2JrMGN5X25WanZnaDdUMl83bjQ2R20zSXByTUF3bVkxLW81eE11YThR?oc=5"
     },
     {
-      "標題": "美股早盤／VIX 衝上3月底來最高 費半續挫4% Anthropic 跌8%",
+      "標題": "美股聲聲歎那指漲的全吐光- 日報",
+      "來源": "工商時報",
+      "時間": "11/22 03:00",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTFBRVlhtbURHVXRPYjlNYUdKLTNJV1FYT2VOVjZ0Z0JsQ3hIdUR5V2ZTdE5Scm9IWmdTc2VweGFwNVQtVW1GcTJzUnBHYjFlSy1lQUJOS2pfajI2cmhSbGlB?oc=5"
+    },
+    {
+      "標題": "美股崩跌五大利空齊發：AI 吸金潮反噬 輝達失速 升息與程式賣盤夾擊",
       "來源": "經濟日報",
-      "時間": "11/20 22:46",
-      "連結": "https://news.google.com/rss/articles/CBMiXEFVX3lxTFBTT09yZ0lsaTZ2ZU1DRU1UazVwWnNNaE9vUkpGekdzWnpCUmZIV29uLWdBQXlTYTJoNGNQdUg0amVGM1ppQTNnaTdUZXctbmp4d19TdzlYQkFScWJj0gFiQVVfeXFMT3VYQlhDMTQxY1lwdjZkY0VKb09ET1l6MlgzQk4wYS1TRjRuVjc5MlJzUThzMnFCbDFJUjZfR2RPZzJGbTJFTnJvc29iWUZSWW9hdkt5RlVWeWNWNDMycWQtd3c?oc=5"
+      "時間": "11/21 10:33",
+      "連結": "https://news.google.com/rss/articles/CBMiXEFVX3lxTE9zWE1nbG5uLUROOGhXVmIzN2J3QXZVdF9CdWdqT055cHRxNGY1aFpfd05VQjZRdnhURTlWM3I5S1Zld3VLYVhEMncyc2tIYzZidzYzYU5aWDlNVVNB0gFiQVVfeXFMT0F3azBNU0hkM29XODgxeU8zMVlmMFcyYmhHVGgwWS1XbWgyYUZmbTI1Smh2a29ubHllREZyV3UwdV95S1F1SHRodHVaSDVEcldIUU9zd2YtZ1M2V0xjWjYyTWc?oc=5"
     },
     {
-      "標題": "【即時新聞】輝達(NVDA)暴跌46%拖累美股！AI資金急撤退，這族群逆勢狂飆卡位",
-      "來源": "CMoney投資網誌",
-      "時間": "11/21 05:10",
-      "連結": "https://news.google.com/rss/articles/CBMikAFBVV95cUxOOVU4czBDd05ZSzdUMkVJU2Rsc2xzVVFYaVczZUFOUFlCOW9TV2JPNzNoNkxXVFJ5aUZXU3lqbHY2TmZpYTI0NEdNMWNUSU5IMUtGMjlqa0ZqODF4dE5uTE5IOGYtZmJnX2lSQzBOeGZXNzlvSTJ6X0tnRmJVd05xN0QxRVRMNTdwY1cxWXBuZHM?oc=5"
+      "標題": "台股跌到股民心慌！國安基金假日罕見發聲 喊話投資人保持信心",
+      "來源": "Yahoo股市",
+      "時間": "11/21 22:15",
+      "連結": "https://news.google.com/rss/articles/CBMiogNBVV95cUxPRjEyLWdqY0V6YkJoZ2M4dzdDYW0yTHJoOS1xaEFCOXROYkJVSW9pVGZIQ2dUalI1M2J5U0FoTTBzUEI1My01SFhMcHpDUEp5Mng4YXpOTzNvZmpNZXlnZEVnYm9obkpyRGFUaGFncXhDSkt2blJQbkcwX2l2SWp2akM3elJkWDNmTXVzSjBqM2VOcjAxSHE1VkEwRjhKWF9zNTljR2YtcWxoMGpzRlFWcHc2cTdHTVdMZFhBTXdVUWRuZDVyYU1QN0hRbXBNZWh6X0NEcGJBWWVVQTJXMFZSTGVucHc4NVZqZDVrWi0xUDVBSjdzU3pKY1k0a1YzWkJpM0NraWJ2Qkk5NnlLaGNEUzJzb3haMEplQU5leU1JOEUyZmI5UElKWXBDOU5lbXh6U0VjX2hGcF8zZFVaMU1LX0NWbGtZalpvdmhXMHF3Szd2NkdZVUxRenI5VUxkY3I0UlNJT1FrUV9EUU5Sd2Z1MDBHN3hNdzVKbHBlby1hU2ZOU0k4cFMxXzJ5SkFIZXBvMWVDVVdOWTRwdHFfbFh5azVR?oc=5"
     },
     {
-      "標題": "美股收盘Neocloud、光模块/高速互联集体重挫，MARA Holdings跌超18%",
-      "來源": "TradingView",
-      "時間": "11/21 05:01",
-      "連結": "https://news.google.com/rss/articles/CBMiZkFVX3lxTFBYZFJYOElzc1JpTzBSLTRTODJOTDJZWEtoWWN2c2hvTm95Nkt5ZmZMQ01jdTRlbVFHOWlpOW42MjNqS2VfLVdGR3BXSTZqQWEzX2hyaG1YQmVrN2FOZ0hrN2JPUDRsZw?oc=5"
-    },
-    {
-      "標題": "〈美股早盤〉Anthropic重挫拖累AI股！那指開盤跌逾1% 道瓊逼近修正區間",
-      "來源": "鉅亨網",
-      "時間": "11/20 22:39",
-      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTFAxWlpJd0VLNjFjV0Q1VHVrLXlPaDE2Xy1SQXVIeUMzNXNxTDFrM0pocFk4cm1lT3U0NFZzUnFVaGFhTUd4WXI1endNY2ZMdzQ?oc=5"
-    },
-    {
-      "標題": "美股開盤「AI股續跌」！台積電ADR慘崩4.50％",
-      "來源": "ETtoday財經雲",
-      "時間": "11/20 22:38",
-      "連結": "https://news.google.com/rss/articles/CBMiUkFVX3lxTFBmQklGV2FyUEF2M2Y5NlIxMURrNDFVQVJwejF1aHA5Y0JPYXJCRlZvM0t2Q1dRb05CalJsSkNKa01wazQ4MGsyVERjN3JpTnNXblHSAVBBVV95cUxNMENfYlAyNG1BMUEzLXZBWHlsYVZjSkQ0Wlo5bUFUVDdPamJtbm1neDFKMnR0UmlwQlpvZVI4bFVseWN4aUo5S0hvaWRCUTdtUQ?oc=5"
-    },
-    {
-      "標題": "國安基金限空令失靈 台股末日級崩跌第3慘",
-      "來源": "卡優新聞網",
-      "時間": "11/21 04:12",
-      "連結": "https://news.google.com/rss/articles/CBMiWkFVX3lxTE45SDFqaUltbnJuN2dyYUp4N2dfRnZNMjNDQWx1RjNYMzFlZnRwamc4dWQ1WVNQYlIzVGk1VTRTUzR4YlRRNkVkdnlwaHVmQzZ2ZW1OWGlIS2hpQQ?oc=5"
-    },
-    {
-      "標題": "【美股開盤「AI股續跌」！台積電ADR慘崩4.50％】 （#大表哥）",
+      "標題": "【台股暴跌創36年最慘！詹惟中喊話股民「3不原則」預言2027走勢】 會反彈嗎！ （#起啵）",
       "來源": "Facebook",
-      "時間": "11/21 04:38",
-      "連結": "https://news.google.com/rss/articles/CBMipwJBVV95cUxQdF9waXptdDlRWDg1bjlzcHhWNjkyQWFNX0dweldUNlM5ZTdtMnlIZE9FZ2lxc2lvSWZXUHI1MWVtX2RnOVRxRlZYaDJZbXlWaXV4TVpvRzBzeFhkRjBzVWE2Z2NIQ2FzYnpPcVBmb1l4RVhJS2hfMDU5OUxKNkgwS01yWUdWTUNoSnRpZy1LMTNPcGMydFVUSUdHQWJBVmMzRkJseVp1b3NzS0FrTEx3VlRyb09aM05mcENUWExqLUdGb3MzbHJjVDd3bTdoX3htaXdXUWtaWlhxS2ZmVnFvYmRVYk5OemZTMEFRSVNhQXd0cGhId0pla29HQzVPelZHbnU2UW1GRXZDR2hKajh6NDFhTkpTeDJWUWIwOFp0dmt0bF82Wmhj?oc=5"
+      "時間": "11/22 02:31",
+      "連結": "https://news.google.com/rss/articles/CBMiwwNBVV95cUxNYkpMRzBmbTNhNmVlRzVua2pwWU4waTdIVGRjYkhEaHBlMlZlemZ5Y3MxYVpMbEsxVXFMUVRpM2htSVJwRTdqVGZoaVllSUF0RUNjdndEcUNRdWZiTzRXZV9IZDRPQldHNDA0Q3U0Z3RReTV0SVpxQjVCNE53TlI1UGs4RzRkUDJxYUJFc2pnYUJ0ekNMRVM1LXJGSUprVzFXTDg1SC02dGQwa0xUNUl2SW1YeVJHVnA1c0NXUmZnNWJBUHE1bDNlcUpaLWppRmZIeVQ0OVBtQVJJb2ZkZ2h3ZkxHYWlQcmN6SC1EMHNUcm9mSktTWHJzM1dpR1oxWHlDZ2MyRFJoSU9oTFRIaUljM281NWRaLXRmd1JEd21DWkZXemRIM1BWbDZxektGWElSSDg1aHR1Ni1tOTJxbkd4UC1GbHEzTmFEcUIxdGNpcEVzVnRPODVkR2FqcE03bWFxWklaSTQyWk04LWtRdk5jS01zSUhmY3VFSG5SbVR2MUs5d3pnMExXdmhDRDdlZTJaeWo4dmdId3RjQXJrREtkNzBRdk9Bb1Q1U1dNYWY2cVF4cHVkRjNCYkd6RFBfQlVMSmxv?oc=5"
+    },
+    {
+      "標題": "黃仁勳去職推倒台股？ 經濟部：AI趨勢不因「個別公司」影響",
+      "來源": "Yahoo股市",
+      "時間": "11/21 19:45",
+      "連結": "https://news.google.com/rss/articles/CBMi6wJBVV95cUxNRm9iUFI1YjJiYWxpSmE2RkpRUTZ1cEhrNmtGOTVUQ0p1cVlBYkNXVEs5bF9DU0thaFg3T2J5akZ1WjR3SnJhb3hWMWxJdjY0cXFKX29rMkNiejFSa05oaHl1bEc0VmZKWG9ibDNEbmpnQ0gwcDdZVEZ1bVZFLS15S2JndUtRanJic08zTnBTUEdNOVJsQ2RkWWxFdTdGQjBxY0N4SXI5N0NVa1VMTm9fN0VRUGpBNTVCRFl5TzcyODh2MlRCU0tWc2xBSEstUEkwT3ZCa3EyMTFOdUtTLVpoQTAwVzNoeG0tUmlHSjV5ZHNvcS01eHVfU09zNnJVWk9XVTliSzdGM2tNRl9QU2NEQ2xXRnpLUjFST1AzcXpDdU1zRHNFZUpMaXFYSTFZVFFUUWd0WmlJal96ZkNXUmY0bVVJYXlmeWF6b1RTYmRRMWY5QkZscG1zeU4xZzhtSzQ5Wmd1UC1rZ2U5QkE?oc=5"
+    },
+    {
+      "標題": "台股單周跌幅達17.5% 國安基金：已實彈護盤",
+      "來源": "UDN",
+      "時間": "11/22 02:37",
+      "連結": "https://news.google.com/rss/articles/CBMiUEFVX3lxTFA1d0V6a0JhRjJxa25PNXlDcHNNRVl3WmFnOXNyOUs0ZVIzNVF6SVozMVVNaXB1T0lqOVFhUFFuS0szbXdPN0ZWeThrenJEUmVf0gFWQVVfeXFMUDhZNGpjbVBCcWN3OG9YQXhrcDBtbzJDQkJxNE1kamFWWmxsZTc0RW1CRW4tc1RVRW9nX1lxLTJLUFFtZ1JqTFRYQm12R0xNME9BcWZBS2c?oc=5"
+    },
+    {
+      "標題": "台股回檔投資策略法人教戰- 日報",
+      "來源": "工商時報",
+      "時間": "11/22 03:00",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE92UHc3a3lpdWd2R0lnZnluWS1mVzNvbE1WSFI1MkhTVmUwS20wQ3FCSnFEbU5sMjBfWlhKdU9kQUdnUXBvMEpoQXZZMG51YU9BRlVZcUVjQWxCRVFGUEQ4?oc=5"
     }
   ],
   "熱門股": [
