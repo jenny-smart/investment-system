@@ -125,7 +125,7 @@ def _update_panel(kind: str) -> None:
                      help="下載新帳單（下載過的不重抓）→ 比對細帳（不寫入）→ 更新明細"):
             start_job("更新信用卡", ["refresh-cards"])
     job = st.session_state.get("bank_job")
-    if job and job.get("args", [""])[0] in ("refresh-bank", "refresh-cards"):
+    if job and job.get("args", [""])[0] in ("refresh-bank", "refresh-cards", "bank-review", "bank-ledger"):
         with st.expander("執行過程", expanded=job["proc"].poll() is None):
             job_panel(prefix="top_")
 
@@ -140,6 +140,8 @@ def render_bank_detail_page() -> None:
     st.subheader("銀行明細")
     _update_panel("bank")
     _check_alert("銀行餘額核對", "銀行餘額", BANK_SHEETS)
+    from invest_app.bank_confirm import render_confirm_panel
+    render_confirm_panel()
     _reload_button("bd_reload")
     try:
         df = _load("銀行明細", BANK_SHEETS)
@@ -201,7 +203,7 @@ def render_bank_detail_page() -> None:
                     st.dataframe(part.drop(columns=["銀行", "帳戶"]), hide_index=True, use_container_width=True,
                                  height=min(38 + 35 * len(part), 460), column_config=cfg)
         st.caption("「銀行（細帳）」「其他」：記到細帳哪一列、加多少（＋／−）；空白的銀行欄＝公式會自動帶入（例 116 加進建北）。"
-                   "「待確認」請到總帳「銀行明細確認」分頁處理。資料快取 10 分鐘；剛更新完要看最新請按「重新讀取」。")
+                   "「待確認」在上方「✅ 確認與寫入細帳」處理。資料快取 10 分鐘；剛更新完要看最新請按「重新讀取」。")
     _local_tools()
 
 

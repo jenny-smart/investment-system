@@ -103,6 +103,7 @@ def job_panel(prefix: str = "") -> None:
             c3.info("程式在等你：照上面訊息在 Chrome 操作完，再按「繼續（Enter）」。")
     elif not st.session_state.get(prefix + "bank_job_done_rerun") == str(job["log"]):
         st.session_state[prefix + "bank_job_done_rerun"] = str(job["log"])
+        st.session_state.pop("bc_review", None)  # 確認清單也重讀
         try:  # 明細分頁剛更新：清掉 App 讀總帳的快取
             from invest_app.ledger_pages import _load
             _load.clear()

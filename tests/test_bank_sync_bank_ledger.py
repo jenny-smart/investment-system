@@ -539,3 +539,23 @@ def test_linebank_old_and_new_rows_same_key():
     old = ["整列 2026年11月8日", "整列 2026年11月8日 02:03 20261208-1.88% 存入 NT$4,790", "2026年11月8日 02:03", "20261208-1.88%", "存入 NT$4,790"]
     new = ["2026年11月8日", "2026年11月8日 02:03", "20261208-1.88%", "存入 NT$4,790"]
     assert _to_tx("linebank", blk, ["日期", "時間", "摘要", "金額"], old).key == _to_tx("linebank", blk, ["日期", "時間", "摘要", "金額"], new).key
+
+
+def test_save_answers_writes_only_changed_rows():
+    from bank_sync.bank_ledger import REVIEW_HEAD, save_answers
+
+    class WS:
+        def __init__(self):
+            self.rows = [REVIEW_HEAD, ["⚠️ 請確認"] + [""] * 8 + ["", "", "c1"], ["自動"] + [""] * 8 + ["確認", "", "c2"]]
+            self.sent = None
+
+        def get_values(self):
+            return self.rows
+
+        def batch_update(self, updates, value_input_option=None):
+            self.sent = updates
+
+    ws = WS()
+    book = type("B", (), {"worksheet": lambda self, t: ws})()
+    assert save_answers(book, {"c1": ("確認", "零用金-餐費"), "c2": ("確認", "")}) == 1
+    assert ws.sent == [{"range": "J2:K2", "values": [["確認", "零用金-餐費"]]}]

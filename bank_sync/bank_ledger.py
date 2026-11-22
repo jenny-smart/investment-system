@@ -823,6 +823,30 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
 
 
+def save_answers(book, answers: dict) -> int:
+    """App 用：把 {代碼: (你的確認, 改記到)} 寫回「銀行明細確認」分頁（只改這兩欄）。回傳改了幾列。"""
+    import gspread
+    ws = book.worksheet(REVIEW_TITLE)
+    rows = ws.get_values()
+    if not rows:
+        return 0
+    head = rows[0]
+    ki, ci, ri = head.index("代碼"), head.index("你的確認"), head.index("改記到（另一邊列號或列名）")
+    updates = []
+    for n, r in enumerate(rows[1:], start=2):
+        code = r[ki] if ki < len(r) else ""
+        if code not in answers:
+            continue
+        choice, target = answers[code]
+        old = (r[ci] if ci < len(r) else "", r[ri] if ri < len(r) else "")
+        if (choice, target) != old:
+            updates.append({"range": f"{gspread.utils.rowcol_to_a1(n, ci + 1)}:{gspread.utils.rowcol_to_a1(n, ri + 1)}",
+                            "values": [[choice, target]]})
+    if updates:
+        ws.batch_update(updates, value_input_option="RAW")
+    return len(updates)
+
+
 LAST_REVIEW_BAD = 0
 
 
