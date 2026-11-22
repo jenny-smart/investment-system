@@ -1,5 +1,5 @@
 {
-  "更新時間": "2026-11-22 05:31",
+  "更新時間": "2026-11-23 05:31",
   "夜盤": {
     "夜盤日期": "2026-11-23",
     "日盤日期": "2026-11-20",
@@ -81,10 +81,10 @@
     {
       "名稱": "美元/台幣",
       "代號": "TWD=X",
-      "收盤": 33.02629852294922,
-      "漲跌": 0.09639739990234375,
-      "漲跌幅": 0.0029273516352855806,
-      "日期": "2026-11-20"
+      "收盤": 32.9640007019043,
+      "漲跌": -0.062297821044921875,
+      "漲跌幅": -0.0018863095118465227,
+      "日期": "2026-11-22"
     },
     {
       "名稱": "加權指數",
@@ -108,63 +108,63 @@
     "預估漲跌幅": -0.05452264808362369,
     "加權指數前收": 36033.2890625,
     "預估開盤": 34068.65872364982,
-    "台積電ADR溢價": 0.05258113200420045,
+    "台積電ADR溢價": 0.05059563820291069,
     "依據": [
       "夜盤收 33,919，較日盤收盤 -1,956 點（-5.45%）",
       "費半 -10.73%",
-      "台積電 ADR -9.48%，折合台股溢價 +5.3%",
+      "台積電 ADR -9.48%，折合台股溢價 +5.1%",
       "外資夜盤多空淨額 +1,430 口（偏多）"
     ],
     "說明": "預估開盤＝加權指數前收 ×（1＋夜盤近月較日盤收盤漲跌幅），只供參考。"
   },
   "新聞": [
     {
-      "標題": "AI 融資添變數 台美股急跌後該減碼嗎？",
-      "來源": "鉅亨買基金",
-      "時間": "11/21 23:40",
-      "連結": "https://news.google.com/rss/articles/CBMimgFBVV95cUxORUJXQ3ZIU1ozcnBUenFXVlVWVkVTNDZTZjBzdWhSUkJpYUlKcTQxcEdHcWxvcEFmajcxS0txeUlZSVZjLXVuR0Z2WGJGQU1XRm1lWHZjVS1RUHRPRzRBd0ZFLVZOQW1Fck5qcnkxUmc5N2JrMGN5X25WanZnaDdUMl83bjQ2R20zSXByTUF3bVkxLW81eE11YThR?oc=5"
-    },
-    {
-      "標題": "美股聲聲歎那指漲的全吐光- 日報",
-      "來源": "工商時報",
-      "時間": "11/22 03:00",
-      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTFBRVlhtbURHVXRPYjlNYUdKLTNJV1FYT2VOVjZ0Z0JsQ3hIdUR5V2ZTdE5Scm9IWmdTc2VweGFwNVQtVW1GcTJzUnBHYjFlSy1lQUJOS2pfajI2cmhSbGlB?oc=5"
-    },
-    {
-      "標題": "美股崩跌五大利空齊發：AI 吸金潮反噬 輝達失速 升息與程式賣盤夾擊",
-      "來源": "經濟日報",
-      "時間": "11/21 10:33",
-      "連結": "https://news.google.com/rss/articles/CBMiXEFVX3lxTE9zWE1nbG5uLUROOGhXVmIzN2J3QXZVdF9CdWdqT055cHRxNGY1aFpfd05VQjZRdnhURTlWM3I5S1Zld3VLYVhEMncyc2tIYzZidzYzYU5aWDlNVVNB0gFiQVVfeXFMT0F3azBNU0hkM29XODgxeU8zMVlmMFcyYmhHVGgwWS1XbWgyYUZmbTI1Smh2a29ubHllREZyV3UwdV95S1F1SHRodHVaSDVEcldIUU9zd2YtZ1M2V0xjWjYyTWc?oc=5"
-    },
-    {
-      "標題": "台股跌到股民心慌！國安基金假日罕見發聲 喊話投資人保持信心",
-      "來源": "Yahoo股市",
-      "時間": "11/21 22:15",
-      "連結": "https://news.google.com/rss/articles/CBMiogNBVV95cUxPRjEyLWdqY0V6YkJoZ2M4dzdDYW0yTHJoOS1xaEFCOXROYkJVSW9pVGZIQ2dUalI1M2J5U0FoTTBzUEI1My01SFhMcHpDUEp5Mng4YXpOTzNvZmpNZXlnZEVnYm9obkpyRGFUaGFncXhDSkt2blJQbkcwX2l2SWp2akM3elJkWDNmTXVzSjBqM2VOcjAxSHE1VkEwRjhKWF9zNTljR2YtcWxoMGpzRlFWcHc2cTdHTVdMZFhBTXdVUWRuZDVyYU1QN0hRbXBNZWh6X0NEcGJBWWVVQTJXMFZSTGVucHc4NVZqZDVrWi0xUDVBSjdzU3pKY1k0a1YzWkJpM0NraWJ2Qkk5NnlLaGNEUzJzb3haMEplQU5leU1JOEUyZmI5UElKWXBDOU5lbXh6U0VjX2hGcF8zZFVaMU1LX0NWbGtZalpvdmhXMHF3Szd2NkdZVUxRenI5VUxkY3I0UlNJT1FrUV9EUU5Sd2Z1MDBHN3hNdzVKbHBlby1hU2ZOU0k4cFMxXzJ5SkFIZXBvMWVDVVdOWTRwdHFfbFh5azVR?oc=5"
-    },
-    {
-      "標題": "【台股暴跌創36年最慘！詹惟中喊話股民「3不原則」預言2027走勢】 會反彈嗎！ （#起啵）",
-      "來源": "Facebook",
-      "時間": "11/22 02:31",
-      "連結": "https://news.google.com/rss/articles/CBMiwwNBVV95cUxNYkpMRzBmbTNhNmVlRzVua2pwWU4waTdIVGRjYkhEaHBlMlZlemZ5Y3MxYVpMbEsxVXFMUVRpM2htSVJwRTdqVGZoaVllSUF0RUNjdndEcUNRdWZiTzRXZV9IZDRPQldHNDA0Q3U0Z3RReTV0SVpxQjVCNE53TlI1UGs4RzRkUDJxYUJFc2pnYUJ0ekNMRVM1LXJGSUprVzFXTDg1SC02dGQwa0xUNUl2SW1YeVJHVnA1c0NXUmZnNWJBUHE1bDNlcUpaLWppRmZIeVQ0OVBtQVJJb2ZkZ2h3ZkxHYWlQcmN6SC1EMHNUcm9mSktTWHJzM1dpR1oxWHlDZ2MyRFJoSU9oTFRIaUljM281NWRaLXRmd1JEd21DWkZXemRIM1BWbDZxektGWElSSDg1aHR1Ni1tOTJxbkd4UC1GbHEzTmFEcUIxdGNpcEVzVnRPODVkR2FqcE03bWFxWklaSTQyWk04LWtRdk5jS01zSUhmY3VFSG5SbVR2MUs5d3pnMExXdmhDRDdlZTJaeWo4dmdId3RjQXJrREtkNzBRdk9Bb1Q1U1dNYWY2cVF4cHVkRjNCYkd6RFBfQlVMSmxv?oc=5"
-    },
-    {
-      "標題": "黃仁勳去職推倒台股？ 經濟部：AI趨勢不因「個別公司」影響",
-      "來源": "Yahoo股市",
-      "時間": "11/21 19:45",
-      "連結": "https://news.google.com/rss/articles/CBMi6wJBVV95cUxNRm9iUFI1YjJiYWxpSmE2RkpRUTZ1cEhrNmtGOTVUQ0p1cVlBYkNXVEs5bF9DU0thaFg3T2J5akZ1WjR3SnJhb3hWMWxJdjY0cXFKX29rMkNiejFSa05oaHl1bEc0VmZKWG9ibDNEbmpnQ0gwcDdZVEZ1bVZFLS15S2JndUtRanJic08zTnBTUEdNOVJsQ2RkWWxFdTdGQjBxY0N4SXI5N0NVa1VMTm9fN0VRUGpBNTVCRFl5TzcyODh2MlRCU0tWc2xBSEstUEkwT3ZCa3EyMTFOdUtTLVpoQTAwVzNoeG0tUmlHSjV5ZHNvcS01eHVfU09zNnJVWk9XVTliSzdGM2tNRl9QU2NEQ2xXRnpLUjFST1AzcXpDdU1zRHNFZUpMaXFYSTFZVFFUUWd0WmlJal96ZkNXUmY0bVVJYXlmeWF6b1RTYmRRMWY5QkZscG1zeU4xZzhtSzQ5Wmd1UC1rZ2U5QkE?oc=5"
-    },
-    {
-      "標題": "台股單周跌幅達17.5% 國安基金：已實彈護盤",
+      "標題": "這波美股重挫何時休？ 高盛：可觀察三個觸底訊號| 全球財經| 全球",
       "來源": "UDN",
-      "時間": "11/22 02:37",
-      "連結": "https://news.google.com/rss/articles/CBMiUEFVX3lxTFA1d0V6a0JhRjJxa25PNXlDcHNNRVl3WmFnOXNyOUs0ZVIzNVF6SVozMVVNaXB1T0lqOVFhUFFuS0szbXdPN0ZWeThrenJEUmVf0gFWQVVfeXFMUDhZNGpjbVBCcWN3OG9YQXhrcDBtbzJDQkJxNE1kamFWWmxsZTc0RW1CRW4tc1RVRW9nX1lxLTJLUFFtZ1JqTFRYQm12R0xNME9BcWZBS2c?oc=5"
+      "時間": "11/22 18:47",
+      "連結": "https://news.google.com/rss/articles/CBMiUEFVX3lxTE1RWllhWVlVSUtxUGx5cm9kWF9xWjhyMjJmbGdDOFl0ck5Dam81Z0hfWTVVWnFEbzZ3TDc2WTRhU1RERlQ3aXNVOEZJaFA1OTNx?oc=5"
     },
     {
-      "標題": "台股回檔投資策略法人教戰- 日報",
+      "標題": "美股還沒跌完？高盛示警「恐慌3劇本」下週恐再爆2.5兆元賣壓",
+      "來源": "Yahoo股市",
+      "時間": "11/22 14:15",
+      "連結": "https://news.google.com/rss/articles/CBMi-AJBVV95cUxPRXpnc29DeGwzQnVrTGNwdTNYSGZIRXYyYWxPQzhobXNjUHFWbmlNbDJUM1VDRHg3TS1PUTdhdEZPRG96UXZybDFZT1EtekpRdGtNNHJrVnNmMzI3eDNqd1pySWE2VTcyQnpIaDNhQVV3X2M0RjZ2RktnbkxHcjYzWnFDYjN6Q3VxYV9TOFcteEZkUTZ2a1ZSSkdkYWJyQ1V2d2d5LUtUeG41clJQWnpfUFFuMUQ1SkNNX1RPQTJXWmR0VmJVTlczdFhpS25rX2htblFnYmRoMmgxWm02UmNTSy1WQkMzLVI0VEVkaFlMYVZHM0IzV0szcTF5d0ptZHRwd3I2LVNiM196dldRbEVjUVpzbTFaNC01TFFudFZiRzlzMksycl8tS3lCNncxeW9odXlZLU9JYWpFZTlqb0didk4tU3JTWTBPLXUxVlRTbHdxSWU2WGlhSFdEMmxZNWtKQ1g5dVhBQ0pPSXhodzd6MWZ0NW13R2NM?oc=5"
+    },
+    {
+      "標題": "美股大跌，AI盛宴落幕？",
+      "來源": "日經中文網",
+      "時間": "11/23 05:02",
+      "連結": "https://news.google.com/rss/articles/CBMihAFBVV95cUxNSk5NSm0zVnRsT29WS0pUeUc2aElBNGVIVEtxdFhxU2Q1cWZkYkhPSlN3d0Njdkl2ZDZLSm1Gb0taREVqT0x2NzBkRmZQYVJjOGVnNXRqNlRDbjFsX2twSHFsMkROenNOSGZNVURIcGFYMHliSXZvNGFKamVvMWtTU0pDTno?oc=5"
+    },
+    {
+      "標題": "〈台股盤前要聞〉金管會：23日起全面禁平盤以下放空、10月外銷訂單連21紅",
+      "來源": "鉅亨網",
+      "時間": "11/23 05:10",
+      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE5JclFmelBZTkx3RDl1T2NzaG1XaGdvcmhLMFdqVmFQVXNBdjNGZHNtOGIyOEtWdmRzRU9YYXJ3WE9ZLUJOYmhqeHh6Yko2RnM?oc=5"
+    },
+    {
+      "標題": "台股待沉澱 外資中性看2027",
       "來源": "工商時報",
-      "時間": "11/22 03:00",
-      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE92UHc3a3lpdWd2R0lnZnluWS1mVzNvbE1WSFI1MkhTVmUwS20wQ3FCSnFEbU5sMjBfWlhKdU9kQUdnUXBvMEpoQXZZMG51YU9BRlVZcUVjQWxCRVFGUEQ4?oc=5"
+      "時間": "11/23 03:00",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE14UlpnMDhJVG52U3kwOWxJNWhqT29ucHBPSTJSOHFCVElkTTVZbmdIdllwXzRqS0piam4xaVZ4Vms3eFZUMk1BQU8xczFYc2s5R1FWMEZaTEwxbUxfQ1h3?oc=5"
+    },
+    {
+      "標題": "台股震盪卓榮泰23日邀金融、科技與工商產業公協會代表會面| 政治",
+      "來源": "中央社 CNA",
+      "時間": "11/22 23:22",
+      "連結": "https://news.google.com/rss/articles/CBMiX0FVX3lxTE9HbXBwTmdHQ1J4N2dMOTBTbGNrUGl1TW9Tc1d6RzdwWkM4WUJUbi1hUDR6YnBqSjlvdHlLMEdDTWlha3BxS05YQ09Nc0QwWHhVQUxkbWx3MkdDQlg5TUZB?oc=5"
+    },
+    {
+      "標題": "美股上周五崩跌亞洲金融市場今日全面戒備台、韓周末緊急研商對策| 股市要聞| 股市",
+      "來源": "UDN",
+      "時間": "11/23 04:39",
+      "連結": "https://news.google.com/rss/articles/CBMiUEFVX3lxTFBFWFRIRGJGZVRHT2paN2dJTVBvNnMwTG1GRkYxbk9qSHpfcXVOWGFaOGZISGJqbWdKT2dmMkdrQUdwYnQ0eW9yN1pSTk1aei1Q?oc=5"
+    },
+    {
+      "標題": "美股慘崩 AI產業是泡沫破裂還是價格重估？",
+      "來源": "鉅亨網",
+      "時間": "11/22 12:10",
+      "連結": "https://news.google.com/rss/articles/CBMiT0FVX3lxTE5PRTFlaDJiLW1RYWotSWdScl9LR3NmM2ZieUMtdFl3YVVLeWZJYmNxTTloN042N2dHWlhpbVB1NkxHSE9UM3JzbmpoZWZnZHM?oc=5"
     }
   ],
   "熱門股": [
