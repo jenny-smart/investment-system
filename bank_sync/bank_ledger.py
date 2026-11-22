@@ -179,6 +179,7 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
     fix_linebank_mirror(out)
+    fill_linebank_balances(out, linebank_anchors())
     attach_receipts(out)
     return out, warn
 
@@ -207,8 +208,10 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
     tx = _to_tx_core(bank, block, head, row)
     if isinstance(tx, Tx):
         get = lambda i: row[i] if i is not None and i < len(row) else ""
-        if bank == "linebank":
-            tx.balance = None  # LINE Bank 明細沒有餘額
+        if bank == "linebank":  # 明細沒有餘額欄：整列文字有寫就用，沒有的話之後用頁面餘額往回推
+            m = re.search(r"餘額\s*[:：]?\s*(?:NT\$|新臺幣)?\s*(-?[\d,]+(?:\.\d+)?)",
+                          block.get("row_text", {}).get("|".join(row), ""))
+            tx.balance = _num(m.group(1)) if m else None
         else:
             detail = _detail_cell(row) if (bank == "taishin" and "詳細" in head) else None
             tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "結存金額", "餘額")))
@@ -224,12 +227,46 @@ LINE_OUT = ("支出", "轉出", "提款", "扣款", "付款")
 
 def _linebank_sign(raw: str, row_text: str) -> int:
     """LINE Bank 金額格寫「存入 NT$12」「支出 NT$8,526」；金額格沒寫時看列前面的整列文字。0＝看不出來。"""
-    for text in (raw, row_text):
+    words, _, style = (row_text or "").partition(" ||class:")
+    for text in (raw, words):
         if "存入" in text or "轉入" in text:
             return 1
-        if any(w in text for w in LINE_OUT) or text.strip().startswith("-"):
+        if any(w in text for w in LINE_OUT) or text.strip().startswith("-") or re.search(r"[−\-]\s*NT\$", text):
             return -1
+    if re.search(r"minus|negative|withdraw|expense|debit|outgo", style, re.I):
+        return -1
+    if re.search(r"plus|positive|deposit|income|credit", style, re.I):
+        return 1
     return 0
+
+
+def linebank_anchors() -> list[tuple]:
+    """每次抓 LINE Bank 時頁面上的帳戶餘額：[(時間, 餘額)]。"""
+    out = []
+    for block in _blocks("linebank"):
+        v = _num(str(block.get("balance_now") or ""))
+        if v is not None and block.get("balance_at"):
+            out.append((block["balance_at"], v))
+    return sorted(out)
+
+
+def fill_linebank_balances(txs: list, anchors: list) -> int:
+    """LINE Bank 沒有逐筆餘額：從最近一次抓到的帳戶餘額往回推（之後的餘額＝前一筆餘額＋這筆金額）。"""
+    line = sorted([t for t in txs if t.bank == "linebank"], key=lambda t: t.when)
+    if not line or not anchors:
+        return 0
+    at, bal = anchors[-1]
+    filled = 0
+    for t in reversed(line):
+        if t.day.isoformat() > at[:10]:
+            continue
+        if t.balance is None:
+            t.balance = round(bal, 2)
+            filled += 1
+        else:
+            bal = t.balance
+        bal -= t.amount
+    return filled
 
 
 def fix_linebank_mirror(txs: list) -> int:
@@ -279,11 +316,12 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         amount = _num(re.sub(r"[^\d.,\-]", "", raw))
         if amount is None:
             return None
-        sign = _linebank_sign(raw, " ".join(row[:-3]))
+        sign = _linebank_sign(raw, block.get("row_text", {}).get("|".join(row), "") or " ".join(row[:-3]))
         if sign:
             amount = sign * abs(amount)
         if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
             summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
+        key = f"{bank}|" + "|".join(row[-3:])  # 舊檔每列前面多「整列」格：只用 時間／摘要／金額 認同一筆
         return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)
     if bank == "post":
         out_, in_ = _num(get(_col(head, "提款金額"))), _num(get(_col(head, "存款金額")))

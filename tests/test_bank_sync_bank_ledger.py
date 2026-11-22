@@ -517,3 +517,25 @@ def test_publish_sorted_by_bank_then_date():
                       e("fubon", "新店", 13), e("taishin", "A", 18)])
     assert [(x.tx.bank, x.tx.day.day) for x in got] == [("taishin", 18), ("taishin", 16), ("fubon", 13),
                                                         ("next", 17), ("next", 16), ("linebank", 17)]
+
+
+def test_linebank_direction_from_row_text_and_balance_fill():
+    from bank_sync.bank_ledger import _to_tx, fill_linebank_balances
+    head = ["日期", "時間", "摘要", "金額"]
+    r1 = ["2026年11月17日", "2026年11月17日 06:13", "將來商業-Jenny", "NT$8,526"]
+    r2 = ["2026年11月17日", "2026年11月17日 06:20", "20270817-2.2%", "NT$1,868"]
+    blk = {"account": "主帳戶 ****612", "ledger_row": "連線",
+           "row_text": {"|".join(r1): "2026年11月17日 06:13 將來商業-Jenny -NT$8,526 ||class:amount minus ||color:rgb(0,0,0)",
+                        "|".join(r2): "2026年11月17日 06:20 20270817-2.2% NT$1,868 ||class:amount plus ||color:"}}
+    a, b = _to_tx("linebank", blk, head, r1), _to_tx("linebank", blk, head, r2)
+    assert a.amount == -8526 and b.amount == 1868
+    assert fill_linebank_balances([a, b], [("2026-11-22 08:10", 100000.0)]) == 2
+    assert b.balance == 100000 and a.balance == 100000 - 1868
+
+
+def test_linebank_old_and_new_rows_same_key():
+    from bank_sync.bank_ledger import _to_tx
+    blk = {"account": "主帳戶 ****612", "ledger_row": "連線"}
+    old = ["整列 2026年11月8日", "整列 2026年11月8日 02:03 20261208-1.88% 存入 NT$4,790", "2026年11月8日 02:03", "20261208-1.88%", "存入 NT$4,790"]
+    new = ["2026年11月8日", "2026年11月8日 02:03", "20261208-1.88%", "存入 NT$4,790"]
+    assert _to_tx("linebank", blk, ["日期", "時間", "摘要", "金額"], old).key == _to_tx("linebank", blk, ["日期", "時間", "摘要", "金額"], new).key

@@ -53,13 +53,20 @@ TABLE_JS = r"""
     const hi = rows.findIndex(r => { const c = [...r.cells].map(x => clean(x.innerText)); return need.every(n => c.includes(n)); });
     if (hi < 0) continue;
     const head = [...rows[hi].cells].map(x => clean(x.innerText));
-    const data = [];
+    const data = [], texts = [];
     for (const r of rows.slice(hi + 1)) {
       if (!vis(r)) continue;
       const cells = [...r.cells].map(x => clean(x.innerText));
-      if (cells.length >= Math.min(head.length, need.length) && cells.some(Boolean)) data.push(cells);
+      if (cells.length >= Math.min(head.length, need.length) && cells.some(Boolean)) {
+        data.push(cells);
+        // 整列文字＋金額格的 class／顏色：LINE Bank 收支方向、餘額可能只寫在這裡
+        const last = r.cells[r.cells.length - 1];
+        const cls = last ? (last.className + ' ' + [...last.querySelectorAll('*')].map(x => x.className).join(' ')) : '';
+        const color = last ? getComputedStyle(last.querySelector('*') || last).color : '';
+        texts.push(clean(r.innerText) + ' ||class:' + cls + ' ||color:' + color);
+      }
     }
-    return {head: head, rows: data};
+    return {head: head, rows: data, texts: texts};
   }
   return null;
 }
@@ -75,6 +82,14 @@ SELECT_JS = r"""
   for (const ev of ['input', 'change']) s.dispatchEvent(new Event(ev, {bubbles: true}));
   if (window.jQuery) { try { window.jQuery(s).trigger('change'); } catch (e) {} }
   return opts[index];
+}
+"""
+
+BALANCE_JS = r"""
+() => {
+  const t = (document.body.innerText || '').replace(/\s+/g, ' ');
+  const m = t.match(/(可用餘額|帳戶餘額|活存餘額|目前餘額|餘額)\s*[:：]?\s*(NT\$|新臺幣|TWD)?\s*(-?[\d,]+(?:\.\d+)?)/);
+  return m ? m[3] : '';
 }
 """
 
@@ -191,18 +206,28 @@ def _read(page, bank: TableBank, before: str, timeout_s: float = 20) -> dict:
     # 有些表格每列前面多一格（例：LINE Bank 第一格是整列文字）：比表頭多的格子從前面去掉
     result["rows"] = [r[-n:] if len(r) > n else r for r in result["rows"]]
     di = head.index(bank.date_col) if bank.date_col in head else 0
-    rows = [[r[di]] + r for r in result["rows"] if di < len(r) and parse_day(r[di])]
+    texts = result.get("texts") or [""] * len(result["rows"])
+    row_text = {}
+    rows = []
+    for r, txt in zip(result["rows"], texts):
+        if di < len(r) and parse_day(r[di]):
+            rows.append([r[di]] + r)
+            row_text["|".join(rows[-1])] = txt
     for _ in range(30):  # 下一頁
         if not _click_text(page, ("下一頁", "下頁")):
             break
         page.wait_for_timeout(1500)
         more = page.evaluate(TABLE_JS, list(bank.need)) or {}
-        new = [[r[di]] + r for r in more.get("rows", []) if di < len(r) and parse_day(r[di])]
-        new = [r for r in new if r not in rows]
+        new = []
+        for r, txt in zip(more.get("rows", []), more.get("texts") or [""] * len(more.get("rows", []))):
+            r = r[-n:] if len(r) > n else r
+            if di < len(r) and parse_day(r[di]) and [r[di]] + r not in rows:
+                new.append([r[di]] + r)
+                row_text["|".join(new[-1])] = txt
         if not new:
             break
         rows.extend(new)
-    return {"head": ["日期"] + head, "rows": rows}
+    return {"head": ["日期"] + head, "rows": rows, "row_text": row_text}
 
 
 def fetch_accounts(top, bank: TableBank, state: dict, since: date) -> list[dict]:
@@ -233,7 +258,14 @@ def fetch_accounts(top, bank: TableBank, state: dict, since: date) -> list[dict]
             raise RuntimeError(f"找不到「{bank.query_buttons[0]}」")
         data = _read(page, bank, before)
         total = len(data["rows"])
+        row_text = data.pop("row_text", {})
         data["rows"], state[key] = keep_new(data["rows"], state.get(key, {}), start)
+        data["row_text"] = {k: v for k, v in row_text.items() if k in {"|".join(r) for r in data["rows"]}}
+        try:  # 頁面上的帳戶餘額（LINE Bank 明細沒有餘額欄，用它往回推每筆之後的餘額）
+            data["balance_now"] = page.evaluate(BALANCE_JS) or ""
+        except Exception:
+            data["balance_now"] = ""
+        data["balance_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         out.append({"type": "TWD", "account": name, "ledger_row": bank.ledger, "from": start.isoformat(), **data})
         print(f"  {name}：{start:%m/%d}～{today:%m/%d} 共 {total} 筆，新的 {len(data['rows'])} 筆")
     return out
