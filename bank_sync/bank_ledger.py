@@ -785,7 +785,10 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
 
 
-def review(year: int) -> str:
+LAST_REVIEW_BAD = 0
+
+
+def review(year: int) -> int:
     """把目前抓到、還沒寫進細帳的明細，列在總帳的「銀行明細確認」分頁，要你確認的排最上面並標黃。"""
     txs, warn = load_transactions()
     for w in warn[:10]:
@@ -815,6 +818,8 @@ def review(year: int) -> str:
     print(f"餘額核對表：{write_balance_sheet(book, sim)}")
     if bad:
         print(f"⚠️ {bad} 列對不上：可能還有沒確認的項目、手動記過的重複、或帳戶沒有餘額資料")
+    else:
+        print("✓ 細帳（模擬記入後）與銀行餘額相符")
     n_check = sum(needs_check(e) for e in entries)
     print(f"還沒寫進細帳的明細 {len(entries)} 筆，其中要你確認 {n_check} 筆（排最上面、標黃）。")
     print(f"確認表：{url}")
@@ -822,8 +827,8 @@ def review(year: int) -> str:
     print("填好後執行：python3 -m bank_sync bank-ledger --apply")
     _publish_quietly(year)
     from .progress_log import log_run
-    log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆")
-    return url
+    log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆｜餘額不符 {bad} 列")
+    return bad
 
 
 # ---------------------------------------------------------------- 餘額核對（模擬記入後，細帳要等於銀行餘額）
@@ -1009,7 +1014,8 @@ def write_balance_sheet(book, rows: list[list]) -> str:
     except Exception:
         ws = book.add_worksheet(BALANCE_TITLE, rows=60, cols=10)
     ws.clear()
-    ws.update(rows, "A1", value_input_option="RAW")
+    from datetime import datetime
+    ws.update(rows + [[], ["更新時間", datetime.now().strftime("%Y-%m-%d %H:%M")]], "A1", value_input_option="RAW")
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
 
 

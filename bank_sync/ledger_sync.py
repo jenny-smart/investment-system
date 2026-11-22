@@ -693,3 +693,68 @@ def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = Fa
         print("✓", line)
     save_applied(applied)
     return report
+
+
+CARD_CHECK_TITLE = "信用卡核對"
+
+
+def write_card_check(book, plan: Plan, net_lines: list[str]) -> tuple[str, int]:
+    """總帳「信用卡核對」分頁：每份帳單 細帳格子／細帳現值／帳單本期應繳／狀態，加上兩表淨值比對；回傳 (網址, 不符數)。"""
+    from datetime import datetime
+    rows = [["卡", "細帳月份", "細帳格子", "細帳現值", "帳單本期應繳", "結果", "狀態"]]
+    bad = 0
+    for a in sorted(plan.cards, key=lambda a: (a.file.statement.ledger_month, a.file.bank), reverse=True):
+        st = a.file.statement
+        wrong = a.status.startswith(("不符", "讀不到", "細帳找不到"))
+        bad += wrong
+        rows.append([BANK_NAME[a.file.bank], st.ledger_month, a.cell, a.current if a.current is not None else "",
+                     st.total_due if st.total_due is not None else "", "⚠️ 不相符" if wrong else "✓", a.status])
+    for line in net_lines:
+        wrong = line.startswith("⚠️")
+        bad += wrong
+        rows.append(["兩表淨值", "", "", "", "", "⚠️ 不相符" if wrong else "✓", line])
+    rows += [[], ["更新時間", datetime.now().strftime("%Y-%m-%d %H:%M")]]
+    try:
+        ws = book.worksheet(CARD_CHECK_TITLE)
+    except Exception:
+        ws = book.add_worksheet(CARD_CHECK_TITLE, rows=200, cols=8)
+    ws.clear()
+    ws.update(rows, "A1", value_input_option="RAW")
+    return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}", bad
+
+
+def refresh_cards(year: int) -> int:
+    """App「更新信用卡」：下載新帳單（下載過的不重抓）→ 比對細帳（不寫入）→ 寫「信用卡核對」分頁 → 更新網頁明細。
+    回傳細帳與帳單對不上的數量。"""
+    from .mail_statements import check_statements, fetch_statements
+    print("━━━ 下載新帳單 ━━━")
+    saved = fetch_statements(1)
+    new_files = [f for item in saved for f in item["files"]]
+    if new_files:
+        check_statements(only_files=new_files)
+    else:
+        print("沒有新帳單（之前下載過的都存在本機，不重抓）")
+    print("\n━━━ 比對細帳（不寫入）━━━")
+    from .google_auth import credentials
+    book = open_book(credentials())
+    files = parsed_statements(year)
+    values = book.worksheet(f"{year}細帳").get_values()
+    plan = build_plan(files, values, date.today(), load_applied())
+    for a in plan.cards:
+        if a.file.statement.ledger_month >= f"{year}-01":
+            print(f"{BANK_NAME[a.file.bank]} {a.file.statement.ledger_month} {a.cell or '-'}：{a.status}")
+    copy_title = f"{year}細帳(含信用卡)"
+    net = check_net_rows(book.worksheet(f"{year}細帳"), book.worksheet(copy_title), f"{year}細帳", copy_title) \
+        if copy_title in [w.title for w in book.worksheets()] else []
+    for line in net:
+        print(line)
+    url, bad = write_card_check(book, plan, net)
+    print(("⚠️ 細帳與帳單有 %d 項不相符" % bad) if bad else "✓ 細帳與帳單相符")
+    print(f"信用卡核對：{url}")
+    print("\n━━━ 更新網頁明細 ━━━")
+    try:
+        from .publish import publish
+        publish(year)
+    except (Exception, SystemExit) as exc:
+        print(f"（App 用的明細分頁沒更新：{exc}）")
+    return bad

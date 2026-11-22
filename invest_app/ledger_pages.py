@@ -34,8 +34,7 @@ def gviz_values(sheet_id: str, sheet: str, cell_range: str) -> list[list]:
 STATE_ORDER = ["待確認", "待寫入", "已寫入細帳", "細帳已有", "略過"]
 
 
-@st.cache_data(ttl=120, show_spinner=False)
-def _load(sheet: str) -> pd.DataFrame:
+def _fetch_csv(sheet: str) -> pd.DataFrame:
     """用 CSV 匯出讀（gviz 會猜欄位型態，混合欄位的少數值會變空白）。"""
     import io
     import requests
@@ -44,8 +43,32 @@ def _load(sheet: str) -> pd.DataFrame:
     response.raise_for_status()
     if "<html" in response.text[:200].lower():
         raise RuntimeError("Google Sheet 讀取失敗（權限？）")
-    df = pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
-    return df
+    return pd.read_csv(io.StringIO(response.text), dtype=str, keep_default_na=False)
+
+
+# 明細只在 publish／更新後才會變：快取 10 分鐘；本機按「更新」完成或按「重新讀取」會立即清掉。
+@st.cache_data(ttl=600, show_spinner="讀取總帳…")
+def _load_many(sheets: tuple) -> dict:
+    """一次平行讀多個分頁（明細＋核對），比一頁一頁讀快。讀不到的分頁回傳錯誤訊息字串。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(name):
+        try:
+            return _fetch_csv(name)
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
+    with ThreadPoolExecutor(max_workers=len(sheets)) as pool:
+        return dict(zip(sheets, pool.map(one, sheets)))
+
+
+def _load(sheet: str, group: tuple = ()) -> pd.DataFrame:
+    got = _load_many(group or (sheet,)).get(sheet)
+    if isinstance(got, str):
+        raise RuntimeError(got)
+    return got
+
+
+_load.clear = _load_many.clear  # 舊程式呼叫 _load.clear()
 
 
 def _amount_col(df: pd.DataFrame) -> str:
@@ -61,6 +84,52 @@ def _signed_money(v) -> str:
     return text
 
 
+BANK_SHEETS = ("銀行明細", "銀行餘額核對")
+CARD_SHEETS = ("信用卡明細", "信用卡核對")
+
+
+def _check_alert(sheet: str, what: str, group: tuple = ()) -> None:
+    """讀「銀行餘額核對」／「信用卡核對」分頁，有不相符就顯示警示。"""
+    try:
+        df = _load(sheet, group)
+    except Exception:
+        return
+    if df.empty or "結果" not in df.columns:
+        return
+    when = df[df.iloc[:, 0].astype(str) == "更新時間"]
+    stamp = str(when.iloc[0, 1]) if not when.empty and when.shape[1] > 1 else ""
+    bad = df[df["結果"].astype(str).str.startswith("⚠️")]
+    if bad.empty:
+        st.success(f"✓ 細帳與{what}相符" + (f"（{stamp} 核對）" if stamp else ""))
+        return
+    st.error(f"⚠️ 細帳與{what}有 {len(bad)} 項不相符" + (f"（{stamp} 核對）" if stamp else "") + "，請檢查：")
+    st.dataframe(bad, hide_index=True, use_container_width=True)
+
+
+def _update_panel(kind: str) -> None:
+    """頁面上方的「更新」：本機才能抓（要用 Mac 上的帳密與 Chrome）；雲端顯示開本機頁的按鈕。"""
+    from invest_app.bank_page import FETCH_BANKS, is_local, job_panel, start_job
+    if not is_local():
+        st.link_button("🔄 到本機更新" + ("銀行明細" if kind == "bank" else "信用卡"), "http://localhost:8502")
+        return
+    if kind == "bank":
+        c1, c2 = st.columns([4, 1])
+        picked = c1.multiselect("要更新的銀行", list(FETCH_BANKS), default=list(FETCH_BANKS),
+                                format_func=FETCH_BANKS.get, key="upd_banks")
+        c2.write("")
+        if c2.button("🔄 更新銀行明細", key="upd_bank_go", type="primary", disabled=not picked):
+            start_job("更新銀行明細：" + "、".join(FETCH_BANKS[k] for k in picked),
+                      ["refresh-bank", *[a for k in picked for a in ("--bank", k)]])
+    else:
+        if st.button("🔄 更新信用卡", key="upd_card_go", type="primary",
+                     help="下載新帳單（下載過的不重抓）→ 比對細帳（不寫入）→ 更新明細"):
+            start_job("更新信用卡", ["refresh-cards"])
+    job = st.session_state.get("bank_job")
+    if job and job.get("args", [""])[0] in ("refresh-bank", "refresh-cards"):
+        with st.expander("執行過程", expanded=job["proc"].poll() is None):
+            job_panel(prefix="top_")
+
+
 def _reload_button(key: str) -> None:
     if st.button("🔄 重新讀取", key=key):
         _load.clear()
@@ -69,9 +138,11 @@ def _reload_button(key: str) -> None:
 
 def render_bank_detail_page() -> None:
     st.subheader("銀行明細")
+    _update_panel("bank")
+    _check_alert("銀行餘額核對", "銀行餘額", BANK_SHEETS)
     _reload_button("bd_reload")
     try:
-        df = _load("銀行明細")
+        df = _load("銀行明細", BANK_SHEETS)
     except Exception as exc:
         st.warning(f"讀不到總帳「銀行明細」分頁：{type(exc).__name__}: {exc}")
         df = pd.DataFrame()
@@ -120,15 +191,17 @@ def render_bank_detail_page() -> None:
                      column_config={"其他": st.column_config.TextColumn(width="large"),
                                     "依據": st.column_config.TextColumn(width="medium")})
         st.caption("「銀行（細帳）」「其他」：記到細帳哪一列、加多少（＋／−）；空白的銀行欄＝公式會自動帶入（例 116 加進建北）。"
-                   "「待確認」請到總帳「銀行明細確認」分頁處理。資料每 2 分鐘重新讀一次。")
+                   "「待確認」請到總帳「銀行明細確認」分頁處理。資料快取 10 分鐘；剛更新完要看最新請按「重新讀取」。")
     _local_tools()
 
 
 def render_card_detail_page() -> None:
     st.subheader("信用卡明細")
+    _update_panel("card")
+    _check_alert("信用卡核對", "信用卡帳單", CARD_SHEETS)
     _reload_button("cd_reload")
     try:
-        df = _load("信用卡明細")
+        df = _load("信用卡明細", CARD_SHEETS)
     except Exception as exc:
         st.warning(f"讀不到總帳「信用卡明細」分頁：{type(exc).__name__}: {exc}")
         return
