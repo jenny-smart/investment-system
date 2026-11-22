@@ -187,9 +187,19 @@ def render_bank_detail_page() -> None:
                 show[c] = nums.map(lambda x: "" if pd.isna(x) else f"{x:,.2f}".rstrip("0").rstrip("."))
         if amt:
             show[amt] = show[amt].map(_signed_money)
-        st.dataframe(show, hide_index=True, use_container_width=True, height=560,
-                     column_config={"其他": st.column_config.TextColumn(width="large"),
-                                    "依據": st.column_config.TextColumn(width="medium")})
+        cfg = {"其他": st.column_config.TextColumn(width="large"), "依據": st.column_config.TextColumn(width="medium")}
+        split = st.toggle("依帳戶分開顯示", value=True, key="bd_split") and "帳戶" in show.columns
+        if not split:
+            st.dataframe(show, hide_index=True, use_container_width=True, height=560, column_config=cfg)
+        else:  # 每個帳戶一張表：標題列出筆數、待確認、最新餘額（資料已依銀行→帳戶→新到舊排）
+            for (bank, acct), part in show.groupby(["銀行", "帳戶"], sort=False):
+                bal = next((v for v in part["餘額"] if str(v).strip()), "") if "餘額" in part.columns else ""
+                n_check = int((part["狀態"] == "待確認").sum()) if "狀態" in part.columns else 0
+                title = f"{bank}｜{acct}　{len(part)} 筆" + (f"　⚠️ 待確認 {n_check}" if n_check else "") + \
+                    (f"　最新餘額 {bal}" if bal else "")
+                with st.expander(title, expanded=len(part) <= 30 or n_check > 0):
+                    st.dataframe(part.drop(columns=["銀行", "帳戶"]), hide_index=True, use_container_width=True,
+                                 height=min(38 + 35 * len(part), 460), column_config=cfg)
         st.caption("「銀行（細帳）」「其他」：記到細帳哪一列、加多少（＋／−）；空白的銀行欄＝公式會自動帶入（例 116 加進建北）。"
                    "「待確認」請到總帳「銀行明細確認」分頁處理。資料快取 10 分鐘；剛更新完要看最新請按「重新讀取」。")
     _local_tools()
