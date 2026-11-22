@@ -22,6 +22,13 @@ def account_label(t) -> str:
 CARD_HEAD = ["帳單月份", "卡別", "消費日", "店名", "金額（＋消費／−退款）", "零用金分類",
              "記到細帳（列：正負金額）", "狀態"]
 WHO = {"fubon": "富邦", "next": "將來", "taishin": "台新", "yuanta": "元大", "linebank": "LINE Bank", "sc": "渣打", "post": "郵局"}
+BANK_ORDER = ("taishin", "fubon", "sc", "next", "linebank", "yuanta", "post")  # 銀行明細分頁：依銀行、帳戶排，同帳戶新的在上
+
+
+def _bank_sort(entries: list) -> list:
+    by_date = sorted(entries, key=lambda x: (x.tx.day, x.tx.when), reverse=True)
+    rank = {b: i for i, b in enumerate(BANK_ORDER)}
+    return sorted(by_date, key=lambda x: (rank.get(x.tx.bank, len(rank)), x.tx.account))
 
 
 def _write(book, title: str, rows: list[list]) -> str:
@@ -79,7 +86,7 @@ def bank_rows(year: int, book) -> list[list]:
     mark_existing(entries, detail.get_values(value_render_option="FORMULA"), labels, cols)
     applied = load_applied()
     rows = [BANK_HEAD]
-    for e in sorted(entries, key=lambda x: (x.tx.day, x.tx.when), reverse=True):
+    for e in _bank_sort(entries):
         t = e.tx
         if t.key in applied:
             state = "已寫入細帳"

@@ -178,6 +178,8 @@ def load_transactions() -> tuple[list[Tx], list[str]]:
                 keys.add(tx.key)
                 out.append(tx)
     out.sort(key=lambda t: (t.day, t.bank, t.account))
+    fix_linebank_mirror(out)
+    fill_linebank_balances(out, linebank_anchors())
     attach_receipts(out)
     return out, warn
 
@@ -206,8 +208,10 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
     tx = _to_tx_core(bank, block, head, row)
     if isinstance(tx, Tx):
         get = lambda i: row[i] if i is not None and i < len(row) else ""
-        if bank == "linebank":
-            tx.balance = None  # LINE Bank 明細沒有餘額
+        if bank == "linebank":  # 明細沒有餘額欄：整列文字有寫就用，沒有的話之後用頁面餘額往回推
+            m = re.search(r"餘額\s*[:：]?\s*(?:NT\$|新臺幣)?\s*(-?[\d,]+(?:\.\d+)?)",
+                          block.get("row_text", {}).get("|".join(row), ""))
+            tx.balance = _num(m.group(1)) if m else None
         else:
             detail = _detail_cell(row) if (bank == "taishin" and "詳細" in head) else None
             tx.balance = detail[1] if detail else _num(get(_col(head, "即時餘額", "帳面餘額", "帳戶餘額", "結存金額", "餘額")))
@@ -216,6 +220,72 @@ def _to_tx(bank: str, block: dict, head: list, row: list):
         clock = get(_col(head, "交易時間", "時間"))
         tx.when = f"{tx.day.isoformat()} {clock or row[0]}"
     return tx
+
+
+LINE_OUT = ("支出", "轉出", "提款", "扣款", "付款")
+
+
+def _linebank_sign(raw: str, row_text: str) -> int:
+    """LINE Bank 金額格寫「存入 NT$12」「支出 NT$8,526」；金額格沒寫時看列前面的整列文字。0＝看不出來。"""
+    words, _, style = (row_text or "").partition(" ||class:")
+    for text in (raw, words):
+        if "存入" in text or "轉入" in text:
+            return 1
+        if any(w in text for w in LINE_OUT) or text.strip().startswith("-") or re.search(r"[−\-]\s*NT\$", text):
+            return -1
+    if re.search(r"minus|negative|withdraw|expense|debit|outgo", style, re.I):
+        return -1
+    if re.search(r"plus|positive|deposit|income|credit", style, re.I):
+        return 1
+    return 0
+
+
+def linebank_anchors() -> list[tuple]:
+    """每次抓 LINE Bank 時頁面上的帳戶餘額：[(時間, 餘額)]。"""
+    out = []
+    for block in _blocks("linebank"):
+        v = _num(str(block.get("balance_now") or ""))
+        if v is not None and block.get("balance_at"):
+            out.append((block["balance_at"], v))
+    return sorted(out)
+
+
+def fill_linebank_balances(txs: list, anchors: list) -> int:
+    """LINE Bank 沒有逐筆餘額：從最近一次抓到的帳戶餘額往回推（之後的餘額＝前一筆餘額＋這筆金額）。"""
+    line = sorted([t for t in txs if t.bank == "linebank"], key=lambda t: t.when)
+    if not line or not anchors:
+        return 0
+    at, bal = anchors[-1]
+    filled = 0
+    for t in reversed(line):
+        if t.day.isoformat() > at[:10]:
+            continue
+        if t.balance is None:
+            t.balance = round(bal, 2)
+            filled += 1
+        else:
+            bal = t.balance
+        bal -= t.amount
+    return filled
+
+
+def fix_linebank_mirror(txs: list) -> int:
+    """LINE Bank 看起來是「收入」，但同一天別家有一筆同金額「從連線銀行轉入」→ 其實是 LINE Bank 轉出，改成負的。
+    （例：11/17 LINE Bank「將來商業-Jenny」8,526 ＝ 轉到將來，將來那邊是 轉入 8,526、備註 連線銀行-…）"""
+    fixed = 0
+    for t in txs:
+        if t.bank != "linebank" or t.amount <= 0 or "利息" in t.summary:
+            continue
+        for o in txs:
+            if o.bank == "linebank" or o.amount <= 0 or abs(o.amount - t.amount) > 0.5:
+                continue
+            if abs((o.day - t.day).days) > 1 or not re.search(r"連線|LINE", f"{o.summary} {o.note}", re.I):
+                continue
+            t.amount = -t.amount
+            t.note = (t.note + " " if t.note else "") + f"（對應 {o.ledger} 轉入，改為轉出）"
+            fixed += 1
+            break
+    return fixed
 
 
 def _to_tx_core(bank: str, block: dict, head: list, row: list):
@@ -246,10 +316,12 @@ def _to_tx_core(bank: str, block: dict, head: list, row: list):
         amount = _num(re.sub(r"[^\d.,\-]", "", raw))
         if amount is None:
             return None
-        if any(w in raw for w in ("支出", "轉出", "提款", "扣款")) or raw.strip().startswith("-"):
-            amount = -abs(amount)
+        sign = _linebank_sign(raw, block.get("row_text", {}).get("|".join(row), "") or " ".join(row[:-3]))
+        if sign:
+            amount = sign * abs(amount)
         if re.fullmatch(r"\d{8}-\d+(?:\.\d+)?%", summary.strip()):
             summary = f"利息 {summary}"  # LINE Bank 利息的摘要是「日期-利率%」
+        key = f"{bank}|" + "|".join(row[-3:])  # 舊檔每列前面多「整列」格：只用 時間／摘要／金額 認同一筆
         return Tx(bank, account, "連線", day, amount, "TWD", summary, "", key)
     if bank == "post":
         out_, in_ = _num(get(_col(head, "提款金額"))), _num(get(_col(head, "存款金額")))
@@ -751,7 +823,10 @@ def write_review(book, entries: list[Entry], labels: list, answers: dict) -> str
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
 
 
-def review(year: int) -> str:
+LAST_REVIEW_BAD = 0
+
+
+def review(year: int) -> int:
     """把目前抓到、還沒寫進細帳的明細，列在總帳的「銀行明細確認」分頁，要你確認的排最上面並標黃。"""
     txs, warn = load_transactions()
     for w in warn[:10]:
@@ -781,6 +856,8 @@ def review(year: int) -> str:
     print(f"餘額核對表：{write_balance_sheet(book, sim)}")
     if bad:
         print(f"⚠️ {bad} 列對不上：可能還有沒確認的項目、手動記過的重複、或帳戶沒有餘額資料")
+    else:
+        print("✓ 細帳（模擬記入後）與銀行餘額相符")
     n_check = sum(needs_check(e) for e in entries)
     print(f"還沒寫進細帳的明細 {len(entries)} 筆，其中要你確認 {n_check} 筆（排最上面、標黃）。")
     print(f"確認表：{url}")
@@ -788,8 +865,8 @@ def review(year: int) -> str:
     print("填好後執行：python3 -m bank_sync bank-ledger --apply")
     _publish_quietly(year)
     from .progress_log import log_run
-    log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆")
-    return url
+    log_run("銀行明細確認表", None, f"總帳「{REVIEW_TITLE}」分頁", [], message=f"待寫入 {len(entries)} 筆｜要確認 {n_check} 筆｜餘額不符 {bad} 列")
+    return bad
 
 
 # ---------------------------------------------------------------- 餘額核對（模擬記入後，細帳要等於銀行餘額）
@@ -975,7 +1052,8 @@ def write_balance_sheet(book, rows: list[list]) -> str:
     except Exception:
         ws = book.add_worksheet(BALANCE_TITLE, rows=60, cols=10)
     ws.clear()
-    ws.update(rows, "A1", value_input_option="RAW")
+    from datetime import datetime
+    ws.update(rows + [[], ["更新時間", datetime.now().strftime("%Y-%m-%d %H:%M")]], "A1", value_input_option="RAW")
     return f"https://docs.google.com/spreadsheets/d/{book.id}/edit#gid={ws.id}"
 
 

@@ -100,6 +100,26 @@ def run(dry_run: bool = False, days: int = 7, only: tuple = (), ask: bool = True
     return done
 
 
+def refresh_banks(banks: tuple, year: int) -> int:
+    """App「更新銀行明細」：抓選的銀行 → 產生確認表＋餘額核對（寫「銀行餘額核對」分頁）→ 更新網頁明細。
+    回傳細帳與銀行對不上的列數（App 會顯示警示）。"""
+    from .mail_activity import BANKS
+    names = {b.code: b.name for b in BANKS}
+    for code in banks:
+        print(f"\n━━━ {names.get(code, code)} ━━━")
+        try:
+            _fetch(code)
+        except KeyboardInterrupt:
+            print("⚠️ 已中斷，跳到下一家")
+        except (Exception, SystemExit):
+            print(f"⚠️ {names.get(code, code)} 失敗，跳到下一家：")
+            traceback.print_exc(limit=2)
+    print("\n━━━ 細帳核對、更新網頁明細 ━━━")
+    from .bank_ledger import review
+    bad = review(year)
+    return bad
+
+
 def install() -> None:
     if sys.platform != "darwin":
         raise SystemExit("排程只支援 macOS。")

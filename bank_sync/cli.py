@@ -101,6 +101,11 @@ def main(argv: list[str] | None = None) -> int:
     ba.add_argument("--fetch", action="store_true", help="先從 1/1 下載今年明細（一家一家登入），再核對")
     dg = sub.add_parser("diag", help="檢查本機最新明細檔的格式（數字→9、中文→○，可貼給 Claude）")
     dg.add_argument("bank")
+    rb = sub.add_parser("refresh-bank", help="App 用：抓選的銀行明細 → 細帳餘額核對 → 更新網頁明細")
+    rb.add_argument("--bank", action="append", default=[], help="taishin/fubon/sc/next/linebank/yuanta/post，可重複；不給＝全部")
+    rb.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
+    rc = sub.add_parser("refresh-cards", help="App 用：下載新信用卡帳單 → 比對細帳（不寫入）→ 更新網頁明細")
+    rc.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     pb = sub.add_parser("publish", help="把本機銀行明細、信用卡明細寫進總帳「銀行明細」「信用卡明細」分頁（App 網頁看得到）")
     pb.add_argument("--year", type=int, default=__import__("datetime").date.today().year)
     me = sub.add_parser("messenger-explore", help="打開 Messenger 記帳對話，記錄訊息格式（原文只存本機）")
@@ -235,6 +240,13 @@ def main(argv: list[str] | None = None) -> int:
             for i in sorted(set(list(range(0, 2)) + list(range(28, 33)) + bad[:3])):
                 if i < len(rows):
                     print(f"  第{i + 1:>3}筆：" + " | ".join(_mask_shape(c) for c in rows[i]))
+    elif args.command == "refresh-bank":
+        from .mail_activity import BANKS
+        from .weekly import refresh_banks
+        refresh_banks(tuple(args.bank) or tuple(b.code for b in BANKS), args.year)
+    elif args.command == "refresh-cards":
+        from .ledger_sync import refresh_cards
+        refresh_cards(args.year)
     elif args.command == "publish":
         from .publish import publish
         publish(args.year)

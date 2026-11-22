@@ -71,7 +71,7 @@ def stop_job() -> None:
 
 
 @st.fragment(run_every=2)
-def job_panel() -> None:
+def job_panel(prefix: str = "") -> None:
     job = _job()
     if not job:
         st.caption("還沒有執行任何動作。")
@@ -87,22 +87,27 @@ def job_panel() -> None:
     st.code(text[-12000:] or "（等待輸出…）", language=None)
     if running and job["args"][:1] == ["explore"]:
         c1, c2, c3 = st.columns([1, 1, 1])
-        if c1.button("📸 記錄目前頁面", key="exp_snap", type="primary"):
+        if c1.button("📸 記錄目前頁面", key=prefix + "exp_snap", type="primary"):
             send_enter()
-        if c2.button("✅ 結束探索", key="exp_quit"):
+        if c2.button("✅ 結束探索", key=prefix + "exp_quit"):
             send_enter("q")
-        if c3.button("停止", key="exp_stop"):
+        if c3.button("停止", key=prefix + "exp_stop"):
             stop_job()
     elif running:
         c1, c2, c3 = st.columns([1, 1, 3])
-        if c1.button("繼續（Enter）", key="bank_enter", help="程式說「按 Enter」時按這裡"):
+        if c1.button("繼續（Enter）", key=prefix + "bank_enter", help="程式說「按 Enter」時按這裡"):
             send_enter()
-        if c2.button("停止", key="bank_stop"):
+        if c2.button("停止", key=prefix + "bank_stop"):
             stop_job()
         if "請選擇" in text[-300:] or "Enter" in text[-300:] or "q＝結束" in text[-300:]:
             c3.info("程式在等你：照上面訊息在 Chrome 操作完，再按「繼續（Enter）」。")
-    elif not st.session_state.get("bank_job_done_rerun") == str(job["log"]):
-        st.session_state["bank_job_done_rerun"] = str(job["log"])
+    elif not st.session_state.get(prefix + "bank_job_done_rerun") == str(job["log"]):
+        st.session_state[prefix + "bank_job_done_rerun"] = str(job["log"])
+        try:  # 明細分頁剛更新：清掉 App 讀總帳的快取
+            from invest_app.ledger_pages import _load
+            _load.clear()
+        except Exception:
+            pass
         st.rerun()  # 完成後整頁更新一次，讓下面的結果顯示最新
 
 
