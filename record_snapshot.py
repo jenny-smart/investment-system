@@ -114,6 +114,30 @@ def sync_dividend_log():
     print(f"  dividend_log 新增 {inserted} 筆")
 
 
+def _m(value) -> str:
+    return f"{float(value or 0):,.0f}"
+
+
+def summary_lines(data: dict) -> list:
+    """2026-11-24 Jenny：排程行事曆只看結果——各類金額與總和，一類一行（「快照／類別：金額」，
+    tool-system 完成記行事曆只列這種結果行）。標籤沿用 invest_app/history.py。"""
+    lines = []
+    if "grand_total" in data:
+        lines.append(f"快照／總資產：{_m(data['grand_total'])}")
+    lines.append(f"快照／投資市值：{_m(data['total_twd'])}（成本 {_m(data['total_cost'])}，損益 {_m(data['total_pnl'])}，"
+                 f"累計配息 {_m(data['cumulative_dividend'])}）")
+    lines.append(f"快照／股票：台股 {_m(data['tw_stock'])}、美股 {_m(data['us_stock'])}")
+    lines.append(f"快照／基金：基富通 {_m(data['kifutong'])}、渣打 {_m(data['scb'])}、台新 {_m(data['taishin'])}")
+    other = [(label, key) for label, key in (
+        ("銀行", "bank_total"), ("保險", "insurance_total"), ("外幣", "fx_cash_total"),
+        ("懷思投資", "huaisi_total"), ("uncle待還", "uncle_total"), ("扣除待還", "deposits_total"),
+    ) if data.get(key) is not None]
+    if other:
+        lines.append("快照／其他資產：" + "、".join(f"{label} {_m(data[key])}" for label, key in other)
+                     + (f"；小計 {_m(data['other_assets_total'])}" if data.get("other_assets_total") is not None else ""))
+    return lines
+
+
 def main():
     print(f"=== 投資組合快照 {TW_NOW.strftime('%Y-%m-%d %H:%M')} ({'晚間' if IS_EVENING else '早間'}) ===")
 
@@ -131,6 +155,8 @@ def main():
 
     if "grand_total" in data:
         print(f"  其他資產小計：{data['other_assets_total']:,.0f}  總資產：{data['grand_total']:,.0f}")
+    for line in summary_lines(data):
+        print(line)
     data = dict(data)
     for _ in range(len(OTHER_ASSET_KEYS) + 1):
         try:
