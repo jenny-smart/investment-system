@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     wk.add_argument("--dry-run", action="store_true", help="只查信、列出要登入哪幾家")
     wk.add_argument("--days", type=int, default=7, help="最多往回看幾天的信（預設 7）")
     wk.add_argument("--bank", action="append", default=[], help="只跑這幾家（taishin/fubon/next/linebank/sc/yuanta/post）")
-    sub.add_parser("weekly-install", help="裝成 Mac 排程：每週三 11:00 打開終端機跑 weekly")
+    sub.add_parser("weekly-install", help="裝成 Mac 排程：每週三晚上 10:00 打開終端機跑 weekly")
     sub.add_parser("weekly-uninstall", help="移除每週排程")
     sub.add_parser("app-install", help="把銀行帳戶頁裝成 Mac 背景服務（http://localhost:8502，只要做一次）")
     sub.add_parser("app-status", help="看銀行帳戶頁背景服務狀態")

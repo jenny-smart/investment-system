@@ -2,7 +2,7 @@
 
 python3 -m bank_sync weekly              手動跑一次（會先列出要登入哪幾家，按 Enter 開始）
 python3 -m bank_sync weekly --dry-run    只查信、列出要登入哪幾家
-python3 -m bank_sync weekly-install      裝成 Mac 排程：每週三 11:00 自動打開「終端機」跑 weekly
+python3 -m bank_sync weekly-install      裝成 Mac 排程：每週三晚上 10:00 自動打開「終端機」跑 weekly
 python3 -m bank_sync weekly-uninstall    移除排程
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ LABEL = "com.jenny.bank-weekly"
 PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
 REPO = Path(__file__).resolve().parent.parent
 LOG = BANK_DIR / "_app_logs" / "weekly.log"
-WEEKDAY, HOUR, MINUTE = 3, 11, 0   # 週三 11:00
+WEEKDAY, HOUR, MINUTE = 3, 22, 0   # 週三晚上 10:00
 
 
 def _fetch(code: str) -> None:
@@ -140,7 +140,7 @@ def install() -> None:
     result = subprocess.run(["launchctl", "bootstrap", domain, str(PLIST)], capture_output=True, text=True)
     if result.returncode != 0:
         raise SystemExit(f"排程安裝失敗：{result.stderr.strip() or result.stdout.strip()}")
-    print("✓ 已安裝：每週三 11:00 自動打開「終端機」，先查信，再每家銀行都登入確認。")
+    print("✓ 已安裝：每週三晚上 10:00 自動打開「終端機」，先查信，再每家銀行都登入確認。")
     print("  （那時 Mac 在睡眠的話，醒來後會補跑一次；第一次可能會問是否允許控制「終端機」，請按允許）")
 
 
