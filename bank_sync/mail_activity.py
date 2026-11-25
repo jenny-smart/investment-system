@@ -39,10 +39,33 @@ BANKS = (
     BankMail("post", "郵局", ("post.gov.tw",), (), True),
 )
 
-TX_WORDS = ("轉帳", "匯款", "申購", "贖回", "定存", "入帳", "轉入", "轉出", "扣款", "結匯", "換匯", "提款", "交易通知",
+TX_WORDS = ("配息", "收益分配", "轉帳", "匯款", "申購", "贖回", "定存", "入帳", "轉入", "轉出", "扣款", "結匯", "換匯", "提款", "交易通知",
             "交易「成功」", "交易成功", "消費")
 NOT_TX = ("停損停利", "對帳單", "信用卡", "帳單", "繳款", "公告", "暫停服務", "優惠", "宣導", "申請", "生效前提醒")
 LOGIN_WORDS = ("登入",)
+
+# 不是銀行寄的、但代表銀行帳戶有進出的信：寄件網域 → (主旨要有的字, 要登入的銀行)
+# 基富通「交易確認單」＝配息或申購：台幣在富邦、人民幣／日幣在台新
+PARTNERS = (("fundrich.com.tw", ("交易確認單",), ("fubon", "taishin"), "基富通交易確認單（配息／申購）"),)
+
+# 渣打的基金配息入帳只發在網銀「收件夾」，不寄信：上次抓渣打之後經過配息日就登入
+DIVIDEND_DAYS = {"sc": (7, 8, 15, 16, 17)}
+
+
+def calendar_reasons(code: str, last: datetime | None, today: date | None = None) -> list:
+    """上次抓明細之後，是否經過「配息日」或「月底」（月底全部銀行都要對一次）"""
+    today = today or date.today()
+    if last is None:
+        return []
+    start = last.astimezone().date() + timedelta(days=1)
+    reasons, d = [], start
+    while d <= today:
+        if d.day in DIVIDEND_DAYS.get(code, ()):
+            reasons.append(f"{d:%m/%d} 配息日")
+        if (d + timedelta(days=1)).day == 1:
+            reasons.append(f"{d:%m/%d} 月底")
+        d += timedelta(days=1)
+    return reasons[-2:]
 
 
 def classify(subject: str) -> str:
@@ -81,7 +104,8 @@ def check(days: int = 7, path: Path = DEFAULT_CREDENTIALS_FILE, verbose: bool = 
         for bank in BANKS:
             last = last_fetch(bank.code)
             since = max(floor, last) if last else floor
-            info = {"code": bank.code, "name": bank.name, "since": since, "tx": [], "login": []}
+            info = {"code": bank.code, "name": bank.name, "since": since, "tx": [], "login": [],
+                    "other": calendar_reasons(bank.code, last)}
             for domain in bank.domains:
                 _, data = client.search(None, "FROM", f'"{domain}"', "SINCE", _imap_date(since.astimezone().date()))
                 nums = (data[0] or b"").split()
@@ -108,6 +132,22 @@ def check(days: int = 7, path: Path = DEFAULT_CREDENTIALS_FILE, verbose: bool = 
                         info["login"].append(f"{sent.astimezone():%m/%d %H:%M}")
             info["run"] = True  # 每家都登入確認：轉入、信用卡扣款不一定有通知
             out.append(info)
+        # 基富通等：交易確認單（配息／申購）也代表富邦、台新有進出，列出來當參考
+        for domain, words, codes, label in PARTNERS:
+            since = min(b["since"] for b in out if b["code"] in codes)
+            _, data = client.search(None, "FROM", f'"{domain}"', "SINCE", _imap_date(since.astimezone().date()))
+            for num in (data[0] or b"").split():
+                _, msg_data = client.fetch(num, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                msg = email.message_from_bytes(msg_data[0][1])
+                if not any(w in _decode(msg.get("Subject")) for w in words):
+                    continue
+                try:
+                    sent = email.utils.parsedate_to_datetime(msg.get("Date"))
+                except Exception:
+                    continue
+                for b in out:
+                    if b["code"] in codes and sent > b["since"]:
+                        b["other"].append(f"{sent.astimezone():%m/%d} {label}")
     finally:
         try:
             client.logout()
@@ -126,6 +166,8 @@ def print_plan(info: list[dict]) -> None:
         detail = []
         if b["tx"]:
             detail.append(f"交易 {len(b['tx'])} 封：" + "；".join(sorted(set(t.split(' ', 2)[-1] for t in b["tx"]))[:3]))
+        if b.get("other"):
+            detail.append("；".join(dict.fromkeys(b["other"])))
         if b["login"]:
             detail.append(f"登入 {len(b['login'])} 次（{', '.join(b['login'][-3:])}）")
         print(f"  {mark} {b['name']:<9}{since}｜{'；'.join(detail) or '沒有通知'}")
