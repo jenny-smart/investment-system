@@ -14,3 +14,13 @@ def test_classify_subjects():
     assert classify("台新銀行綜合對帳單 2026年10月份") == ""
     assert classify("提醒您本期信用卡帳單繳款截止日快到了") == ""
     assert classify("LINE Bank 聯名信用卡申請 (申辦手續尚未完成喔！）") == ""
+
+
+def test_more_subjects_and_calendar():
+    from datetime import date, datetime, timezone
+    from bank_sync.mail_activity import calendar_reasons
+    assert classify("台新銀行網路銀行基金交易通知") == "tx"
+    last = datetime(2026, 11, 14, 12, tzinfo=timezone.utc)
+    assert any("配息日" in r for r in calendar_reasons("sc", last, date(2026, 11, 18)))
+    assert calendar_reasons("taishin", last, date(2026, 11, 18)) == []
+    assert any("月底" in r for r in calendar_reasons("next", last, date(2026, 12, 2)))
