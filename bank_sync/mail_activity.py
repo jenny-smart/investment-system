@@ -132,6 +132,22 @@ def check(days: int = 7, path: Path = DEFAULT_CREDENTIALS_FILE, verbose: bool = 
                         info["login"].append(f"{sent.astimezone():%m/%d %H:%M}")
             info["run"] = True  # 每家都登入確認：轉入、信用卡扣款不一定有通知
             out.append(info)
+        # 基富通等：交易確認單（配息／申購）也代表富邦、台新有進出，列出來當參考
+        for domain, words, codes, label in PARTNERS:
+            since = min(b["since"] for b in out if b["code"] in codes)
+            _, data = client.search(None, "FROM", f'"{domain}"', "SINCE", _imap_date(since.astimezone().date()))
+            for num in (data[0] or b"").split():
+                _, msg_data = client.fetch(num, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                msg = email.message_from_bytes(msg_data[0][1])
+                if not any(w in _decode(msg.get("Subject")) for w in words):
+                    continue
+                try:
+                    sent = email.utils.parsedate_to_datetime(msg.get("Date"))
+                except Exception:
+                    continue
+                for b in out:
+                    if b["code"] in codes and sent > b["since"]:
+                        b["other"].append(f"{sent.astimezone():%m/%d} {label}")
     finally:
         try:
             client.logout()
