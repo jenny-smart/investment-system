@@ -170,4 +170,5 @@ def print_plan(info: list[dict]) -> None:
             detail.append("；".join(dict.fromkeys(b["other"])))
         if b["login"]:
             detail.append(f"登入 {len(b['login'])} 次（{', '.join(b['login'][-3:])}）")
-        print(f"  {mark} {b['name']:<9}{since}｜{'；'.join(detail) or '沒有通知'}")
+        pad = " " * max(1, 10 - sum(2 if ord(c) > 0x2E80 else 1 for c in b["name"]))
+        print(f"  {mark} {b['name']}{pad}{since}｜{'；'.join(detail) or '沒有通知'}")
