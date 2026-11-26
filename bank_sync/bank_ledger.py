@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+from ledger_year import ensure_ledger
+
 import json
 import os
 import re
@@ -859,7 +861,7 @@ def review(year: int) -> int:
     entries = classify([t for t in txs if t.key not in applied], charges=card_charges(year))
     from .google_auth import credentials
     book = open_book(credentials())
-    detail = book.worksheet(f"{year}細帳")
+    detail = ensure_ledger(book, year)
     shown = detail.get_values()
     labels = [r[0] if r else "" for r in shown]
     formulas = detail.get_values(value_render_option="FORMULA")
@@ -1116,6 +1118,7 @@ def run(year: int, apply: bool = False, force: bool = False) -> Path:
     creds = credentials()
     book = open_book(creds)
     detail_title = f"{year}細帳"
+    ensure_ledger(book, year)
     _shown = book.worksheet(detail_title).get_values()
     _labels, _cols = [r[0] if r else "" for r in _shown], month_columns(_shown[0] if _shown else [])
     mark_recorded(entries, txs, book.worksheet(detail_title).get_values(value_render_option="UNFORMATTED_VALUE"), _labels, _cols)
@@ -1233,7 +1236,7 @@ def audit(year: int, banks: tuple = ("fubon", "taishin", "next")) -> str:
     entries = classify(txs, charges=card_charges(year))
     from .google_auth import credentials
     book = open_book(credentials())
-    src = book.worksheet(f"{year}細帳")
+    src = ensure_ledger(book, year)
     shown = src.get_values()
     labels = [r[0] if r else "" for r in shown]
     cols = month_columns(shown[0] if shown else [])

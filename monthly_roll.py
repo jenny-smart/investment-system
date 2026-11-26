@@ -20,6 +20,8 @@ roll    月初：「總覽」裡參照 Jennyall、YYYY細帳 月份欄的公式�
 """
 from __future__ import annotations
 
+from ledger_year import ensure_ledger
+
 import argparse
 import calendar
 from dataclasses import dataclass, field
@@ -506,6 +508,8 @@ def run_roll(book, month, dry_run, shift_all=False):
              for _, r_name in find_refs(str(f)) if family_of(r_name)}
     # The target year's 細帳 may not be referenced yet (12月 -> 1月).
     names.add(f"{month // 12}細帳")
+    if not dry_run:  # 1 月換欄前，新年度細帳沒有就建立（ledger_year.py）
+        ensure_ledger(book, month // 12)
     titles = {ws.title for ws in book.worksheets()}
     layouts = {}
     for name in sorted(names & titles):
