@@ -3,8 +3,10 @@
 freeze（每月 30 日起，2 月為月底那天；持續檢查到下個月 10 日）
     Jennyall 第 2–38 列每個 A 欄基金/股票區塊，確認「總覽」裡對應的淨值／股價日期
     已是該月最後一個交易日，就把該區塊當月兩欄（例：10 月 FZ、GA）的公式換成值。
-    渣打-美股依美東交易所日曆（含休市、提早收盤）找當月最後交易日，等該日收盤後、
-    每檔持股都取得該日正式收盤價才固定，仍算原月份（例：11/30 收盤是台北 12/1 05:00，固定進 11 月）。
+    渣打-美股依美東交易所日曆（含休市、提早收盤）找當月最後交易日；Yahoo 當天的 Close 不算定稿，
+    每檔持股的歷史資料都出現下一交易日日線後，才取最後交易日的 Close 固定（直接固定與回填同一檢查），
+    仍算原月份（例：11/30 收盤後，12/1 日線出現即台北 12/1 22:30 左右，固定進 11 月）。
+    持股日期空白或缺價時不固定。
     同時把當月 64:67 列（叔叔）兩欄換成值。已經是值的格子不動，可以重複執行。
 
     月底最後一天起，各區塊的匯率格先固定成月底匯率。
@@ -59,7 +61,6 @@ RATE_FREEZE_TIME = time(16, 0)  # FX cells of open blocks freeze from this time 
 NEW_YORK = ZoneInfo("America/New_York")
 US_CLOSE = time(16, 0)        # NYSE / Nasdaq regular close (New York time; DST via zoneinfo)
 US_EARLY_CLOSE = time(13, 0)  # day after Thanksgiving, July 3, Christmas Eve
-US_CLOSE_SETTLE = timedelta(minutes=30)  # Yahoo's daily bar is final this long after the close
 # 非例行休市（國喪日等）無法用規則算出，遇到時加在這裡。
 US_EXTRA_CLOSED = frozenset({date(2025, 1, 9)})
 REPORT_HOUR = 8               # problems that persist across runs fail (and email) only in this hour
@@ -221,6 +222,13 @@ def us_last_trading_day(month):
     return day
 
 
+def us_next_trading_day(day):
+    day += timedelta(days=1)
+    while day.weekday() >= 5 or day in us_holidays(day.year):
+        day += timedelta(days=1)
+    return day
+
+
 def us_close_at(day):
     """The exchange close of `day` as a Taipei time."""
     close = US_EARLY_CLOSE if day in us_early_closes(day.year) else US_CLOSE
@@ -231,6 +239,28 @@ def us_close_on(history, day):
     """The official close dated `day` (New York date) in [(date, price)], or None."""
     prices = [p for d, p in history or [] if d == day]
     return prices[-1] if prices else None
+
+
+def us_settled_close(history, month):
+    """((date, close), None) for the month's last NYSE trading day, or (None, reason).
+
+    Yahoo's same-day Close is not a final official close (it can still move after the
+    bell), and there is no explicit official-close source, so the close counts only once
+    that ticker's history also has a daily bar for the next trading day.
+    Both the direct lock and the backfill go through this check.
+    """
+    day = us_last_trading_day(month)
+    following = us_next_trading_day(day)
+    if not history:
+        return None, "查不到歷史股價"
+    close = us_close_on(history, day)
+    if close is None:
+        return None, f"沒有 {day:%m/%d} 日線"
+    if not close or close <= 0:
+        return None, f"{day:%m/%d} 收盤價無效"
+    if not any(d >= following for d, _ in history):
+        return None, f"等 {following:%m/%d} 日線出現才確認 {day:%m/%d} 收盤價"
+    return (day, close), None
 
 
 def same_price(a, b):
@@ -308,9 +338,7 @@ def month_end_point(kind, history, month):
     """(date, price) to lock the month at. US stocks: the official close of the month's
     last NYSE trading day (known as soon as it is published); funds: month_end_price."""
     if kind == US_STOCK:
-        day = us_last_trading_day(month)
-        price = us_close_on(history, day)
-        return (day, price) if price is not None else None
+        return us_settled_close(history, month)[0]
     return month_end_price(history, month)
 
 
@@ -420,26 +448,64 @@ def overview_section(rows, header, include=None, exclude=None):
 READY, WAIT, BACKFILL = "ready", "wait", "backfill"
 
 
-def us_price_status(label, source, funds, month, now, history):
-    """渣打-美股: ready once the month's last NYSE trading day has closed and every
-    holding's official close for that day is known and already in 總覽; BACKFILL when
-    總覽 still shows another price (intraday, or a later day), so cells are scaled to it."""
+def overview_holdings(rows, header):
+    """總覽 rows under `header` until a blank F, keeping every row (no skipping).
+
+    Returns ([Fund], [problem]) — a holding with a blank / invalid date or a missing
+    price is a problem, never silently left out; None when the header is missing.
+    """
+    start = None
+    for index, line in enumerate(rows, start=1):
+        if str((line or [""])[0]).strip() == header:
+            start = index
+            break
+    if start is None:
+        return None
+    funds, problems = [], []
+    for index in range(start + 1, len(rows) + 1):
+        line = list(rows[index - 1]) + [""] * 6
+        name = str(line[0]).strip()
+        if not name:
+            break
+        day, price = cell_date(line[1]), to_number(line[NAV_COL])
+        if not day:
+            problems.append(f"F{index} {name} 日期空白或無效")
+        elif not price or price <= 0:
+            problems.append(f"F{index} {name} 缺價")
+        else:
+            funds.append(Fund(index, name, day, price, to_number(line[VALUE_COL]) or 0.0))
+    return funds, problems
+
+
+def us_price_status(label, source, overview_rows, month, now, history):
+    """渣打-美股: every holding needs a settled close (us_settled_close) for the month's last
+    NYSE trading day. READY when 總覽 already shows it; BACKFILL when 總覽 still shows
+    another price (intraday, or another day), so the cells are scaled to it. A holding
+    with a blank date or price blocks the block."""
+    found = overview_holdings(overview_rows, source.section)
+    if found is None:
+        return WAIT, "", f"{label}：總覽 F 欄找不到「{source.section}」", []
+    funds, bad = found
+    if bad:
+        return WAIT, "持股資料不完整", f"{label}：{'、'.join(bad)}，不固定", []
+    if not funds:
+        return WAIT, "", f"{label}：總覽「{source.section}」下沒有持股", []
     last_day = us_last_trading_day(month)
     close_at = us_close_at(last_day)
-    if now < close_at + US_CLOSE_SETTLE:
+    if now < close_at:
         return WAIT, f"等美東 {last_day:%m/%d} 收盤（台北 {close_at:%m/%d %H:%M}）", None, funds
     pending, stale = [], []
     for fund in funds:
-        close = us_close_on(history(US_STOCK, fund.name) if history else None, last_day)
-        if close is None:
-            pending.append(f"F{fund.row} {fund.name}")
-        elif fund.date != last_day or not same_price(fund.nav, close):
+        point, why = us_settled_close(history(US_STOCK, fund.name) if history else None, month)
+        if point is None:
+            pending.append(f"F{fund.row} {fund.name} {why}")
+        elif fund.date != last_day or not same_price(fund.nav, point[1]):
             stale.append(fund)
     if pending:
-        return WAIT, f"等 {last_day:%m/%d} 正式收盤價（{', '.join(pending)}）", None, funds
+        return WAIT, "；".join(pending), None, funds
     if stale:
         return BACKFILL, f"換成 {last_day:%m/%d} 收盤價", None, funds
-    return READY, f"美股 {last_day:%m/%d} 收盤價", None, funds
+    return READY, f"美股 {last_day:%m/%d} 收盤價（已有下一交易日日線）", None, funds
 
 
 def price_status(label, overview_rows, month, now, tw_closed=(), history=None):
@@ -448,6 +514,8 @@ def price_status(label, overview_rows, month, now, tw_closed=(), history=None):
     history(kind, name) -> [(date, price)] or None; US stocks need it to confirm the close.
     """
     source = SOURCES.get(label, Source(label))
+    if isinstance(source, Source) and source.kind == US_STOCK:
+        return us_price_status(label, source, overview_rows, month, now, history)
     if source == NO_PRICE:
         return READY, "無市價，隨月份固定", None, []
     if source == TW_STOCK:
@@ -464,8 +532,6 @@ def price_status(label, overview_rows, month, now, tw_closed=(), history=None):
         return WAIT, "", f"{label}：總覽 F 欄找不到「{source.section}」", []
     if not funds:
         return WAIT, "", f"{label}：總覽「{source.section}」下沒有日期", []
-    if source.kind == US_STOCK:
-        return us_price_status(label, source, funds, month, now, history)
     expected, end = last_weekday(month), month_end(month)
     if all(expected <= f.date <= end for f in funds):
         return READY, f"日期 {expected:%m/%d}", None, funds
@@ -486,10 +552,14 @@ def backfill_updates(block, source, funds, values, first_col, month, history, fo
         found = history(source.kind, fund.name)
         if found is None:
             return None, "", f"F{fund.row} {fund.name} 查不到歷史淨值"
-        point = month_end_point(source.kind, found, month)
-        if point is None:
-            return None, "", (f"F{fund.row} 尚未取得 {us_last_trading_day(month):%m/%d} 收盤價"
-                              if source.kind == US_STOCK else f"F{fund.row} 月底淨值尚未確定")
+        if source.kind == US_STOCK:
+            point, why = us_settled_close(found, month)
+            if point is None:
+                return None, "", f"F{fund.row} {why}"
+        else:
+            point = month_end_price(found, month)
+            if point is None:
+                return None, "", f"F{fund.row} 月底淨值尚未確定"
         if not fund.nav:
             return None, "", f"F{fund.row} 總覽沒有現在淨值"
         if abs(point[1] / fund.nav - 1) > MAX_NAV_MOVE:

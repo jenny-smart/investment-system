@@ -84,9 +84,10 @@ class ReadinessTests(unittest.TestCase):
         now = datetime(2026, 10, 31, 9, tzinfo=TZ)
         self.assertEqual(price_status("基富通-台", OVERVIEW, OCT, now)[0], READY)
         self.assertEqual(price_status("基富通-日", OVERVIEW, OCT, now)[0], READY)   # #N/A row ignored
+        # 10/30 is the last NYSE day; its Close is not final until 11/02's bar exists.
         closes = {"pypl": [(date(2026, 10, 30), 57.09)], "xyz": [(date(2026, 10, 30), 75.35)]}
         self.assertEqual(price_status("渣打-美股", OVERVIEW, OCT, now,
-                                      history=lambda kind, name: closes.get(name))[0], READY)
+                                      history=lambda kind, name: closes.get(name))[0], WAIT)
         self.assertEqual(price_status("渣打-美金", OVERVIEW, OCT, now)[0], READY)
         state, reason, _, _ = price_status("渣打-基金大華", OVERVIEW, OCT, now)
         self.assertEqual(state, WAIT)
@@ -302,44 +303,80 @@ class USCloseTests(unittest.TestCase):
         self.assertEqual(us_last_trading_day(date(2024, 11, 1)), date(2024, 11, 29))
         self.assertEqual(us_close_at(date(2024, 11, 29)), datetime(2024, 11, 30, 2, tzinfo=TZ))
 
-    def test_waits_for_close_even_if_overview_shows_the_day(self):
-        intraday = self.overview(46356, 61.2, 80.1)                  # 2026/11/30 intraday prices
-        closes = {"pypl": [(date(2026, 11, 30), 61.0)], "xyz": [(date(2026, 11, 30), 80.0)]}
-        at = lambda *a, rows=intraday: price_status(
-            "渣打-美股", rows, self.NOV, datetime(*a, tzinfo=TZ), history=lambda k, n: closes.get(n))
-        self.assertEqual(at(2026, 11, 30, 23)[0], WAIT)
-        self.assertEqual(at(2026, 12, 1, 5, 10)[0], WAIT)            # closed, Yahoo not settled yet
-        self.assertEqual(at(2026, 12, 1, 5, 30)[0], BACKFILL)        # 總覽 still intraday
-        final = self.overview(46356, 61.0, 80.0)
-        self.assertEqual(at(2026, 12, 1, 5, 30, rows=final)[0], READY)
+    # 2026/11/30 is the last NYSE day; 12/01 is the next trading day.
+    FINAL = {"pypl": [(date(2026, 11, 27), 60.0), (date(2026, 11, 30), 61.0), (date(2026, 12, 1), 62.0)],
+             "xyz": [(date(2026, 11, 30), 80.0), (date(2026, 12, 1), 81.0)]}
+    SAME_DAY = {"pypl": [(date(2026, 11, 27), 60.0), (date(2026, 11, 30), 61.0)],
+                "xyz": [(date(2026, 11, 30), 80.0)]}
+    FORMULAS = grid({(29, 0): "=sum('渣打-美股'!$K4:$K6)", (30, 0): "='渣打-美股'!$K7",
+                     (30, 1): "=SUM(FZ29:FZ30)"})
+    VALUES = grid({(29, 0): 1604250, (30, 0): 3675412, (30, 1): 5279662})
 
-    def test_every_holding_needs_its_close(self):
-        closes = {"pypl": [(date(2026, 11, 30), 61.0)], "xyz": [(date(2026, 11, 27), 79.0)]}
-        state, reason, _, _ = price_status("渣打-美股", self.overview(46356, 61.0, 80.0), self.NOV,
-                                           datetime(2026, 12, 1, 6, tzinfo=TZ),
-                                           history=lambda k, n: closes.get(n))
+    def status(self, rows, prices, *at):
+        return price_status("渣打-美股", rows, self.NOV, datetime(*at, tzinfo=TZ),
+                            history=lambda k, n: prices.get(n))
+
+    def plan(self, rows, prices, *at):
+        return plan_freeze(COLUMN_A, self.FORMULAS, self.VALUES, 183, rows, self.NOV,
+                           datetime(*at, tzinfo=TZ), history=lambda k, n: prices.get(n))
+
+    def test_settled_close_needs_next_trading_day_bar(self):
+        from month_end_ledger import us_next_trading_day, us_settled_close
+        self.assertEqual(us_next_trading_day(date(2026, 11, 30)), date(2026, 12, 1))
+        self.assertEqual(us_next_trading_day(date(2024, 3, 28)), date(2024, 4, 1))   # skips Good Friday
+        point, why = us_settled_close(self.SAME_DAY["pypl"], self.NOV)
+        self.assertIsNone(point)
+        self.assertIn("12/01", why)
+        self.assertEqual(us_settled_close(self.FINAL["pypl"], self.NOV), ((date(2026, 11, 30), 61.0), None))
+        self.assertIsNone(us_settled_close([(date(2026, 12, 1), 62.0)], self.NOV)[0])  # no 11/30 bar
+        self.assertIsNone(us_settled_close(None, self.NOV)[0])
+
+    def test_same_day_close_is_never_final_even_hours_after_the_bell(self):
+        final_overview = self.overview(46356, 61.0, 80.0)          # 總覽 already = Yahoo 11/30 Close
+        for at in ((2026, 11, 30, 23), (2026, 12, 1, 5, 30), (2026, 12, 1, 20)):
+            state, reason, _, _ = self.status(final_overview, self.SAME_DAY, *at)
+            self.assertEqual(state, WAIT, at)
+        self.assertIn("12/01 日線", reason)
+        self.assertEqual(self.status(final_overview, self.FINAL, 2026, 12, 1, 22, 40)[0], READY)
+
+    def test_direct_lock_and_backfill_share_the_check(self):
+        intraday = self.overview(46356, 61.2, 80.1)
+        # Without the next-day bar: no backfill, no lock (the old +30 min rule would have scaled here).
+        plan = self.plan(intraday, self.SAME_DAY, 2026, 12, 1, 5, 40)
+        self.assertEqual(plan.backfill, [])
+        self.assertFalse(any(u["range"] in ("GB29", "GB30", "GC30") for u in plan.updates))
+        self.assertIn("渣打-美股", [label for label, _ in plan.waiting])
+        plan = self.plan(self.overview(46356, 61.0, 80.0), self.SAME_DAY, 2026, 12, 1, 5, 40)
+        self.assertFalse(any(u["range"] in ("GB29", "GB30", "GC30") for u in plan.updates))
+        # Only one ticker settled: still blocked.
+        partial = {"pypl": self.FINAL["pypl"], "xyz": self.SAME_DAY["xyz"]}
+        state, reason, _, _ = self.status(intraday, partial, 2026, 12, 1, 23)
         self.assertEqual(state, WAIT)
         self.assertIn("xyz", reason)
 
-    def test_dec_1_morning_locks_official_close_into_november(self):
+    def test_dec_1_next_day_bar_locks_11_30_close_into_november(self):
         self.assertEqual(auto_tasks(date(2026, 12, 1))[0], self.NOV)
-        formulas = grid({(29, 0): "=sum('渣打-美股'!$K4:$K6)", (30, 0): "='渣打-美股'!$K7",
-                         (30, 1): "=SUM(FZ29:FZ30)"})
-        values = grid({(29, 0): 1604250, (30, 0): 3675412, (30, 1): 5279662})
-        closes = {"pypl": [(date(2026, 11, 27), 60.0), (date(2026, 11, 30), 61.0)],
-                  "xyz": [(date(2026, 11, 30), 80.0)]}
-        plan = plan_freeze(COLUMN_A, formulas, values, 183, self.overview(46356, 61.2, 80.1), self.NOV,
-                           datetime(2026, 12, 1, 5, 40, tzinfo=TZ), history=lambda k, n: closes.get(n))
+        plan = self.plan(self.overview(46357, 62.3, 81.4), self.FINAL, 2026, 12, 1, 22, 40)  # 總覽 = 12/01 intraday
         scaled = {u["range"]: u["values"][0][0] for u in plan.backfill[0][1]}
-        self.assertAlmostEqual(scaled["GB29"], 1604250 * 61.0 / 61.2)
-        self.assertAlmostEqual(scaled["GB30"], 3675412 * 80.0 / 80.1)
+        self.assertAlmostEqual(scaled["GB29"], 1604250 * 61.0 / 62.3)   # 11/30 Close, not the 12/01 bar
+        self.assertAlmostEqual(scaled["GB30"], 3675412 * 80.0 / 81.4)
         self.assertIn("11/30", plan.backfill[0][2])
+        direct = self.plan(self.overview(46356, 61.0, 80.0), self.FINAL, 2026, 12, 1, 22, 40)
+        self.assertEqual(direct.backfill, [])
+        self.assertTrue({"GB29", "GB30", "GC30"} <= {u["range"] for u in direct.updates})
 
-        before = plan_freeze(COLUMN_A, formulas, values, 183, self.overview(46356, 61.2, 80.1), self.NOV,
-                             datetime(2026, 11, 30, 23, tzinfo=TZ), history=lambda k, n: closes.get(n))
-        self.assertEqual(before.backfill, [])
-        self.assertIn("渣打-美股", [label for label, _ in before.waiting])
-        self.assertFalse(any(u["range"] in ("GB29", "GB30", "GC30") for u in before.updates))
+    def test_blank_date_or_missing_price_blocks(self):
+        for broken in (["pypl", "", 61.0, "", "", 1604250], ["pypl", 46356, "", "", "", 1604250],
+                       ["pypl", "#N/A", "#N/A", "", "", 0]):
+            rows = self.overview(46356, 61.0, 80.0)
+            rows[2] = broken
+            state, _, problem, _ = self.status(rows, self.FINAL, 2026, 12, 1, 22, 40)
+            self.assertEqual(state, WAIT, broken)
+            self.assertIn("F3 pypl", problem)
+            plan = self.plan(rows, self.FINAL, 2026, 12, 1, 22, 40)
+            self.assertEqual(plan.backfill, [])
+            self.assertFalse(any(u["range"] in ("GB29", "GB30", "GC30") for u in plan.updates), broken)
+            self.assertTrue(any("F3 pypl" in p for p in plan.problems))
 
 
 class ExitCodeTests(unittest.TestCase):
