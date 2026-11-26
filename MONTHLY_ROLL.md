@@ -67,3 +67,11 @@ python monthly_roll.py roll --dry-run
 python monthly_roll.py freeze --month 2026/10 --only fund --wait-nav --dry-run --credentials-file sa.json
 python3 -m unittest tests.test_monthly_roll
 ```
+
+## 新年度細帳（ledger_year.py，2026-11-26）
+
+「{年}細帳」不用手動建立：銀行明細／信用卡帳單寫細帳、1 月換欄（roll）、月初切換（month_end_ledger）要用到時，
+分頁沒有就從「{前一年}細帳」自動建立（B 欄改接前一年 12 月、1～12 月手打金額與備註清空、公式只留儲存格參照）。
+已有同名分頁但 A 欄項目跟前一年度對不起來（舊範本）時，改名成「{年}細帳_舊版YYYYMMDD」保留後重建。
+手動：`python ledger_year.py --year 2027`
+

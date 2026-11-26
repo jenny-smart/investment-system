@@ -698,6 +698,10 @@ def roll_detail_refs(spreadsheet, month, ledger_cols, dry_run):
     history = {k: [grid_cell(grid, r, c) for r in range(1, len(grid) + 1) for c in (col - 1, col)]
                for k, col in ledger_cols.items() if col >= 1}
     sheet_name = f"{month.year}細帳"
+    if not dry_run:  # 新年度細帳沒有就從前一年度建立（ledger_year.py）
+        from ledger_year import ensure_ledger
+
+        ensure_ledger(spreadsheet, month.year)
     titles = {ws.title for ws in spreadsheet.worksheets()}
     if sheet_name not in titles:
         return [f"找不到「{sheet_name}」分頁，{LEDGER_SHEET} 第 {first}–{last} 列沒有換細帳欄"], 0

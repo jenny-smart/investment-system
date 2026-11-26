@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from ledger_year import ensure_ledger
+
 from datetime import datetime
 
 BANK_TITLE = "銀行明細"
@@ -78,7 +80,7 @@ def bank_rows(year: int, book) -> list[list]:
     txs, _ = load_transactions()
     txs = [t for t in txs if t.day.year == year]
     entries = classify(txs, charges=card_charges(year))
-    detail = book.worksheet(f"{year}細帳")
+    detail = ensure_ledger(book, year)
     shown = detail.get_values()
     labels = [r[0] if r else "" for r in shown]
     cols = month_columns(shown[0] if shown else [])

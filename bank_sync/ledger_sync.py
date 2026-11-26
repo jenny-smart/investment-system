@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from ledger_year import ensure_ledger
+
 import json
 import re
 import unicodedata
@@ -660,7 +662,7 @@ def run(year: int, apply: bool = False, banks: tuple = (), notes_only: bool = Fa
     from .google_auth import calendar_add_once, credentials
     creds = credentials()
     book = open_book(creds)
-    values = book.worksheet(f"{year}細帳").get_values()
+    values = ensure_ledger(book, year).get_values()
     applied = load_applied()
     plan = build_plan(files, values, stamp, applied)
     report = write_report(plan, STATEMENT_DIR / f"_細帳比對_{stamp:%Y%m%d}.xlsx")
@@ -738,7 +740,7 @@ def refresh_cards(year: int) -> int:
     from .google_auth import credentials
     book = open_book(credentials())
     files = parsed_statements(year)
-    values = book.worksheet(f"{year}細帳").get_values()
+    values = ensure_ledger(book, year).get_values()
     plan = build_plan(files, values, date.today(), load_applied())
     for a in plan.cards:
         if a.file.statement.ledger_month >= f"{year}-01":
