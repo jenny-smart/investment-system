@@ -84,7 +84,9 @@ class ReadinessTests(unittest.TestCase):
         now = datetime(2026, 10, 31, 9, tzinfo=TZ)
         self.assertEqual(price_status("基富通-台", OVERVIEW, OCT, now)[0], READY)
         self.assertEqual(price_status("基富通-日", OVERVIEW, OCT, now)[0], READY)   # #N/A row ignored
-        self.assertEqual(price_status("渣打-美股", OVERVIEW, OCT, now)[0], READY)
+        closes = {"pypl": [(date(2026, 10, 30), 57.09)], "xyz": [(date(2026, 10, 30), 75.35)]}
+        self.assertEqual(price_status("渣打-美股", OVERVIEW, OCT, now,
+                                      history=lambda kind, name: closes.get(name))[0], READY)
         self.assertEqual(price_status("渣打-美金", OVERVIEW, OCT, now)[0], READY)
         state, reason, _, _ = price_status("渣打-基金大華", OVERVIEW, OCT, now)
         self.assertEqual(state, WAIT)
@@ -272,6 +274,72 @@ class BackfillTests(unittest.TestCase):
                            history=self.history(prices))
         self.assertEqual(plan.backfill, [])
         self.assertTrue(any("已換算" in r for _, r in plan.waiting))
+
+
+class USCloseTests(unittest.TestCase):
+    """渣打-美股: NYSE calendar, wait for the close, lock only official closes into the month."""
+    NOV = date(2026, 11, 1)
+
+    @staticmethod
+    def overview(day_serial, pypl, xyz):
+        rows = [list(line) for line in OVERVIEW]
+        rows[2] = ["pypl", day_serial, pypl, "", "", 1604250]
+        rows[3] = ["xyz", day_serial, xyz, "", "", 3675412]
+        return rows
+
+    def test_nyse_calendar(self):
+        from month_end_ledger import us_close_at, us_holidays, us_last_trading_day
+        self.assertEqual(us_last_trading_day(self.NOV), date(2026, 11, 30))
+        self.assertEqual(us_last_trading_day(OCT), date(2026, 10, 30))              # 10/31 Saturday
+        self.assertEqual(us_last_trading_day(date(2024, 3, 1)), date(2024, 3, 28))  # Good Friday 3/29
+        self.assertEqual(us_last_trading_day(date(2027, 12, 1)), date(2027, 12, 31))  # 1/1/2028 Sat: open
+        self.assertIn(date(2027, 6, 18), us_holidays(2027))                         # Juneteenth observed
+        self.assertNotIn(date(2027, 12, 31), us_holidays(2027))
+        # EST: 11/30 16:00 New York = 12/1 05:00 Taipei; EDT: 10/30 16:00 = 10/31 04:00.
+        self.assertEqual(us_close_at(date(2026, 11, 30)), datetime(2026, 12, 1, 5, tzinfo=TZ))
+        self.assertEqual(us_close_at(date(2026, 10, 30)), datetime(2026, 10, 31, 4, tzinfo=TZ))
+        # Early close: 2024/11/29 (day after Thanksgiving, also November's last trading day) 13:00.
+        self.assertEqual(us_last_trading_day(date(2024, 11, 1)), date(2024, 11, 29))
+        self.assertEqual(us_close_at(date(2024, 11, 29)), datetime(2024, 11, 30, 2, tzinfo=TZ))
+
+    def test_waits_for_close_even_if_overview_shows_the_day(self):
+        intraday = self.overview(46356, 61.2, 80.1)                  # 2026/11/30 intraday prices
+        closes = {"pypl": [(date(2026, 11, 30), 61.0)], "xyz": [(date(2026, 11, 30), 80.0)]}
+        at = lambda *a, rows=intraday: price_status(
+            "渣打-美股", rows, self.NOV, datetime(*a, tzinfo=TZ), history=lambda k, n: closes.get(n))
+        self.assertEqual(at(2026, 11, 30, 23)[0], WAIT)
+        self.assertEqual(at(2026, 12, 1, 5, 10)[0], WAIT)            # closed, Yahoo not settled yet
+        self.assertEqual(at(2026, 12, 1, 5, 30)[0], BACKFILL)        # 總覽 still intraday
+        final = self.overview(46356, 61.0, 80.0)
+        self.assertEqual(at(2026, 12, 1, 5, 30, rows=final)[0], READY)
+
+    def test_every_holding_needs_its_close(self):
+        closes = {"pypl": [(date(2026, 11, 30), 61.0)], "xyz": [(date(2026, 11, 27), 79.0)]}
+        state, reason, _, _ = price_status("渣打-美股", self.overview(46356, 61.0, 80.0), self.NOV,
+                                           datetime(2026, 12, 1, 6, tzinfo=TZ),
+                                           history=lambda k, n: closes.get(n))
+        self.assertEqual(state, WAIT)
+        self.assertIn("xyz", reason)
+
+    def test_dec_1_morning_locks_official_close_into_november(self):
+        self.assertEqual(auto_tasks(date(2026, 12, 1))[0], self.NOV)
+        formulas = grid({(29, 0): "=sum('渣打-美股'!$K4:$K6)", (30, 0): "='渣打-美股'!$K7",
+                         (30, 1): "=SUM(FZ29:FZ30)"})
+        values = grid({(29, 0): 1604250, (30, 0): 3675412, (30, 1): 5279662})
+        closes = {"pypl": [(date(2026, 11, 27), 60.0), (date(2026, 11, 30), 61.0)],
+                  "xyz": [(date(2026, 11, 30), 80.0)]}
+        plan = plan_freeze(COLUMN_A, formulas, values, 183, self.overview(46356, 61.2, 80.1), self.NOV,
+                           datetime(2026, 12, 1, 5, 40, tzinfo=TZ), history=lambda k, n: closes.get(n))
+        scaled = {u["range"]: u["values"][0][0] for u in plan.backfill[0][1]}
+        self.assertAlmostEqual(scaled["GB29"], 1604250 * 61.0 / 61.2)
+        self.assertAlmostEqual(scaled["GB30"], 3675412 * 80.0 / 80.1)
+        self.assertIn("11/30", plan.backfill[0][2])
+
+        before = plan_freeze(COLUMN_A, formulas, values, 183, self.overview(46356, 61.2, 80.1), self.NOV,
+                             datetime(2026, 11, 30, 23, tzinfo=TZ), history=lambda k, n: closes.get(n))
+        self.assertEqual(before.backfill, [])
+        self.assertIn("渣打-美股", [label for label, _ in before.waiting])
+        self.assertFalse(any(u["range"] in ("GB29", "GB30", "GC30") for u in before.updates))
 
 
 class ExitCodeTests(unittest.TestCase):
